@@ -457,6 +457,7 @@ export class AccountPurgeService {
           description: true,
           previewAssetUrl: true,
           fullAssetUrl: true,
+          coverKey: true,
           frames: { select: { url: true } },
           purchases: {
             where: { type: 'content', status: 'completed' },
@@ -494,6 +495,7 @@ export class AccountPurgeService {
       for (const stored of [
         r.previewAssetUrl,
         r.fullAssetUrl,
+        r.coverKey,
         ...r.frames.map((f) => f.url),
       ]) {
         if (stored) keys.add(objectKeyFrom(stored));
@@ -617,6 +619,7 @@ export class AccountPurgeService {
             slug: `removed-${id}`,
             previewAssetUrl: '',
             fullAssetUrl: null,
+            coverKey: null,
             durationLabel: null,
             pageCount: null,
             tags: [],

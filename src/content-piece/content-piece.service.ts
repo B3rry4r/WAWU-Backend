@@ -25,7 +25,13 @@ import type { RateContentDto } from './dto/rate-content.dto';
 import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
-import { StorageService, objectKeyFrom } from '../storage/storage.service';
+import {
+  COVER_FOLDER,
+  StorageService,
+  objectKeyFrom,
+} from '../storage/storage.service';
+import { isAppRequest } from '../price-list/app-client';
+import { COVER_NOT_USABLE, coverKeyOf } from './content-cover';
 import {
   LOCKED_TX,
   inPersonsTurn,
@@ -93,6 +99,8 @@ interface ContentRow {
   pageCount: number | null;
   previewAssetUrl: string;
   fullAssetUrl: string | null;
+  /** CONTENT-COVER: the cover's storage key; never served as it is (`coverUrl` is the signed link). */
+  coverKey?: string | null;
   creatorFirstUploadFree: boolean;
   status: string;
   views: number;
@@ -174,18 +182,26 @@ export class ContentPieceService {
   private async toResponse(
     content: ContentRow,
     unlocked: boolean,
+    // CONTENT-COVER (R-114): `coverUrl` is served on the app's requests (`X-Wawu-Client: app`) and on the routes only the
+    // app calls (`cover: true`: the feed, My content). The routes the web and the dashboard call keep every byte of their
+    // answer, so on a request without the header the field is absent, as is `coverKey` on every answer.
+    opts: { cover?: boolean } = {},
   ): Promise<ContentPieceResponse> {
-    const isFree = content.accessType === 'free';
+    const { coverKey, ...row } = content;
+    const isFree = row.accessType === 'free';
     const locked = !isFree && !unlocked;
-    const [previewAssetUrl, fullAssetUrl] = await Promise.all([
-      this.storage.freshUrlFor(content.previewAssetUrl),
-      locked ? null : this.storage.freshUrlFor(content.fullAssetUrl),
+    const withCover = opts.cover ?? isAppRequest();
+    const [previewAssetUrl, fullAssetUrl, coverUrl] = await Promise.all([
+      this.storage.freshUrlFor(row.previewAssetUrl),
+      locked ? null : this.storage.freshUrlFor(row.fullAssetUrl),
+      withCover ? this.storage.coverUrlFor(coverKey) : null,
     ]);
     return {
-      ...content,
+      ...row,
       previewAssetUrl: previewAssetUrl as string,
       fullAssetUrl,
       fullAssetLocked: locked,
+      ...(withCover ? { coverUrl } : {}),
     } as ContentPieceResponse;
   }
 
@@ -283,6 +299,7 @@ export class ContentPieceService {
     page: number,
     perPage: number,
     sort: ContentSort = 'trending',
+    cover?: boolean,
   ): Promise<Paginated<ContentPieceResponse>> {
     // SETTINGS-04: the feed leaves out anyone the caller blocked or who
     // blocked the caller. The caller's own shelf ('mine') is theirs alone.
@@ -375,7 +392,9 @@ export class ContentPieceService {
     );
     return {
       items: await Promise.all(
-        items.map((item) => this.toResponse(item, unlockedSet.has(item.id))),
+        items.map((item) =>
+          this.toResponse(item, unlockedSet.has(item.id), { cover }),
+        ),
       ),
       currentPage: page,
       perPage,
@@ -628,11 +647,15 @@ export class ContentPieceService {
    */
   async settleSlowUploads(
     creatorWawuId: string,
-    dto: { previewAsset?: string | null; fullAsset?: string | null },
+    dto: {
+      previewAsset?: string | null;
+      fullAsset?: string | null;
+      coverAsset?: string | null;
+    },
   ): Promise<void> {
     const keys = [
       ...new Set(
-        [dto.previewAsset, dto.fullAsset]
+        [dto.previewAsset, dto.fullAsset, dto.coverAsset]
           .filter((u): u is string => typeof u === 'string' && u !== '')
           .map((u) => objectKeyFrom(u))
           // eslint-disable-next-line no-control-regex -- a control character is in no key we wrote
@@ -711,13 +734,54 @@ export class ContentPieceService {
    */
   filesUsableIn(
     creatorWawuId: string,
-    dto: Pick<CreateContentDto, 'previewAsset' | 'fullAsset'>,
+    dto: Pick<CreateContentDto, 'previewAsset' | 'fullAsset' | 'coverAsset'>,
   ): (tx: Prisma.TransactionClient) => Promise<void> {
-    return (tx) =>
-      this.assertFilesNotGivenUp(tx, creatorWawuId, [
+    return async (tx) => {
+      await this.assertFilesNotGivenUp(tx, creatorWawuId, [
         dto.previewAsset,
         dto.fullAsset,
+        dto.coverAsset,
       ]);
+      await this.assertCoverUsable(tx, creatorWawuId, dto.coverAsset);
+    };
+  }
+
+  /**
+   * CONTENT-COVER (R-114): a cover named by a listing must be an upload of THIS person in the cover folder (the key's
+   * own prefix says whose it is, and the row proves the upload was made). Whether it was released or never arrived is
+   * `assertFilesNotGivenUp`'s, which the same callers run first. Runs inside the caller's transaction.
+   */
+  private async assertCoverUsable(
+    tx: Prisma.TransactionClient,
+    creatorWawuId: string,
+    cover: string | null | undefined,
+  ): Promise<void> {
+    const key = coverKeyOf(creatorWawuId, cover);
+    if (!key) return;
+    const row = await tx.storageObject.findUnique({
+      where: { key },
+      select: { wawuUserId: true, folder: true },
+    });
+    if (!row || row.wawuUserId !== creatorWawuId || row.folder !== COVER_FOLDER)
+      throw new BadRequestException(COVER_NOT_USABLE);
+  }
+
+  /**
+   * Gives the space of a cover that a listing no longer names back, and deletes its file. Called after the edit has
+   * committed, holding nothing: a bucket that cannot be reached leaves the file counted and the person's, and it goes
+   * with their account (an edit that succeeded is never undone for it).
+   */
+  private async releaseOldCover(
+    creatorWawuId: string,
+    key: string | null | undefined,
+    keptKey: string | null | undefined,
+  ): Promise<void> {
+    if (!key || key === keptKey) return;
+    try {
+      await this.storage.releaseUpload(creatorWawuId, key);
+    } catch (err) {
+      this.logger.warn(`Could not remove the old cover ${key}: ${String(err)}`);
+    }
   }
 
   /**
@@ -820,6 +884,9 @@ export class ContentPieceService {
       await this.assertOwnCourse(creatorWawuId, dto);
     }
 
+    // CONTENT-COVER: the cover, if any, must be this person's own upload (400 otherwise); the row is checked in the transaction.
+    const coverKey = coverKeyOf(creatorWawuId, dto.coverAsset) ?? null;
+
     const slug = `${this.slugify(dto.title)}-${randomUUID().slice(0, 8)}`;
 
     // The allowance is claimed inside one transaction. Counting outside it
@@ -900,6 +967,7 @@ export class ContentPieceService {
               price: dto.price,
               previewAssetUrl: dto.previewAsset,
               fullAssetUrl: dto.fullAsset,
+              coverKey,
               creatorFirstUploadFree: isFirstUpload,
               status: 'pending',
             },
@@ -973,8 +1041,10 @@ export class ContentPieceService {
     return Promise.all(
       rows.map(async (row) => {
         const rejection = latest.get(row.id);
+        const piece = await this.toResponse(row, true, { cover: true });
         return {
-          ...(await this.toResponse(row, true)),
+          ...piece,
+          coverUrl: piece.coverUrl ?? null,
           salesCount: salesById.get(row.id) ?? 0,
           rejectionReason: rejection?.reason ?? null,
           rejectedAt: rejection?.reviewedAt ?? null,
@@ -1073,7 +1143,13 @@ export class ContentPieceService {
     // An edit that carries a file is accepting a file (TIER-02): it needs a
     // way to publish. It does not ask for room: the piece has its place
     // already, or gets one when it is sent again (`resubmit`).
-    if (dto.previewAsset !== undefined || dto.fullAsset !== undefined)
+    // CONTENT-COVER: `coverAsset` is the key of the cover, or null to take it off; left out, the cover stays.
+    const coverKey = coverKeyOf(creatorWawuId, dto.coverAsset);
+    if (
+      dto.previewAsset !== undefined ||
+      dto.fullAsset !== undefined ||
+      (coverKey !== undefined && coverKey !== null)
+    )
       await this.gate.assertMayUpload(creatorWawuId);
 
     const changes: Prisma.ContentPieceUpdateManyMutationInput = {};
@@ -1087,6 +1163,7 @@ export class ContentPieceService {
     if (dto.previewAsset !== undefined)
       changes.previewAssetUrl = dto.previewAsset;
     if (dto.fullAsset !== undefined) changes.fullAssetUrl = dto.fullAsset;
+    if (coverKey !== undefined) changes.coverKey = coverKey;
 
     const accessType = dto.accessType ?? existing.accessType;
     // Switching to free needs no price from the creator: free is ₦0.
@@ -1125,6 +1202,7 @@ export class ContentPieceService {
     await this.settleSlowUploads(creatorWawuId, {
       previewAsset: dto.previewAsset,
       fullAsset: dto.fullAsset,
+      coverAsset: dto.coverAsset,
     });
 
     // Conditional on the status read above: a reviewer approving the piece
@@ -1135,7 +1213,9 @@ export class ContentPieceService {
         await this.assertFilesNotGivenUp(tx, creatorWawuId, [
           dto.previewAsset,
           dto.fullAsset,
+          dto.coverAsset,
         ]);
+        await this.assertCoverUsable(tx, creatorWawuId, dto.coverAsset);
         return tx.contentPiece.updateMany({
           where: {
             id,
@@ -1152,6 +1232,9 @@ export class ContentPieceService {
       );
     }
     await this.stampUpdated(this.prisma, id);
+    // Replacing a cover, or taking it off, deletes the old file (CONTENT-COVER).
+    if (coverKey !== undefined)
+      await this.releaseOldCover(creatorWawuId, existing.coverKey, coverKey);
     return this.getMyPiece(id, creatorWawuId);
   }
 

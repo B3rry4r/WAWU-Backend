@@ -229,6 +229,7 @@ export class ProductDraftService {
       price: draft.accessType === 'free' ? 0 : draft.price!,
       previewAsset: dto.previewAsset,
       fullAsset: dto.fullAsset,
+      coverAsset: dto.coverAsset,
     };
     // A file whose upload outlasted the Hub's wait is counted first, outside
     // any lock (SWEEP-APP-5, ME-04 R4-5).

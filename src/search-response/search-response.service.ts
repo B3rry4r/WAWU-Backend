@@ -1,4 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { StorageService } from '../storage/storage.service';
+import { isAppRequest } from '../price-list/app-client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { deriveVerificationState } from '../common/verification/verification-state';
@@ -70,6 +72,8 @@ export class SearchResponseService {
     private readonly blockedAccounts: BlockedAccountService,
     private readonly schools: SchoolsPublicService,
     private readonly history: SearchHistoryService,
+    // CONTENT-COVER (R-114). Absent in a spec that builds the service by hand: no cover is served then.
+    @Optional() private readonly storage?: StorageService,
   ) {}
 
   // ---------------------------------------------------------------------
@@ -334,15 +338,22 @@ export class SearchResponseService {
       requesterWawuId,
       items.map((i) => i.id),
     );
-    return items.map((item) => {
-      const isFree = item.accessType === 'free';
-      const locked = !isFree && !unlockedSet.has(item.id);
-      return {
-        ...item,
-        fullAssetUrl: locked ? null : item.fullAssetUrl,
-        fullAssetLocked: locked,
-      };
-    });
+    // CONTENT-COVER (R-114): the app's requests (`X-Wawu-Client: app`) get `coverUrl`; the web's answer keeps every byte.
+    const withCover = isAppRequest();
+    return Promise.all(
+      items.map(async ({ coverKey, ...item }) => {
+        const isFree = item.accessType === 'free';
+        const locked = !isFree && !unlockedSet.has(item.id);
+        return {
+          ...item,
+          fullAssetUrl: locked ? null : item.fullAssetUrl,
+          fullAssetLocked: locked,
+          ...(withCover
+            ? { coverUrl: (await this.storage?.coverUrlFor(coverKey)) ?? null }
+            : {}),
+        };
+      }),
+    );
   }
 
   private async resolveUnlockedSet(

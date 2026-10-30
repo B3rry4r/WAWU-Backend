@@ -48,6 +48,8 @@ export interface ParentCourse {
   price: number;
   /** The course's public preview picture or clip (a fresh link), for the row's picture. */
   previewAssetUrl: string | null;
+  /** CONTENT-COVER (R-114): a fresh link to the course's own cover picture; null when it has none. */
+  coverUrl: string | null;
 }
 
 export type CannotRateReason = 'own_content' | 'not_purchased';
@@ -194,6 +196,7 @@ export class ContentDetailService {
         contentType: true,
         creatorWawuId: true,
         previewAssetUrl: true,
+        coverKey: true,
         _count: { select: { lessons: true } },
       },
     });
@@ -211,6 +214,7 @@ export class ContentDetailService {
       lessonCount: parent._count.lessons,
       price: parent.price,
       previewAssetUrl: await this.storage.freshUrlFor(parent.previewAssetUrl),
+      coverUrl: await this.storage.coverUrlFor(parent.coverKey),
     };
   }
 

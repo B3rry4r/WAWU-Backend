@@ -27,6 +27,8 @@ export interface ViewerContentState {
  */
 export type FeedItem = ContentPieceResponse &
   ViewerContentState & {
+    /** CONTENT-COVER (R-114): a fresh link to the piece's cover picture; null when it has none. Always present here. */
+    coverUrl: string | null;
     shares: number;
     /** Who made the piece: name, avatar and ticks (G-85, HOME-05). */
     creator: FeedCreator;
@@ -279,6 +281,7 @@ export class ContentEngagementService {
       page,
       perPage,
       sort,
+      true,
     );
     const [state, creators, media] = await Promise.all([
       this.stateFor(viewerWawuId, result.items),
@@ -289,6 +292,7 @@ export class ContentEngagementService {
       ...result,
       items: result.items.map((item) => ({
         ...item,
+        coverUrl: item.coverUrl ?? null,
         likedByMe: state.liked.has(item.id),
         savedByMe: state.saved.has(item.id),
         followsCreator: state.follows.has(item.creatorWawuId),

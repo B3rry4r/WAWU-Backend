@@ -158,4 +158,10 @@ export class PublishProductDraftDto {
 
   @IsUrl({ require_tld: false })
   fullAsset: string;
+
+  /** CONTENT-COVER (R-114): the optional cover, as `POST /content` takes it. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  coverAsset?: string;
 }

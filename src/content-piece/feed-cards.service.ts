@@ -54,6 +54,8 @@ export interface CardWork {
   locked: boolean;
   title: string;
   thumbnailUrl: string | null;
+  /** CONTENT-COVER (R-114): a fresh link to the piece's own cover picture; null when it has none. */
+  coverUrl: string | null;
   durationLabel: string | null;
   pageCount: number | null;
   /** Pictures in a photo set; 0 for anything else. */
@@ -504,6 +506,7 @@ export class FeedCardsService {
         locked: piece.accessType === 'paid' && !boughtSet.has(piece.id),
         title: piece.title,
         thumbnailUrl: await this.storage.freshUrlFor(piece.previewAssetUrl),
+        coverUrl: await this.storage.coverUrlFor(piece.coverKey),
         durationLabel: piece.durationLabel,
         pageCount: piece.pageCount,
         frameCount: frameBy.get(piece.id) ?? 0,

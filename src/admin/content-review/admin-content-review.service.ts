@@ -514,6 +514,16 @@ export class AdminContentReviewService {
 
   // ── assets ───────────────────────────────────────────────────────────────
 
+  /** GET /admin/content/:id/cover (CONTENT-COVER, R-114): the cover the piece is reviewed with, signed for 15 minutes. */
+  async cover(id: string): Promise<{ coverUrl: string | null }> {
+    const content = await this.prisma.contentPiece.findUnique({
+      where: { id },
+      select: { coverKey: true },
+    });
+    if (!content) throw new NotFoundException('Content not found');
+    return { coverUrl: await this.signAsset(content.coverKey) };
+  }
+
   /**
    * The bucket is private, so a reviewer cannot open a stored asset without a
    * signature. Both are signed with `StorageService.signedReadUrl(key, 900)` —
