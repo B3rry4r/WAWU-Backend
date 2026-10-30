@@ -124,6 +124,11 @@ export const PLAN_ACTIONS = [
   'dub_premium_per_min_lang',
   'receptionist_message',
   'receptionist_voice_per_min',
+  // R-109 (AITOOLS-09, AITOOLS-10): the Studio picture and video tools.
+  'image_per_use',
+  'photo_edit_per_use',
+  'video_per_sec',
+  'talking_photo_per_sec',
 ] as const;
 export type PlanActionId = (typeof PLAN_ACTIONS)[number];
 
@@ -134,6 +139,8 @@ export const ACTION_UNITS = [
   'track',
   'message',
   'minute_per_language',
+  // R-109 (AITOOLS-10): a second of video, or of speech in a talking photo.
+  'second',
 ] as const;
 export type ActionUnit = (typeof ACTION_UNITS)[number];
 

@@ -46,8 +46,35 @@ export interface AiToolView {
     instrumental?: boolean;
     /** `file` tools: what the person may send, and the limits that stop a job. */
     file?: AiToolFileView;
+    /** `image` and `video` tools (AITOOLS-09, AITOOLS-10): the shapes, lengths, photo and voice the screen draws. */
+    options?: AiToolOptionsView;
   };
   voices: AiVoiceView[];
+}
+
+/**
+ * What a Studio picture or video tool takes beyond its description (AITOOLS-09, AITOOLS-10, R-109): every value is the
+ * Hub's own, from the tool and its settings, so the app draws nothing it invented.
+ */
+export interface AiToolOptionsView {
+  /** The shapes to pick from, as aspect ratios (`1:1`, `16:9`); empty when the result follows the photo's own shape (Talking photo). */
+  shapes: string[];
+  /** A video's lengths in seconds to pick from; absent for a picture. */
+  lengths?: number[];
+  /** The person's photo: `optional` or `required`; absent when the tool takes none. How to send it: through `POST /uploads/presign` with this folder, then `POST /uploads/confirm`. */
+  photo?: {
+    use: 'optional' | 'required';
+    folder: string;
+    accepts: string[];
+    maxBytes: number;
+  };
+  /** Talking photo: the voice. A recording sent to `audioFolder` (then `audioKey`), or one of the person's finished voice results (`sourceJobId`). */
+  speech?: {
+    audioFolder: string;
+    accepts: string[];
+    maxSeconds: number;
+    fromJob: boolean;
+  };
 }
 
 /**
@@ -101,13 +128,26 @@ export interface AiToolsView {
 
 export type AiJobStateView = 'working' | 'done' | 'failed';
 
-/** One thing a done job made: audio to play (`url`), or words (`text`). */
+/** One thing a done job made: audio to play, a picture or a video to show (`url`), or words (`text`). */
 export interface AiJobOutputView {
-  kind: 'audio' | 'text' | 'subtitles';
-  /** A link the app plays or downloads, for `audio` (and a subtitles file once a tool makes one). */
+  kind: 'audio' | 'text' | 'subtitles' | 'image' | 'video';
+  /** A link the app plays, shows or downloads, for `audio`, `image` and `video` (and a subtitles file once a tool makes one). */
   url?: string;
   /** The words themselves, for `text` and `subtitles` kept inline. */
   text?: string;
+  /** AITOOLS-08: the file's type, for an output that is a file. */
+  contentType?: string;
+  /** AITOOLS-08: the file's size in bytes. */
+  bytes?: number;
+  /** AITOOLS-08: a plain label ("Image", "Dubbed audio"); never a provider or model name. */
+  name?: string;
+  /** AITOOLS-08: the same file with an attachment file name such as `studio-image-30-oct-2026.png`. */
+  downloadUrl?: string;
+  /**
+   * AITOOLS-08: the Create format that takes this file (`audio`, `video` or `image`, from `GET /uploads/formats`), or
+   * null for a type no format takes (a FLAC dub, an AAC clip): then `POST /ai-tools/jobs/{id}/piece` refuses it.
+   */
+  pieceFormat?: 'audio' | 'video' | 'image' | null;
 }
 
 /** `POST /ai-tools/{tool}/jobs`, `GET /ai-tools/jobs/{id}` and each item of `GET /ai-tools/jobs`. */
@@ -179,4 +219,35 @@ export interface AiFileQuoteView extends PointsQuoteView {
     /** The minutes the job is priced in: rounded up, at least 1. */
     minutes: number;
   };
+}
+
+/**
+ * `POST /ai-tools/talking-photo/quote` (AITOOLS-10): the points quote (the same shape as `POST /points/quote`, with its
+ * `quoteToken`) for the voice the person chose, priced by the length the Hub read from the voice itself, plus that length.
+ */
+export interface AiSpeechQuoteView extends PointsQuoteView {
+  speech: {
+    /** The length the Hub read, in whole seconds (rounded up). It is also the number of units priced. */
+    seconds: number;
+  };
+}
+
+/**
+ * `POST /ai-tools/jobs/{id}/piece` (AITOOLS-08, R-109): what Create's draft holds, so the app can open Create on the
+ * step after the upload with the format chosen and the file already there. The Hub has copied the result into the
+ * person's own content folder as an upload counted like any (R-7); nothing is published.
+ */
+export interface AiPieceView {
+  /** The Create format that takes the file. */
+  format: 'audio' | 'video' | 'image';
+  /** The upload, as `POST /uploads/presign` would have answered, and as `POST /content` takes it (`fullAsset`). */
+  full: {
+    key: string;
+    fileUrl: string;
+    contentType: string;
+    bytes: number;
+    name: string;
+  };
+  /** A title to prefill, such as "Image, 30 Oct 2026". */
+  suggestedTitle: string;
 }

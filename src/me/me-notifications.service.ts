@@ -97,7 +97,7 @@ export class MeNotificationsService {
       rows
         .filter((r) => r.target?.targetKind === kind)
         .map((r) => r.target!.targetId);
-    const [pieces, questions, rooms, profiles, transactions] =
+    const [pieces, questions, rooms, profiles, transactions, aiJobs] =
       await Promise.all([
         this.prisma.contentPiece.findMany({
           where: { id: { in: idsOf('content') } },
@@ -121,6 +121,11 @@ export class MeNotificationsService {
           where: { id: { in: idsOf('transaction') }, wawuUserId: me },
           select: { id: true },
         }),
+        // AITOOLS-08: a Studio job is shown only to the person who ran it.
+        this.prisma.aiToolJob.findMany({
+          where: { id: { in: idsOf('ai_job') }, wawuUserId: me },
+          select: { id: true },
+        }),
       ]);
     const pieceTitle = new Map(pieces.map((p) => [p.id, p.title]));
     const questionDeadline = new Map(
@@ -129,6 +134,7 @@ export class MeNotificationsService {
     const roomName = new Map(rooms.map((c) => [c.id, c.name]));
     const profileIds = new Set(profiles.map((p) => p.wawuUserId));
     const transactionIds = new Set(transactions.map((t) => t.id));
+    const aiJobIds = new Set(aiJobs.map((j) => j.id));
 
     const visibleActors = rows
       .map((r) => r.target?.actorWawuId)
@@ -167,6 +173,8 @@ export class MeNotificationsService {
           t.targetKind === 'transaction' &&
           transactionIds.has(t.targetId)
         ) {
+          target = view(null, null);
+        } else if (t.targetKind === 'ai_job' && aiJobIds.has(t.targetId)) {
           target = view(null, null);
         }
       }

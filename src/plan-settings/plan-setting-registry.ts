@@ -271,6 +271,31 @@ function oneLine(raw: unknown): string[] {
   return one;
 }
 
+/**
+ * R-109 (AITOOLS-09, AITOOLS-10): the name of the model a Studio picture or
+ * video tool asks the provider for. One line, plain letters, digits and `.`
+ * `-` `_` only, so a value an admin types can never carry anything else into a
+ * request. The name never reaches a person (R-68).
+ */
+function modelLine(raw: unknown): string[] {
+  const one = oneLine(raw);
+  if (!/^[a-z0-9][a-z0-9._-]{1,60}$/.test(one[0]))
+    throw new SettingInvalid(
+      'must be a model name: lower case letters, digits, dots, dashes and underscores',
+    );
+  return one;
+}
+
+/** One line that must be one of `allowed` (a resolution the provider takes). */
+function choiceLine(allowed: readonly string[]) {
+  return (raw: unknown): string[] => {
+    const one = oneLine(raw);
+    if (!allowed.includes(one[0]))
+      throw new SettingInvalid(`must be one of ${allowed.join(', ')}`);
+    return one;
+  };
+}
+
 function date(raw: unknown): string {
   const ok =
     typeof raw === 'string' &&
@@ -775,7 +800,19 @@ export function buildRegistry(
     dub_premium_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
     receptionist_message: 'the Receptionist route (AITOOLS-06)',
     receptionist_voice_per_min: 'the Receptionist route (AITOOLS-06)',
+    image_per_use: 'POST /ai-tools/image/jobs (AITOOLS-09)',
+    photo_edit_per_use: 'POST /ai-tools/photo-edit/jobs (AITOOLS-09)',
+    video_per_sec: 'POST /ai-tools/video/jobs (AITOOLS-10)',
+    talking_photo_per_sec: 'POST /ai-tools/talking-photo/jobs (AITOOLS-10)',
   };
+  // R-109: the figures of the four Studio picture and video tools are
+  // placeholders, not derived from anything; the owner sets them.
+  const STUDIO2_PRICED = new Set([
+    'image_per_use',
+    'photo_edit_per_use',
+    'video_per_sec',
+    'talking_photo_per_sec',
+  ]);
   for (const a of plans.actions) {
     add({
       key: `points.action.${a.id}`,
@@ -788,7 +825,7 @@ export function buildRegistry(
         'GET /ai-tools',
         ACTION_ROUTES[a.id] ?? 'GET /plans',
       ],
-      provisional: BOARD,
+      provisional: STUDIO2_PRICED.has(a.id) ? 'STUDIO2-PLACEHOLDER' : BOARD,
       default: a.points,
       parse: points,
       apply: (d, v) => {
@@ -1167,6 +1204,143 @@ export function buildRegistry(
     default: extra('ai.dubbing_max_run_minutes', 60),
     parse: whole(5, LIMIT.maxMinutes),
   });
+  // R-109 (AITOOLS-08 to -10): Studio's picture and video tools. Each new
+  // tool is listed only while its own switch is on (default off, so a tool
+  // never reaches an app before its screen exists); the lead turns it on.
+  for (const [id, label] of [
+    ['image', 'Make an image'],
+    ['photo-edit', 'Edit a photo'],
+    ['video', 'Make a video'],
+    ['talking-photo', 'Talking photo'],
+  ] as const) {
+    add({
+      key: `ai.listed.${id}`,
+      group: 'Studio',
+      label: `${label} is listed in Studio (1 is on, 0 is off)`,
+      unit: 'count',
+      usedBy: ['GET /ai-tools', `POST /ai-tools/${id}/jobs`],
+      provisional: 'STUDIO2-LISTED',
+      default: extra(`ai.listed.${id}`, 0),
+      parse: whole(0, 1),
+    });
+  }
+  for (const [key, label, usedBy, fallback, parse] of [
+    [
+      'ai.image_max_prompt_chars',
+      'Characters a Make an image or Edit a photo description can have',
+      'GET /ai-tools (input.maxCharacters), POST /ai-tools/image/jobs, POST /ai-tools/photo-edit/jobs',
+      1000,
+      count,
+    ],
+    [
+      'ai.video_max_prompt_chars',
+      'Characters a Make a video description can have',
+      'GET /ai-tools (input.maxCharacters), POST /ai-tools/video/jobs',
+      1000,
+      count,
+    ],
+    [
+      'ai.image_max_run_seconds',
+      'Seconds a picture can take before its held points are given back',
+      'The Studio picture and video follower (AITOOLS-09)',
+      300,
+      whole(30, 1500),
+    ],
+    [
+      'ai.video_max_run_seconds',
+      'Seconds a video can take before its held points are given back',
+      'The Studio picture and video follower (AITOOLS-10)',
+      600,
+      whole(60, 1500),
+    ],
+    [
+      'ai.talking_photo_max_seconds',
+      'Longest speech a Talking photo takes, in seconds',
+      'GET /ai-tools (input.options.speech), POST /ai-tools/talking-photo/quote and jobs',
+      60,
+      whole(1, 600),
+    ],
+    [
+      'ai.video_with_sound',
+      'Make a video makes sound with the picture (1 is on, 0 is off)',
+      'POST /ai-tools/video/jobs',
+      1,
+      whole(0, 1),
+    ],
+    [
+      'ai.job_ready_notice_seconds',
+      'Seconds a Studio job must have run for the person to be told when it ends',
+      'The ai_job_ready notification (AITOOLS-08)',
+      60,
+      whole(1, 86_400),
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'count',
+      usedBy: [usedBy],
+      provisional: 'STUDIO2-LIMITS',
+      default: extra(key, fallback),
+      parse,
+    });
+  }
+  for (const [key, label, usedBy, fallback, parse] of [
+    [
+      'ai.image_model',
+      'The picture model Make an image and Edit a photo ask for (never shown to a person)',
+      'POST /ai-tools/image/jobs, POST /ai-tools/photo-edit/jobs',
+      'gemini-3.1-flash-image',
+      modelLine,
+    ],
+    [
+      'ai.image_resolution',
+      'The size of a picture: 512, 1K, 2K or 4K',
+      'POST /ai-tools/image/jobs, POST /ai-tools/photo-edit/jobs',
+      '1K',
+      choiceLine(['512', '1K', '2K', '4K']),
+    ],
+    [
+      'ai.video_model',
+      'The video model Make a video asks for (never shown to a person)',
+      'POST /ai-tools/video/jobs',
+      'veo-3.1-fast-generate-001',
+      modelLine,
+    ],
+    [
+      'ai.video_resolution',
+      'The size of a video: 720p or 1080p',
+      'POST /ai-tools/video/jobs',
+      '720p',
+      choiceLine(['720p', '1080p']),
+    ],
+    [
+      'ai.talking_photo_model',
+      'The model Talking photo asks for (never shown to a person)',
+      'POST /ai-tools/talking-photo/jobs',
+      'creatify-aurora',
+      modelLine,
+    ],
+    [
+      'ai.talking_photo_resolution',
+      'The size of a Talking photo video: 480p or 720p',
+      'POST /ai-tools/talking-photo/jobs',
+      '720p',
+      choiceLine(['480p', '720p']),
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'lines',
+      usedBy: [usedBy],
+      provisional: 'STUDIO2-MODELS',
+      default: extra(key, [fallback]),
+      parse,
+    });
+  }
   add({
     key: 'capital.enabled',
     group: 'Other rulings',

@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import type { AiToolJob } from '../../../generated/prisma/client';
 import type { PlansConfig } from '../../plans/plans-config';
 import type {
@@ -8,6 +9,7 @@ import type {
   VoiceSample,
 } from '../voice/ai-voice-provider';
 import type { AiAudioFolder } from '../audio/ai-audio-store';
+import type { AiMediaFolder } from '../media/ai-media-store';
 
 /**
  * ONE TOOL OF THE JOB PIPELINE (AITOOLS-02, R-78).
@@ -29,10 +31,21 @@ export type AiToolId =
   | 'music'
   | 'captions'
   | 'clean-audio'
-  | 'dubbing';
+  | 'dubbing'
+  // R-109 (AITOOLS-09, AITOOLS-10): the Studio picture and video tools.
+  | 'image'
+  | 'photo-edit'
+  | 'video'
+  | 'talking-photo';
 
-/** What a job takes in. `text` (words to speak), `prompt` (a description) and `file` (a recording or video the person uploaded, AITOOLS-04); `chat` comes with the task that needs it. */
-export type AiToolInputKind = 'text' | 'prompt' | 'file';
+/**
+ * What a job takes in. `text` (words to speak), `prompt` (a description) and `file` (a recording or video the person
+ * uploaded, AITOOLS-04). R-109 (AITOOLS-08) adds the room for the Studio tools: `image` (a description, and a photo for
+ * Edit a photo), `video` (a description or a photo, or a photo and a voice for a Talking photo), and `dialogue` and `chat`,
+ * which later tasks build. Only the kinds a built tool uses are listed in `GET /ai-tools`.
+ */
+export type AiToolInputKind =
+  'text' | 'prompt' | 'file' | 'image' | 'video' | 'dialogue' | 'chat';
 
 /** How a text request reads once the pipeline has checked it. */
 export interface TextJobRequest {
@@ -77,7 +90,49 @@ export interface FileJobRequest {
   contentType: string;
 }
 
-export type AiToolRequest = TextJobRequest | PromptJobRequest | FileJobRequest;
+/**
+ * How a Studio picture or video request reads (AITOOLS-09, AITOOLS-10): the words, the shape and length asked, the
+ * person's photo and speech by key, and the model and size the settings named when the request was checked. `photo`
+ * and `speech` are set once the Hub has opened the person's files (their real type, size and, for speech, length).
+ */
+export interface MediaJobRequest {
+  kind: 'media';
+  /** The description; empty for a Talking photo, which has none. */
+  prompt: string;
+  /** The aspect ratio asked (`1:1`, `16:9`), or null to take the default. */
+  shape: string | null;
+  /** A clip's whole seconds (4, 6 or 8), or a Talking photo's speech length rounded up; null for a picture. */
+  seconds: number | null;
+  /** The person's photo in `ai/input-image` (Edit a photo, a clip's first frame, Talking photo). */
+  photoKey: string | null;
+  /** Talking photo: a recording the person sent to `ai/input-audio`. */
+  audioKey: string | null;
+  /** Talking photo: a finished voice job of the person's whose audio is the speech. */
+  sourceJobId: string | null;
+  /** The model, size and sound the settings named (set by the tool's `precheck`). */
+  model: string;
+  resolution: string;
+  withSound: boolean;
+  photo: { bytes: number; contentType: string } | null;
+  speech: {
+    source: 'upload' | 'job';
+    /** The key to read it from: an input file, or a stored result of a job. */
+    key: string;
+    seconds: number;
+    bytes: number;
+    contentType: string;
+  } | null;
+}
+
+export type AiToolRequest =
+  TextJobRequest | PromptJobRequest | FileJobRequest | MediaJobRequest;
+
+/** The request of a media tool; a tool is only ever handed the kind it declares. */
+export function asMedia(req: AiToolRequest): MediaJobRequest {
+  if (req.kind !== 'media')
+    throw new Error('a media tool was given another kind');
+  return req;
+}
 
 /** The request of a file tool; a tool is only ever handed the kind it declares. */
 export function asFile(req: AiToolRequest): FileJobRequest {
@@ -104,6 +159,18 @@ export interface AiToolRunResult {
   audio?: SpokenAudio;
   /** Text outputs kept in the job row itself (`outputs[].text`). */
   texts?: { kind: 'text' | 'subtitles'; text: string }[];
+  /**
+   * A Studio result to keep (AITOOLS-09, AITOOLS-10): the picture or video, as a stream from the provider. The pipeline
+   * stores it under the tool's `mediaFolder` without holding it whole, serves it as `outputs[].kind: image | video`, and
+   * closes the stream however the job ends. A type the Hub does not serve fails the job and every point goes back.
+   */
+  media?: {
+    kind: 'image' | 'video';
+    contentType: string;
+    bytes: number | null;
+    stream: Readable;
+    close: () => void;
+  };
   /** The provider's own id for a long job, kept for a later look-up (`providerRef`). */
   providerRef?: string;
   /**
@@ -138,6 +205,17 @@ export interface AiToolRunResult {
 export interface AiToolRunInput {
   file: VoiceSample | StreamedFile;
   /**
+   * A Studio tool's own files (AITOOLS-09, AITOOLS-10): the person's photo and, for a Talking photo, the speech. Each is
+   * OPENED when the tool asks for it, one after the other: the read gate gives an account one place at a time, so the
+   * photo is sent up (which hands its place back) before the speech is opened. Each is streamed to the provider as an
+   * asset for this one run; the pipeline hands every place back when the call ends. `file` holds `NO_FILE` for these
+   * jobs: the files are here.
+   */
+  media?: {
+    photo?: () => Promise<StreamedFile>;
+    speech?: () => Promise<StreamedFile>;
+  };
+  /**
    * VoiceOver in the person's own voice (AITOOLS-07): notes the provider's copy
    * of the voice on the job as soon as it exists (answers `true` when it did),
    * so the pipeline removes it however the job ends. Absent for every other run.
@@ -145,8 +223,14 @@ export interface AiToolRunInput {
   noteCopy?: (copy: ProviderCopy) => Promise<boolean>;
 }
 
-/** What a unit of a tool's price is: a minute of speech, one use, or one track. */
-export type AiToolUnit = 'minute' | 'use' | 'track';
+/** What `AiToolRunInput.file` holds for a Studio job, whose files are opened one at a time through `media`. */
+export const NO_FILE: VoiceSample = {
+  audio: Buffer.alloc(0),
+  contentType: 'application/octet-stream',
+};
+
+/** What a unit of a tool's price is: a minute of speech, one use, one track, or (R-109) a second of video. */
+export type AiToolUnit = 'minute' | 'use' | 'track' | 'second';
 
 /** A tool that takes words to speak: priced in minutes of speech, in one of the listed voices. */
 export interface TextInputSpec {
@@ -180,7 +264,31 @@ export interface FileInputSpec {
   dubbing?: boolean;
 }
 
-export type AiToolInputSpec = TextInputSpec | PromptInputSpec | FileInputSpec;
+/**
+ * A Studio picture or video tool (AITOOLS-09, AITOOLS-10): a description and what goes with it. The shapes, lengths and
+ * photo rule ride to the app in `GET /ai-tools` (`input.options`).
+ */
+export interface MediaInputSpec {
+  kind: 'image' | 'video';
+  /** The setting for the longest description, in characters; absent for a Talking photo, which has no description. */
+  maxCharactersSetting: string | null;
+  /** The shapes the model takes, in the order the app draws them. */
+  shapes: readonly string[];
+  /** A video's lengths in seconds; absent for a picture. */
+  lengths?: readonly number[];
+  /** Whether a photo goes with the job. */
+  photo: 'none' | 'optional' | 'required';
+  /** Talking photo: the person's speech (a recording or a finished voice result); the setting for its longest length. */
+  speech?: { maxSecondsSetting: string };
+}
+
+export type AiToolInputSpec =
+  TextInputSpec | PromptInputSpec | FileInputSpec | MediaInputSpec;
+
+/** Whether the spec is a Studio picture or video tool's (its `kind` is a pair of values, so a plain `===` does not narrow it away). */
+export function isMediaSpec(spec: AiToolInputSpec): spec is MediaInputSpec {
+  return spec.kind === 'image' || spec.kind === 'video';
+}
 
 /** A tool's settings keys, read on each call (R-65). */
 export interface AiToolSettings {
@@ -204,6 +312,14 @@ export interface AiTool {
   readonly audioFolder: AiAudioFolder | null;
   /** The extension of the audio this tool stores when it is not `mp3` (Dubbing: `flac`). */
   readonly audioExtension?: string;
+  /** Where the job's picture or video is stored (AITOOLS-09, AITOOLS-10); absent for every tool that makes audio or words. */
+  readonly mediaFolder?: AiMediaFolder;
+  /**
+   * The setting that lists the tool (`ai.listed.<id>`, AITOOLS-08, default off): the catalogue lists the tool only while
+   * its code is built, the provider is set up for it AND this setting is 1. Absent for the seven older tools, which
+   * list as soon as they can run.
+   */
+  readonly listingSetting?: string;
   /**
    * Whether the catalogue lists the tool while the provider is not set up
    * (`enabled: false`). VoiceOver keeps AITOOLS-01's answer; a tool added

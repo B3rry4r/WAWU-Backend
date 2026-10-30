@@ -87,7 +87,8 @@ export interface PlanCheckoutBumpView {
 export interface PlanActionView {
   id: string;
   points: number;
-  per: 'use' | 'minute' | 'track' | 'message' | 'minute_per_language';
+  per:
+    'use' | 'minute' | 'track' | 'message' | 'minute_per_language' | 'second';
 }
 
 /** The limits on AI jobs (PT7). */

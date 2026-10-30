@@ -36,6 +36,8 @@ describe('which notifications reach a phone', () => {
   it('pushes a kind only if a Z3 switch can mute it, or it is on the short list the owner has to confirm', () => {
     const ungatedButSent = pushedKinds().filter((k) => !pushGateFor(k));
     expect(ungatedButSent.sort()).toEqual([
+      // AITOOLS-08 (R-109, lead): a long Studio job the person left and is waiting for; no Z3 switch covers a job they started themselves, so the owner confirms it.
+      'ai_job_ready',
       'community_join_approved',
       'community_join_declined',
       // INBOX-24 (R-63): the owner ruled "a reminder comes 3 days before the
@@ -177,6 +179,8 @@ const EVENTS: NotificationEvent[] = [
   },
   { kind: 'question_answered', userWawuId: 'u', netAmount: 850 },
   { kind: 'question_credit', userWawuId: 'u', amount: 1000 },
+  // AITOOLS-08 (R-109): added with the kind (this list must name every pushed kind).
+  { kind: 'ai_job_ready', userWawuId: 'u', what: 'Video', outcome: 'done' },
 ];
 
 describe('the words of a push', () => {

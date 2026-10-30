@@ -90,7 +90,11 @@
     "dub_standard_per_min_lang": { "points": 1500, "per": "minute_per_language" },
     "dub_premium_per_min_lang": { "points": 6500, "per": "minute_per_language" },
     "receptionist_message": { "points": 20, "per": "message" },
-    "receptionist_voice_per_min": { "points": 400, "per": "minute" }
+    "receptionist_voice_per_min": { "points": 400, "per": "minute" },
+    "image_per_use": { "points": 100, "per": "use" },
+    "photo_edit_per_use": { "points": 100, "per": "use" },
+    "video_per_sec": { "points": 250, "per": "second" },
+    "talking_photo_per_sec": { "points": 200, "per": "second" }
   },
   "caps": {
     "daily_points_per_user": 5000,

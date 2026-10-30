@@ -26,17 +26,23 @@ import {
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
   CreateDubbingJobDto,
+  CreateImageJobDto,
   CreateMusicJobDto,
+  CreatePhotoEditJobDto,
   CreateQuickVoiceJobDto,
   CreateSoundEffectJobDto,
+  CreateTalkingPhotoJobDto,
+  CreateVideoJobDto,
   CreateVoiceoverJobDto,
   QuoteFileDto,
+  QuoteTalkingPhotoDto,
 } from './ai-tools.dto';
 import { AiToolsService } from './ai-tools.service';
 import type {
   AiFileQuoteView,
   AiJobPage,
   AiJobView,
+  AiSpeechQuoteView,
   AiToolsView,
   OwnVoiceRemovedView,
   OwnVoiceView,
@@ -46,9 +52,13 @@ import { personName } from '../voice-intro/voice-profile.service';
 import { CAPTIONS_TOOL } from './tools/captions.tool';
 import { CLEAN_AUDIO_TOOL } from './tools/clean-audio.tool';
 import { DUBBING_TOOL } from './tools/dubbing.tool';
+import { IMAGE_TOOL } from './tools/image.tool';
 import { MUSIC_TOOL } from './tools/music.tool';
+import { PHOTO_EDIT_TOOL } from './tools/photo-edit.tool';
 import { QUICK_VOICE_TOOL } from './tools/quick-voice.tool';
 import { SOUND_EFFECT_TOOL } from './tools/sound-effect.tool';
+import { TALKING_PHOTO_TOOL } from './tools/talking-photo.tool';
+import { VIDEO_TOOL } from './tools/video.tool';
 
 /**
  * The AI tools (AITOOLS-01, AITOOLS-02, R-43, R-61, R-78, PT1 and PT2). Every
@@ -391,6 +401,187 @@ export class AiToolsController {
   ): Promise<AiJobView> {
     const { job, replayed } = await this.jobs.createJob(
       DUBBING_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Make an image job (AITOOLS-09, R-109): a `prompt`, an optional
+   * `shape` (one of `input.options.shapes` from `GET /ai-tools`) and the
+   * `quoteToken` of the `POST /points/quote` for the action `image_per_use`
+   * (units 1). Priced flat, one picture. The points are held and the job
+   * answers `202 working` at once; the picture is made in the background, so
+   * the app polls `GET /ai-tools/jobs/{id}` and may leave. Done, `outputs` hold
+   * the picture (`kind: image`, with `contentType`, `bytes`, `name`,
+   * `downloadUrl` and `pieceFormat: image`). The points are kept only on
+   * success; a refused or failed picture gives every point back with the Hub's
+   * own sentence. The request, the answer and the `Idempotency-Key` rule are
+   * those of `POST /ai-tools/sound-effect/jobs`, plus `422 ai_shape_unsupported`.
+   * The tool is listed, and the route answers, only while its switch
+   * `ai.listed.image` is on.
+   */
+  @Post('image/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-09')
+  async createImage(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateImageJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      IMAGE_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts an Edit a photo job (AITOOLS-09, R-109): the same body as Make an
+   * image plus the `photoKey` of the person's own photo (`POST /uploads/presign`
+   * with the folder `ai/input-image`, then `POST /uploads/confirm`; a JPEG, PNG
+   * or WebP picture up to 25 MB). The quote is for the action
+   * `photo_edit_per_use`. Another person's key is `404 not_found`; a file the
+   * Hub cannot open as a picture is `422 ai_photo_unreadable`; each with nothing
+   * held. The photo is deleted when the job ends, and the provider's copy of it
+   * too.
+   */
+  @Post('photo-edit/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-09')
+  async createPhotoEdit(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreatePhotoEditJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      PHOTO_EDIT_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Make a video job (AITOOLS-10, R-109): a `prompt`, an optional
+   * `shape` (wide or tall), the clip's `seconds` (one of `input.options.lengths`:
+   * 4, 6 or 8), an optional `photoKey` to start from and the `quoteToken` of the
+   * `POST /points/quote` for the action `video_per_sec` (units = `seconds`).
+   * Priced by the second. A clip takes minutes: the job answers `202 working`,
+   * the app polls `GET /ai-tools/jobs/{id}`, and a job that ran long writes an
+   * `ai_job_ready` notification when it ends. Done, `outputs` hold the clip
+   * (`kind: video`, `pieceFormat: video`). The request, the answer and the
+   * refusals are those of `POST /ai-tools/photo-edit/jobs`, plus
+   * `422 ai_length_unsupported`.
+   */
+  @Post('video/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-10')
+  async createVideo(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateVideoJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      VIDEO_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * The points quote for a Talking photo's voice (AITOOLS-10): the `audioKey` of
+   * a recording the person uploaded (`ai/input-audio`, MP3 or WAV) or the
+   * `sourceJobId` of one of their own finished voice results. The Hub reads the
+   * voice's length itself and prices the seconds from that, so the phone sends no
+   * length. Answers the same quote `POST /points/quote` does (with its
+   * `quoteToken`, to send to the job route with the same voice), plus
+   * `speech.seconds`. Nothing is held. `404 not_found`, `409 job_not_ready`,
+   * `422 ai_speech_unreadable`, `422 ai_length_too_long` over the setting.
+   */
+  @Post('talking-photo/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-10')
+  async quoteTalkingPhoto(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteTalkingPhotoDto,
+  ): Promise<AiSpeechQuoteView> {
+    const speech = await this.jobs.openSpeech(user.sub, dto);
+    return this.tools.quoteSpeech(user.sub, TALKING_PHOTO_TOOL, speech.seconds);
+  }
+
+  /**
+   * Starts a Talking photo job (AITOOLS-10, R-109): the `photoKey` of the
+   * person's photo and exactly one voice, an `audioKey` or a `sourceJobId`, with
+   * the `quoteToken` from `POST /ai-tools/talking-photo/quote` for the same
+   * voice. Priced by the seconds of speech the Hub read; a voice longer than
+   * `input.options.speech.maxSeconds` is `422 ai_length_too_long`, with nothing
+   * held. The photo and the recording are deleted when the job ends, and the
+   * provider's copies too. The request, the answer and the other refusals are
+   * those of `POST /ai-tools/video/jobs`.
+   */
+  @Post('talking-photo/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-10')
+  async createTalkingPhoto(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateTalkingPhotoJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      TALKING_PHOTO_TOOL,
       user.sub,
       key,
       dto,

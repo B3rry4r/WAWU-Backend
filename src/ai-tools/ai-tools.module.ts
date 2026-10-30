@@ -3,11 +3,15 @@ import { ConfigService } from '@nestjs/config';
 import { AccountPurgeModule } from '../account-purge/account-purge.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { PlansModule } from '../plans/plans.module';
 import { PointsSpendModule } from '../points/spend/points-spend.module';
 import { StorageModule } from '../storage/storage.module';
 import { AI_AUDIO_STORE, StorageAiAudioStore } from './audio/ai-audio-store';
 import { AiJobService } from './ai-job.service';
 import { AiToolsController } from './ai-tools.controller';
+import { AiToolsPieceController } from './ai-tools-piece.controller';
+import { AiFlowService } from './flow/ai-flow.service';
+import { AI_MEDIA_STORE, StorageAiMediaStore } from './media/ai-media-store';
 import { AiToolsPurgeService } from './ai-tools-purge.service';
 import { AiVoiceSamplesController } from './ai-voice-samples.controller';
 import {
@@ -42,8 +46,14 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     StorageModule,
     // AITOOLS-07: the purge asks the provider to drop a person's voice copy first.
     AccountPurgeModule,
+    // AITOOLS-08: "Make it a piece" stands behind the publishing gate (its offers need the plans).
+    PlansModule,
   ],
-  controllers: [AiToolsController, AiVoiceSamplesController],
+  controllers: [
+    AiToolsController,
+    AiToolsPieceController,
+    AiVoiceSamplesController,
+  ],
   providers: [
     AiToolsService,
     AiJobService,
@@ -56,6 +66,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
       inject: [ConfigService],
     },
     { provide: AI_AUDIO_STORE, useClass: StorageAiAudioStore },
+    // R-109 (AITOOLS-08): the pictures and videos, streamed to the Hub's own storage.
+    { provide: AI_MEDIA_STORE, useClass: StorageAiMediaStore },
     // AITOOLS-04: the person's own file for Captions and Clean audio.
     { provide: AI_INPUT_FILES, useClass: StorageAiInputFiles },
     AiInputService,
@@ -66,6 +78,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     AiToolsPurgeService,
     // AITOOLS-05: follows the dubs the provider is working on, until each is done or failed.
     AiDubService,
+    // AITOOLS-09, AITOOLS-10: follows the pictures and videos the provider is making.
+    AiFlowService,
   ],
   exports: [AiJobService, AiInputService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })

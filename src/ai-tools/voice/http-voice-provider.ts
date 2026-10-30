@@ -5,7 +5,7 @@ import {
 } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AI_AUDIO_CONTENT_TYPES } from '../audio/ai-audio-store';
@@ -13,11 +13,15 @@ import {
   AiVoiceProviderError,
   type AiVoice,
   type AiVoiceProvider,
+  type AssetUpload,
   type CopyPresence,
   type CopyRemoval,
   type DubOutputs,
   type DubProgress,
   type DubStatus,
+  type GenerationFailure,
+  type GenerationProgress,
+  type GenerationStatus,
   type MusicRequest,
   type IsolatedAudio,
   type IsolateRequest,
@@ -27,10 +31,15 @@ import {
   type SpokenAudio,
   type StartDubRequest,
   type StartedDub,
+  type StartedGeneration,
+  type StartImageRequest,
+  type StartVideoRequest,
   type StreamedFile,
+  type StreamedMedia,
   type Transcript,
   type TranscribeRequest,
   type TranscriptWord,
+  type UploadedAsset,
 } from './ai-voice-provider';
 
 /** The settings of the adapter, all from the environment. */
@@ -134,6 +143,35 @@ const DUB_STATUSES: readonly DubStatus[] = [
   'stale',
   'failed',
 ];
+
+/** The types the Studio picture and video tools may hand back, and the plain file name each upload is sent under (AITOOLS-09, AITOOLS-10). */
+const ASSET_FILE_NAME: Record<string, string> = {
+  'image/png': 'photo.png',
+  'image/jpeg': 'photo.jpg',
+  'image/webp': 'photo.webp',
+  'audio/mpeg': 'speech.mp3',
+  'audio/wav': 'speech.wav',
+};
+/** The failure reasons a generation answers (docs/elevenlabs/API-FACTS.md, "Make an image"). */
+const GENERATION_FAILURES: readonly GenerationFailure[] = [
+  'moderated',
+  'timeout',
+  'model_error',
+  'invalid_parameters',
+  'dependency_failed',
+  'charging_failed',
+  'internal_error',
+];
+const GENERATION_STATUSES: readonly GenerationStatus[] = [
+  'pending',
+  'generating',
+  'completed',
+  'failed',
+];
+/** A model name the Hub sends: the settings check it, and it is checked again before it goes into a request. */
+const MODEL_ID = /^[a-z0-9][a-z0-9._-]{1,60}$/;
+/** The most an answer that starts or reads a generation may be: a request bound. */
+const MAX_GENERATION_JSON_BYTES = 256 * 1024;
 
 /** The redirects the Music call follows, like `fetch`: up to three. */
 const MAX_REDIRECTS = 3;
@@ -314,6 +352,11 @@ export class HttpVoiceProvider implements AiVoiceProvider {
 
   /** Captions and Clean audio take a file and use no voice: a host and a key are enough (AITOOLS-04). */
   get fileToolsConfigured(): boolean {
+    return this.baseUrl !== null && this.apiKey !== null;
+  }
+
+  /** The Studio picture and video tools use no voice either: a host and a key are enough (AITOOLS-09, AITOOLS-10). */
+  get mediaToolsConfigured(): boolean {
     return this.baseUrl !== null && this.apiKey !== null;
   }
 
@@ -856,6 +899,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     fields: Record<string, string>,
     fileField: string,
     file: { audio: Buffer; contentType: string } | StreamedFile,
+    fileName = 'recording',
   ): { contentType: string; payload: Buffer | StreamedBody } {
     const boundary = `----wawu${randomBytes(16).toString('hex')}`;
     const parts: Buffer[] = [];
@@ -867,7 +911,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       );
     parts.push(
       Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="recording"\r\nContent-Type: ${file.contentType}\r\n\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${fileName}"\r\nContent-Type: ${file.contentType}\r\n\r\n`,
       ),
     );
     const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
@@ -1223,6 +1267,298 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     }
   }
 
+  // ---- Studio pictures and video (AITOOLS-09, AITOOLS-10, R-109) -----------
+  // NOT RUN against the real provider (the owner's credits are not bought
+  // yet); every path here is run against the stand-in
+  // (`scripts/dev/voice-standin.cjs`) with the same wire shape as the
+  // provider's file (docs/elevenlabs/API-FACTS.md, "Make an image" and "Make a
+  // video, Talking photo").
+
+  /** `POST /v1/assets`, multipart `asset` (the file) and `name`. The answer holds `asset_id`. */
+  async uploadAsset(
+    req: AssetUpload,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<UploadedAsset> {
+    if (!this.mediaToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'pictures are not available');
+    const type = req.file.contentType;
+    const fileName = ASSET_FILE_NAME[type];
+    if (!fileName) throw new AiVoiceProviderError('rejected', 'file type');
+    const form = this.multipart(
+      { name: fileName },
+      'asset',
+      req.file,
+      fileName,
+    );
+    const done = await this.longCall({
+      path: '/v1/assets',
+      query: '',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'application/json',
+      typeOk: (t) => t.startsWith('application/json'),
+      notOkMessage: 'not an asset',
+      maxBytes: MAX_GENERATION_JSON_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    return parseUploadedAsset(done.body);
+  }
+
+  removeAsset(assetId: string): Promise<CopyRemoval> {
+    if (!PROVIDER_ID.test(assetId)) return Promise.resolve('failed');
+    return this.removeItem(`/v1/assets/${encodeURIComponent(assetId)}`);
+  }
+
+  async startImage(
+    req: StartImageRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<StartedGeneration> {
+    if (
+      !MODEL_ID.test(req.model) ||
+      !req.assetIds.every((id) => PROVIDER_ID.test(id))
+    )
+      throw new AiVoiceProviderError('rejected', 'request');
+    return this.startGeneration(
+      '/v1/flows/image',
+      {
+        model_id: req.model,
+        prompt: req.prompt,
+        aspect_ratio: req.shape,
+        resolution: req.resolution,
+        ...(req.assetIds.length > 0
+          ? {
+              images: req.assetIds.map((asset_id) => ({
+                type: 'asset',
+                asset_id,
+              })),
+            }
+          : {}),
+      },
+      opts.signal,
+    );
+  }
+
+  readImage(
+    id: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<GenerationProgress> {
+    return this.readGeneration('/v1/flows/image', id, opts.signal);
+  }
+
+  async startVideo(
+    req: StartVideoRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<StartedGeneration> {
+    if (!MODEL_ID.test(req.model))
+      throw new AiVoiceProviderError('rejected', 'request');
+    if (req.kind === 'clip') {
+      if (
+        (req.startFrameAssetId !== null &&
+          !PROVIDER_ID.test(req.startFrameAssetId)) ||
+        !Number.isInteger(req.seconds)
+      )
+        throw new AiVoiceProviderError('rejected', 'request');
+      return this.startGeneration(
+        '/v1/flows/video',
+        {
+          model_id: req.model,
+          prompt: req.prompt,
+          // The provider takes the length as a string ("4", "6", "8").
+          duration_secs: String(req.seconds),
+          aspect_ratio: req.shape,
+          resolution: req.resolution,
+          generate_audio: req.withSound,
+          ...(req.startFrameAssetId !== null
+            ? {
+                start_frame: {
+                  type: 'asset',
+                  asset_id: req.startFrameAssetId,
+                },
+              }
+            : {}),
+        },
+        opts.signal,
+      );
+    }
+    if (
+      !PROVIDER_ID.test(req.imageAssetId) ||
+      !PROVIDER_ID.test(req.audioAssetId)
+    )
+      throw new AiVoiceProviderError('rejected', 'request');
+    return this.startGeneration(
+      '/v1/flows/video',
+      {
+        model_id: req.model,
+        image: { type: 'asset', asset_id: req.imageAssetId },
+        audio: { type: 'asset', asset_id: req.audioAssetId },
+        resolution: req.resolution,
+      },
+      opts.signal,
+    );
+  }
+
+  readVideo(
+    id: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<GenerationProgress> {
+    return this.readGeneration('/v1/flows/video', id, opts.signal);
+  }
+
+  /** One JSON POST that starts a generation: the answer is small, `{ id, status: pending }`. The person's words are never in an error. */
+  private async startGeneration(
+    path: string,
+    body: Record<string, unknown>,
+    outer?: AbortSignal,
+  ): Promise<StartedGeneration> {
+    if (!this.mediaToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'pictures are not available');
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+          'xi-api-key': this.apiKey ?? '',
+        },
+        body: JSON.stringify(body),
+        signal: this.signalFor(outer),
+      });
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok) {
+      await res.arrayBuffer().catch(() => undefined);
+      throw failureForStatus(res.status);
+    }
+    return parseStartedGeneration(await this.smallBody(res));
+  }
+
+  private async readGeneration(
+    path: string,
+    id: string,
+    outer?: AbortSignal,
+  ): Promise<GenerationProgress> {
+    if (
+      !this.mediaToolsConfigured ||
+      this.baseUrl === null ||
+      !PROVIDER_ID.test(id)
+    )
+      throw new AiVoiceProviderError('rejected', 'pictures are not available');
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}/${encodeURIComponent(id)}`, {
+        method: 'GET',
+        headers: {
+          'xi-api-key': this.apiKey ?? '',
+          accept: 'application/json',
+        },
+        signal: this.signalFor(outer),
+      });
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw failureForStatus(res.status);
+    }
+    return parseGenerationProgress(await this.smallBody(res));
+  }
+
+  /** A small JSON answer, read whole and bounded. */
+  private async smallBody(res: Response): Promise<Buffer> {
+    try {
+      const raw = Buffer.from(await res.arrayBuffer());
+      if (raw.length > MAX_GENERATION_JSON_BYTES)
+        throw new AiVoiceProviderError('unavailable', 'answer size');
+      return raw;
+    } catch (e) {
+      if (e instanceof AiVoiceProviderError) throw e;
+      throw new AiVoiceProviderError('unavailable', 'answer cut off');
+    }
+  }
+
+  async openGeneration(
+    link: string,
+    opts: {
+      maxBytes: number;
+      types: readonly string[];
+      signal?: AbortSignal;
+    },
+  ): Promise<StreamedMedia> {
+    let url: URL;
+    try {
+      url = new URL(link);
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'bad link');
+    }
+    const base = this.baseUrl === null ? null : new URL(this.baseUrl);
+    const sameAsProvider =
+      base !== null && url.protocol === base.protocol && url.host === base.host;
+    const named =
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      !/^\[|^[0-9.]+$/.test(url.hostname) &&
+      url.hostname !== 'localhost';
+    if (!named && !(sameAsProvider && url.username === ''))
+      throw new AiVoiceProviderError('unavailable', 'bad link');
+    const controller = new AbortController();
+    const signal = AbortSignal.any([
+      controller.signal,
+      this.signalFor(opts.signal, this.fileTimeoutMs),
+    ]);
+    let res: Response;
+    try {
+      // No key: a signed link needs none and may be another host. No redirect.
+      res = await fetch(url, { method: 'GET', redirect: 'error', signal });
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok || !res.body) {
+      await res.body?.cancel().catch(() => undefined);
+      throw failureForStatus(res.status || 502);
+    }
+    const type = (res.headers.get('content-type') ?? '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    const declared = Number(res.headers.get('content-length'));
+    const bytes = Number.isFinite(declared) && declared > 0 ? declared : null;
+    if (
+      !opts.types.includes(type) ||
+      (bytes !== null && bytes > opts.maxBytes)
+    ) {
+      controller.abort();
+      await res.body.cancel().catch(() => undefined);
+      throw new AiVoiceProviderError('unavailable', 'answer type or size');
+    }
+    let seen = 0;
+    const limit = new Transform({
+      transform(chunk: Buffer, _enc, done) {
+        seen += chunk.length;
+        if (seen > opts.maxBytes) return done(new Error('answer size'));
+        done(null, chunk);
+      },
+    });
+    const source = Readable.fromWeb(
+      res.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>,
+    );
+    source.on('error', (e) => limit.destroy(e));
+    source.pipe(limit);
+    return {
+      contentType: type,
+      bytes,
+      stream: limit,
+      close: () => {
+        controller.abort();
+        source.destroy();
+        limit.destroy();
+      },
+    };
+  }
+
   /**
    * One try at deleting one item the provider keeps. Never throws and never
    * logs (the caller decides what a failed try means: the provider answers
@@ -1346,5 +1682,80 @@ export function parseDubProgress(raw: Buffer): DubProgress {
     status: status as DubStatus,
     audioUrl: link(outputs.lossless_audio),
     subtitlesUrl: link(outputs.subtitles),
+  };
+}
+
+/**
+ * Reads the answer to an asset upload (docs/elevenlabs/API-FACTS.md): `asset_id`. No id is no asset
+ * (`unavailable`: the call may be tried again).
+ */
+export function parseUploadedAsset(raw: Buffer): UploadedAsset {
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new AiVoiceProviderError('unavailable', 'not an asset');
+  }
+  const id = o?.asset_id;
+  if (typeof id !== 'string' || !PROVIDER_ID.test(id))
+    throw new AiVoiceProviderError('unavailable', 'not an asset');
+  return { assetId: id };
+}
+
+/** Reads the answer that starts a generation: `id` (and `status: pending`). No id is no generation. */
+export function parseStartedGeneration(raw: Buffer): StartedGeneration {
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new AiVoiceProviderError('unavailable', 'not a generation');
+  }
+  const id = o?.id;
+  if (typeof id !== 'string' || !PROVIDER_ID.test(id))
+    throw new AiVoiceProviderError('unavailable', 'not a generation');
+  return { id };
+}
+
+/**
+ * Reads one read of a generation: `status` and, once `completed`, `content_url`
+ * and `content_mime_type`; once `failed`, `failure_reason`. A status the Hub
+ * does not know, or a `completed` with no link, is `unavailable` (read again
+ * later), never guessed. The provider's error text is not read.
+ */
+export function parseGenerationProgress(raw: Buffer): GenerationProgress {
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new AiVoiceProviderError('unavailable', 'not a generation');
+  }
+  const status = o?.status;
+  if (
+    typeof status !== 'string' ||
+    !GENERATION_STATUSES.includes(status as GenerationStatus)
+  )
+    throw new AiVoiceProviderError('unavailable', 'not a generation');
+  const link = o.content_url;
+  const mime = o.content_mime_type;
+  const contentUrl =
+    typeof link === 'string' && link.length > 0 && link.length <= 4096
+      ? link
+      : null;
+  if (status === 'completed' && contentUrl === null)
+    throw new AiVoiceProviderError('unavailable', 'no link');
+  const reason = o.failure_reason;
+  return {
+    status: status as GenerationStatus,
+    contentUrl: status === 'completed' ? contentUrl : null,
+    contentType:
+      status === 'completed' && typeof mime === 'string'
+        ? mime.split(';')[0].trim().toLowerCase()
+        : null,
+    failure:
+      status === 'failed'
+        ? GENERATION_FAILURES.includes(reason as GenerationFailure)
+          ? (reason as GenerationFailure)
+          : 'unknown'
+        : null,
   };
 }

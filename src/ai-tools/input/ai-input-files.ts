@@ -4,10 +4,13 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import {
   AI_INPUT_FOLDERS,
+  AI_INPUT_IMAGE_FOLDER,
+  AI_INPUT_IMAGE_MAX_BYTES,
   AI_INPUT_MAX_BYTES_SETTING,
 } from '../../storage/dto/presign-upload.dto';
 import { StorageService } from '../../storage/storage.service';
 import { AiToolError } from '../ai-tools-error';
+import { IMAGE_SNIFF_HEAD_BYTES, sniffImage } from './image-sniff';
 import { minutesOf, readSeconds } from './media-length';
 import { SNIFF_HEAD_BYTES, sniffContainer } from './media-sniff';
 import { type ReadGate, readGate } from './read-gate';
@@ -85,7 +88,11 @@ export class StorageAiInputFiles implements AiInputFiles {
     if (
       !row ||
       row.wawuUserId !== wawuUserId ||
-      !(AI_INPUT_FOLDERS as readonly string[]).includes(row.folder) ||
+      // AITOOLS-08: a photo for a Studio tool is in the third input folder (its own constant: AI_INPUT_FOLDERS pins the two older ones).
+      !(
+        (AI_INPUT_FOLDERS as readonly string[]).includes(row.folder) ||
+        row.folder === AI_INPUT_IMAGE_FOLDER
+      ) ||
       !row.key.startsWith(`${row.folder}/${wawuUserId}/`) ||
       row.status !== 'confirmed'
     )
@@ -127,6 +134,8 @@ export class StorageAiInputFiles implements AiInputFiles {
 }
 
 export const FILE_NOT_FOUND_MESSAGE = "We couldn't find that file.";
+export const PHOTO_UNREADABLE_TEXT =
+  "We couldn't open that photo. Choose a JPEG, PNG or WebP picture. No points were taken.";
 export const FILE_UNREADABLE_MESSAGE =
   "We couldn't read that file. No points were taken.";
 
@@ -191,6 +200,45 @@ export class AiInputService {
   }
 
   /**
+   * A person's photo for a Studio tool (AITOOLS-08), checked before anything is
+   * priced or held: their own landed file in `ai/input-image` (another person's
+   * key answers not found), within 25 MB, and a PNG, JPEG or WebP picture by its
+   * first bytes. Only the head is read.
+   */
+  async openPhoto(
+    wawuUserId: string,
+    photoKey: string,
+  ): Promise<{ key: string; bytes: number; contentType: string }> {
+    const row = await this.files.find(wawuUserId, photoKey);
+    if (!row || row.folder !== AI_INPUT_IMAGE_FOLDER)
+      throw new AiToolError('not_found', FILE_NOT_FOUND_MESSAGE);
+    if (row.bytes > AI_INPUT_IMAGE_MAX_BYTES)
+      throw new AiToolError(
+        'ai_file_too_large',
+        `That photo is too big. The most is ${sizeText(AI_INPUT_IMAGE_MAX_BYTES)}. No points were taken.`,
+        {
+          cap: 'file_bytes',
+          capLimit: AI_INPUT_IMAGE_MAX_BYTES,
+          capUnit: 'bytes',
+        },
+      );
+    let picture;
+    try {
+      const real = await this.files.length(row.key);
+      if (real <= 0 || real > AI_INPUT_IMAGE_MAX_BYTES) picture = null;
+      else
+        picture = sniffImage(
+          await this.files.readHead(row.key, IMAGE_SNIFF_HEAD_BYTES),
+        );
+    } catch {
+      picture = null;
+    }
+    if (picture === null)
+      throw new AiToolError('ai_photo_unreadable', PHOTO_UNREADABLE_TEXT);
+    return { key: row.key, bytes: row.bytes, contentType: picture.contentType };
+  }
+
+  /**
    * The file's length in seconds, or null when it cannot be read. The Hub
    * reads one file per account at a time (a second read from the account
    * waits for the first, a third is refused busy); a file that is not one of the
@@ -247,13 +295,18 @@ export class AiInputService {
    * written, and again when the run ends) hands the place and the turn back.
    * Peak memory of a job: the stream's own buffers, about 64 KB, at any size.
    */
-  async openForRun(wawuUserId: string, key: string): Promise<StreamedFile> {
+  async openForRun(
+    wawuUserId: string,
+    key: string,
+    /** AITOOLS-08: a smaller cap for a photo (25 MB); the setting's cap otherwise. */
+    cap: number = this.maxBytes(),
+  ): Promise<StreamedFile> {
     const until = this.gate.deadline();
     const releaseAccount = await this.gate.claimAccount(wawuUserId, until);
     let releaseTurn: (() => void) | null = null;
     try {
       const real = await this.files.length(key);
-      if (real <= 0 || real > this.maxBytes())
+      if (real <= 0 || real > cap)
         throw new Error('the file is empty or too large');
       releaseTurn = await this.gate.takeTurn(real, until);
       const opened = await this.files.open(key, real);

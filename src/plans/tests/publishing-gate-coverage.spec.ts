@@ -57,6 +57,11 @@ const GATED: Record<string, string> = {
     'signs a file upload; content/preview and content/full are products, the other folders are not',
   'POST product-drafts/:id/publish':
     'publishes a draft with its two files (needs a tier and a free place)',
+  // AITOOLS-08 (R-109): the file it makes is an upload of the person's own in
+  // content/full, counted like any upload, so it asks the same question the
+  // presign for that folder asks.
+  'POST ai-tools/jobs/:id/piece':
+    "copies a Studio result into the person's own content/full folder as an upload (needs a way to publish and room, as the presign for that folder does)",
 };
 
 /**
@@ -188,6 +193,25 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
   'POST ai-tools/dubbing/jobs': {
     files: ['fileKey'],
     why: "a person's own recording or video sent to the Dubbing tool (AITOOLS-05), uploaded to ai/input-audio or ai/input-video through the presign; nothing is published",
+  },
+  // AITOOLS-09 and -10 (R-109): the Studio picture and video tools work on a
+  // person's own photo (and voice). They go up through the presign into private
+  // input folders and are read only by the job; nothing is published.
+  'POST ai-tools/photo-edit/jobs': {
+    files: ['photoKey'],
+    why: "a person's own photo sent to Edit a photo (AITOOLS-09), uploaded to ai/input-image through the presign; deleted when the job ends, nothing is published",
+  },
+  'POST ai-tools/video/jobs': {
+    files: ['photoKey'],
+    why: "a person's own photo to start a Make a video clip from (AITOOLS-10), uploaded to ai/input-image through the presign; deleted when the job ends, nothing is published",
+  },
+  'POST ai-tools/talking-photo/quote': {
+    files: ['audioKey'],
+    why: "prices a person's own voice recording for Talking photo (AITOOLS-10), uploaded to ai/input-audio through the presign; priced before the job, nothing is published",
+  },
+  'POST ai-tools/talking-photo/jobs': {
+    files: ['audioKey', 'photoKey'],
+    why: "a person's own photo and voice recording sent to Talking photo (AITOOLS-10), uploaded to ai/input-image and ai/input-audio through the presign; deleted when the job ends, nothing is published",
   },
   // Not a person's own product.
   'POST communities/:id/messages': {

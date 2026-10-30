@@ -82,10 +82,14 @@ export type CopyRemoval = 'deleted' | 'not_found' | 'failed';
  */
 export type CopyPresence = 'present' | 'absent' | 'unknown';
 
-/** A copy the provider keeps of what it made, to delete once the Hub has the result. `dub` is a Dubbing project (AITOOLS-05). */
+/**
+ * A copy the provider keeps of what it made, to delete once the Hub has the result. `dub` is a Dubbing project (AITOOLS-05).
+ * `asset` (AITOOLS-09, AITOOLS-10) is the person's own photo or speech that the Hub sent up for one picture or video run:
+ * `id` holds the provider's asset ids joined with `+` (a talking photo has two).
+ */
 export interface ProviderCopy {
   /** `voice` (AITOOLS-07): the AI version of a person's own voice the provider made for one VoiceOver. */
-  kind: 'transcript' | 'isolation' | 'voice' | 'dub';
+  kind: 'transcript' | 'isolation' | 'voice' | 'dub' | 'asset';
   id: string;
 }
 
@@ -149,6 +153,100 @@ export interface SpokenAudio {
   audio: Buffer;
   /** An audio type the Hub stores and serves (`audio/mpeg` for every tool but Clean audio, which stores what the provider answered if the Hub serves it). */
   contentType: AiAudioContentType;
+}
+
+/**
+ * A person's photo or speech sent to the provider for ONE picture or video run
+ * (AITOOLS-09, AITOOLS-10). The provider keeps it as an asset until the Hub
+ * deletes it when the job ends.
+ */
+export interface AssetUpload {
+  file: VoiceSample | StreamedFile;
+  /** Only picks the plain file name the Hub sends (`photo.png`, `speech.mp3`); never the person's own name for the file. */
+  kind: 'photo' | 'speech';
+}
+
+/** What the provider answered an asset upload with. */
+export interface UploadedAsset {
+  assetId: string;
+}
+
+/** A picture to make (AITOOLS-09). `assetIds` are the person's photos already uploaded for this run (Edit a photo). */
+export interface StartImageRequest {
+  /** The model the setting `ai.image_model` names. Never shown to a person (R-68). */
+  model: string;
+  prompt: string;
+  /** The shape: an `aspect_ratio` of the model (`1:1`, `4:5`, `9:16`, `16:9`). */
+  shape: string;
+  /** `512`, `1K`, `2K` or `4K`. */
+  resolution: string;
+  assetIds: string[];
+}
+
+/** A clip or a talking photo to make (AITOOLS-10). */
+export type StartVideoRequest =
+  | {
+      kind: 'clip';
+      model: string;
+      prompt: string;
+      shape: string;
+      /** Whole seconds: 4, 6 or 8. */
+      seconds: number;
+      resolution: string;
+      withSound: boolean;
+      /** The person's photo to start from, already uploaded; null for a clip from words alone. */
+      startFrameAssetId: string | null;
+    }
+  | {
+      kind: 'talking';
+      model: string;
+      resolution: string;
+      imageAssetId: string;
+      audioAssetId: string;
+    };
+
+/** The provider's id for a picture or video it has started. The generation is followed with `readImage` or `readVideo`. */
+export interface StartedGeneration {
+  id: string;
+}
+
+export type GenerationStatus =
+  'pending' | 'generating' | 'completed' | 'failed';
+
+/** Why the provider failed a generation, in the Hub's own words. `moderated` is the one a person is told differently. */
+export type GenerationFailure =
+  | 'moderated'
+  | 'timeout'
+  | 'model_error'
+  | 'invalid_parameters'
+  | 'dependency_failed'
+  | 'charging_failed'
+  | 'internal_error'
+  | 'unknown';
+
+/**
+ * One read of a generation. The link is signed, lasts about an hour and is for
+ * the Hub to fetch once (`openGeneration`); it never reaches a person.
+ */
+export interface GenerationProgress {
+  status: GenerationStatus;
+  contentUrl: string | null;
+  /** The type the provider says the file is, lower case, without parameters. */
+  contentType: string | null;
+  failure: GenerationFailure | null;
+}
+
+/**
+ * A finished generation's file on its way to storage: read as a stream, never
+ * held whole. `bytes` is the length the provider declared (null when it did
+ * not say); the stream is stopped at the cap given to `openGeneration`.
+ * `close()` gives the connection back; safe to call twice.
+ */
+export interface StreamedMedia {
+  contentType: string;
+  bytes: number | null;
+  stream: Readable;
+  close: () => void;
 }
 
 /**
@@ -389,4 +487,64 @@ export interface AiVoiceProvider {
    * the voice is already gone.
    */
   deleteOwnVoice(providerVoiceId: string): Promise<CopyRemoval>;
+
+  // ---- Studio pictures and video (AITOOLS-09, AITOOLS-10, R-109) -----------
+
+  /** True when a key and a host are set: Make an image, Edit a photo, Make a video and Talking photo need no voice. */
+  readonly mediaToolsConfigured: boolean;
+
+  /**
+   * Sends a person's photo or speech up as an asset (`POST /v1/assets`) for one
+   * run. The file streams from the store behind the read gate and is never held
+   * whole. A network call: the caller holds no transaction, no connection and
+   * no lock. Throws `AiVoiceProviderError`.
+   */
+  uploadAsset(
+    req: AssetUpload,
+    opts?: { signal?: AbortSignal },
+  ): Promise<UploadedAsset>;
+
+  /** One try at deleting an asset the Hub sent up. Never throws; same answers as `deleteTranscript` (`not_found` means it is already gone). */
+  removeAsset(assetId: string): Promise<CopyRemoval>;
+
+  /** Starts a picture (`POST /v1/flows/image`). Answers at once with the generation's id. Throws `AiVoiceProviderError`. */
+  startImage(
+    req: StartImageRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<StartedGeneration>;
+
+  /** One read of a picture (`GET /v1/flows/image/{id}`). Throws `AiVoiceProviderError` (the status rides on it, for the log only). */
+  readImage(
+    id: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<GenerationProgress>;
+
+  /** Starts a clip or a talking photo (`POST /v1/flows/video`). Answers at once with the generation's id. Throws `AiVoiceProviderError`. */
+  startVideo(
+    req: StartVideoRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<StartedGeneration>;
+
+  /** One read of a video (`GET /v1/flows/video/{id}`). Throws `AiVoiceProviderError`. */
+  readVideo(
+    id: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<GenerationProgress>;
+
+  /**
+   * Opens a finished generation's signed link to be read as a stream, once. The
+   * link is the provider's to name, so it is checked first (https to a name, or
+   * http to the very host the Hub is set up with, the local stand-in), and the
+   * provider's key is never sent to it. The answer's type must be one of
+   * `types` and the stream is stopped at `maxBytes`. Throws
+   * `AiVoiceProviderError`.
+   */
+  openGeneration(
+    link: string,
+    opts: {
+      maxBytes: number;
+      types: readonly string[];
+      signal?: AbortSignal;
+    },
+  ): Promise<StreamedMedia>;
 }

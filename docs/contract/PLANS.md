@@ -1136,6 +1136,117 @@ PROVISIONAL `DV2-BOARD-FIGURE`) times the minutes. The premium dub is not built
   the read gate, and the provider run streams the file behind the same gate (about
   64 KB held a job, one place per account).
 
+### The Studio media pipeline, pictures and video (AITOOLS-08, -09, -10; R-109)
+
+R-109 (owner, 30 Oct 2026): Studio gets new tools on the AI provider, and every
+Studio result goes straight into Create as a piece. NOT RUN against the real
+provider (the owner's credits are not bought yet): every route is run against
+the local stand-in (`scripts/dev/voice-standin.cjs`) with the provider's wire
+shape (`docs/elevenlabs/API-FACTS.md`).
+
+- **The listing switch.** Each new tool has a setting `ai.listed.<tool id>`
+  (`image`, `photo-edit`, `video`, `talking-photo`; group "Studio", default 0,
+  PROVISIONAL `STUDIO2-LISTED`). `GET /ai-tools` lists a new tool only while its
+  code is built, the provider is set up AND its switch is 1; with it 0 the job
+  routes answer `503 ai_tool_unavailable` and nothing is held. The seven older
+  tools are unchanged. Every entry the Hub writes is whole (`id`, `name`,
+  `costPointsPerUnit`, `enabled`), because the app refuses the whole list for one
+  malformed entry.
+- **The catalogue shape.** `input.kind` gains `image` (Make an image, Edit a
+  photo) and `video` (Make a video, Talking photo); `dialogue` and `chat` are
+  room for later tasks. `unit` gains `second`. `input.options` carries what the
+  screen draws: `shapes` (aspect ratios, empty for Talking photo, whose video
+  follows the photo), `lengths` (a video's seconds: 4, 6, 8), `photo`
+  (`{ use: optional | required, folder: ai/input-image, accepts, maxBytes }`) and,
+  for Talking photo, `speech` (`{ audioFolder, accepts, maxSeconds, fromJob }`).
+  `input.maxCharacters` is the description limit (`ai.image_max_prompt_chars`,
+  `ai.video_max_prompt_chars`, 1,000, PROVISIONAL `STUDIO2-LIMITS`: NOT KNOWN
+  from the provider); 0 for Talking photo.
+- **The person's photo in.** `POST /uploads/presign` takes the private folder
+  `ai/input-image` (PNG, JPEG, WebP; at most 25 MB; never served to anyone else;
+  counted in no allowance; deleted when the job ends and with the account), then
+  `POST /uploads/confirm`; a job names it by `photoKey`. A file the Hub cannot
+  open as a picture (checked from its first bytes) is `422 ai_photo_unreadable`;
+  another person's key `404 not_found`; over 25 MB `422 ai_file_too_large`; each
+  with nothing held.
+- **Jobs.** `POST /ai-tools/image/jobs` (`{ prompt, shape?, quoteToken }`, quote
+  for `image_per_use`, 1 unit), `POST /ai-tools/photo-edit/jobs` (the same plus
+  `photoKey`, `photo_edit_per_use`), `POST /ai-tools/video/jobs` (`{ prompt,
+  shape?, seconds, photoKey?, quoteToken }`, `video_per_sec`, units = `seconds`),
+  `POST /ai-tools/talking-photo/quote` (`{ audioKey | sourceJobId }`, answers the
+  `POST /points/quote` shape plus `speech.seconds`, the length the Hub read) and
+  `POST /ai-tools/talking-photo/jobs` (`{ photoKey, audioKey | sourceJobId,
+  quoteToken }`, `talking_photo_per_sec`, units = the seconds of speech rounded
+  up). Each needs an `Idempotency-Key` and answers `202` with the job `working`
+  (`200` and `Idempotent-Replayed: true` for a repeat); the app polls `GET
+  /ai-tools/jobs/{id}`. Refusals, each with nothing held: `400 ai_prompt_empty`,
+  `422 ai_prompt_too_long`, `422 ai_shape_unsupported`, `422
+  ai_length_unsupported`, `400 ai_photo_required`, `400 ai_speech_required` (none,
+  or two), `422 ai_speech_unreadable` (not an MP3 or WAV, or a result with no
+  audio), `422 ai_length_too_long` (a voice over
+  `ai.talking_photo_max_seconds`, 60, NOT KNOWN from the provider), `404
+  not_found`, `409 job_not_ready`, plus the points refusals.
+- **Prices (PROVISIONAL `STUDIO2-PLACEHOLDER`, the owner sets them).** The
+  provider prints no price, so no figure is derived: `points.action.image_per_use`
+  100, `photo_edit_per_use` 100, `video_per_sec` 250 (a 4 second clip 1,000, an 8
+  second clip 2,000, against the daily cap) and `talking_photo_per_sec` 200.
+- **Models and size are settings, never shown** (R-68): `ai.image_model`,
+  `ai.image_resolution`, `ai.video_model`, `ai.video_resolution`,
+  `ai.talking_photo_model`, `ai.talking_photo_resolution`, `ai.video_with_sound`
+  (the provider's own default is on; its credit effect is NOT KNOWN).
+- **Following the job.** The provider makes a picture or clip in the background:
+  the Hub starts it (`POST /v1/flows/image` or `/video`), the job stays `working`
+  and its row keeps the generation and the ids of the person's photo and voice it
+  sent up (`providerRef`, `genrun:...`, never shown). `AiFlowService` reads each
+  working generation every 3 seconds for a picture and 5 for a video, holding no
+  transaction, connection or lock across a read: `pending` and `generating` keep
+  it working; `completed` opens the signed link ONCE (https to a name, no key, no
+  redirect, a size bound and a type check), streams the file into storage, COMMITS
+  the hold and marks the job done; `failed` RELEASES. All the state is in the
+  database, so a restarted Hub picks every working generation up again. Past
+  `ai.image_max_run_seconds` (300) or `ai.video_max_run_seconds` (600) the job
+  fails and the points go back. The provider's `moderated` has its own sentence
+  ("That picture can't be made. No points were taken." and the same for a
+  video); every other failure says "That didn't work. No points were taken. Try
+  again."
+- **The person's assets at the provider** (the photo, the voice) are sent up for
+  one run and deleted when the job ends, however it ends. A delete the provider
+  refuses stays noted on the row (`asset:<ids>`) and is tried again by the copy
+  sweep; account deletion waits until none is left.
+- **Results are stored as a stream.** `AiToolRunResult.media` carries the file as
+  a stream; the pipeline writes it to a temporary file and then to the Hub's own
+  storage (`ai/image/`, `ai/video/`), so a 100 MB video never sits in memory. The
+  Hub serves `image/png`, `image/jpeg`, `image/webp` and `video/mp4`; a type
+  outside the list fails the job and every point goes back.
+- **Result shape (additive).** Each `outputs[]` entry that is a file gains
+  `contentType`, `bytes`, `name` (a plain label such as "Image" or "Dubbed
+  audio", never a provider or model name), `downloadUrl` (the same file saved
+  under a plain file name such as `studio-image-30-oct-2026.png`) and
+  `pieceFormat` (`audio | video | image`, or null for a type no Create format
+  takes: a FLAC dub, an AAC clip). `kind` gains `image` and `video`.
+- **The result into Create.** `POST /ai-tools/jobs/{id}/piece` (`{ outputIndex }`,
+  an `Idempotency-Key`, behind the publishing gate, 30 a minute): the job must be
+  the caller's and `done`, and the output must have a `pieceFormat` (`409
+  no_format` otherwise, also for words and subtitles; `409 job_not_ready`; `404
+  not_found`). The Hub copies the file inside the bucket into
+  `content/full/<wawuId>/<uuid>.<ext>` as a confirmed upload counted against the
+  person's storage like any upload (R-7), after the presign's own checks (`402
+  tier_required` with the offers; `413 storage_limit_reached`; nothing is copied
+  on a refusal), and answers `{ format, full: { key, fileUrl, contentType, bytes,
+  name }, suggestedTitle }`. The same call again returns the same key (header
+  `Idempotent-Replayed: true`) until the key is released with `POST
+  /uploads/release`, then a new copy is made. No preview is made and nothing is
+  published: `POST /content` and its gates run as today.
+- **A long job tells the person.** A job of a new Studio tool (one with an
+  `ai.listed.<tool>` switch) that ran longer than `ai.job_ready_notice_seconds`
+  (60) writes one notification of the new kind `ai_job_ready` when it ends
+  (target kind `ai_job`, the job's id), through the ordinary notification
+  writer, pushed, but only while that tool's switch is on. "Your video is
+  ready", or "Your video did not work" with "No points were taken." Written by
+  the one write that ended the job, so a replay writes nothing more. The seven
+  launch tools (Dubbing, Music track and the rest) never write it (lead ruling,
+  30 Oct 2026: nothing new reaches live users before the owner reviews Studio 2).
+
 ## 15. The tier offer (TIER-OFFER, R-94; every start, R-105)
 
 A full screen that offers the three tiers (R-89) right after sign-up, before the person reaches Home, and then on every app start until they hold a tier (R-105, owner, 30 Oct 2026; the setting below turns that off for once-per-person, R-94's first ruling). The Hub decides who is shown it and remembers that it was shown, so with the setting off it is once across phones. The tiers, prices and lengths on the screen are `GET /plans`; the offer adds no figure.

@@ -74,6 +74,13 @@ export const UPLOAD_FOLDERS = [
   // two folders so the Hub knows what it was given before it opens the file.
   'ai/input-audio',
   'ai/input-video',
+  // AITOOLS-08 (R-109). A photo a person sends to Edit a photo, Make a video
+  // (as the first frame) or Talking photo. Its own prefix, like the folders
+  // above: the picture is the person's own, read only by the Hub for that
+  // person's own run (never served to anyone else), counted in no allowance,
+  // and removed when the job ends and when the account is deleted. Its own
+  // name, not AI_INPUT_FOLDERS, which pins the two audio and video folders.
+  'ai/input-image',
 ] as const;
 
 /**
@@ -110,6 +117,9 @@ export const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 export const AI_INPUT_MAX_BYTES = 500 * 1024 * 1024;
 /** The admin setting (R-65) that caps a file for an AI tool, in bytes; it starts at `AI_INPUT_MAX_BYTES` and may only go lower. */
 export const AI_INPUT_MAX_BYTES_SETTING = 'ai.input_max_bytes';
+/** AITOOLS-08: the folder a person's photo for a Studio tool goes in, and the most one may be (25 MB, the provider's inline limit). */
+export const AI_INPUT_IMAGE_FOLDER = 'ai/input-image';
+export const AI_INPUT_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 /** The two folders a person's file for an AI tool goes in. */
 export const AI_INPUT_FOLDERS = ['ai/input-audio', 'ai/input-video'] as const;
 
@@ -177,6 +187,8 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   // offered until the Hub serves them.
   'ai/input-audio': ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac'],
   'ai/input-video': ['video/mp4', 'video/quicktime', 'video/webm'],
+  // AITOOLS-08. The three picture types the provider takes and the Hub serves.
+  'ai/input-image': IMAGE,
   ...CHAT_FOLDER_CONTENT_TYPES,
 };
 
@@ -197,6 +209,7 @@ export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
   // 500MB: the provider's smallest documented limit for a file (docs/elevenlabs/API-FACTS.md). The live cap is the setting `ai.input_max_bytes` (provisional AITOOLS-LIMITS in plan-settings.defaults.json), which an admin may only lower; this is its ceiling.
   'ai/input-audio': AI_INPUT_MAX_BYTES,
   'ai/input-video': AI_INPUT_MAX_BYTES,
+  'ai/input-image': AI_INPUT_IMAGE_MAX_BYTES,
 };
 
 /**

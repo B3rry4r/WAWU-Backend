@@ -1,10 +1,14 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { AccountPurgeHooks } from '../account-purge/purge-hooks';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { copyOfFlow, parseFlowRef, type FlowRef } from './flow/flow-support';
 import {
   copyOfMarker,
   ProviderCopyService,
 } from './voice/provider-copy.service';
+
+/** A flow note that did not parse names no assets. */
+const NO_FLOW: FlowRef = { kind: 'image', generationId: 'none', assetIds: [] };
 
 /** The most notes of a person's voice one purge pass looks at (a person has no more than a few at a time). */
 const PURGE_BATCH = 50;
@@ -46,8 +50,28 @@ export class AiToolsPurgeService implements OnModuleInit {
       where: { wawuUserId, ownVoiceConsentAt: { not: null } },
       data: { ownVoiceConsentAt: null, ownVoiceConsentLine: null },
     });
+    // AITOOLS-09 and -10: the person's photo and voice sent up as assets are a
+    // copy of them too (`asset:<ids>`), removed the same way as a voice copy.
+    const holdsCopy = {
+      OR: [
+        { providerRef: { startsWith: 'voice:' } },
+        { providerRef: { startsWith: 'asset:' } },
+      ],
+    };
+    // A picture or video still being made holds its assets under a `genrun:`
+    // note: they are named there, so they are noted and removed first.
+    const following = await this.prisma.aiToolJob.findMany({
+      where: { wawuUserId, providerRef: { startsWith: 'genrun:' } },
+      select: { id: true, providerRef: true },
+      take: PURGE_BATCH,
+    });
+    for (const job of following) {
+      const copy = copyOfFlow(parseFlowRef(job.providerRef) ?? NO_FLOW);
+      if (!copy) continue;
+      await this.copies.note(job.id, copy);
+    }
     const noted = await this.prisma.aiToolJob.findMany({
-      where: { wawuUserId, providerRef: { startsWith: 'voice:' } },
+      where: { wawuUserId, ...holdsCopy },
       select: { id: true, providerRef: true },
       orderBy: { createdAt: 'asc' },
       take: PURGE_BATCH,
@@ -58,14 +82,14 @@ export class AiToolsPurgeService implements OnModuleInit {
       await this.copies.discard(job.id, copy.copy);
     }
     const left = await this.prisma.aiToolJob.count({
-      where: { wawuUserId, providerRef: { startsWith: 'voice:' } },
+      where: { wawuUserId, ...holdsCopy },
     });
     if (left > 0) {
       this.logger.warn(
-        `account purge: ${left} copies of one person's voice are still held by the AI provider; the purge waits`,
+        `account purge: ${left} copies of one person's voice or photo are still held by the AI provider; the purge waits`,
       );
       throw new Error(
-        'The AI provider still holds a copy of a voice. The purge will try again.',
+        'The AI provider still holds a copy of a voice or photo. The purge will try again.',
       );
     }
   }

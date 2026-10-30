@@ -1,7 +1,7 @@
 // A stand-in for the AI voice provider, on this machine only (AITOOLS-01,
 // AITOOLS-02).
 //
-//   node scripts/dev/voice-standin.cjs <port|0> [--key <api key>] [--delay-ms <n>] [--dub-delay-ms <n>]
+//   node scripts/dev/voice-standin.cjs <port|0> [--key <api key>] [--delay-ms <n>] [--dub-delay-ms <n>] [--gen-delay-ms <n>]
 //
 // It answers the calls the Hub's adapter makes, with the same wire shape, from
 // ONE ROUTE TABLE (`ROUTES` below): one entry per provider route, each with
@@ -118,6 +118,44 @@
 //     stored yet. state.dubs lists each start (target, source, bytes, type,
 //     model; never the file); state.dubReads each language read;
 //     state.deletedDubs the project ids deleted.
+//   POST /v1/assets   (AITOOLS-09, AITOOLS-10)
+//     header xi-api-key, multipart (asset, name)  ->  200 JSON { asset_id, name,
+//     mime_type, created_at_unix, content_url: null }. A missing asset or name
+//     is 422. What the FILE can ask of it (found in its bytes): [[asset-fail]]
+//     500, [[asset-reject]] 422, [[asset-delete-fail]] the asset cannot be
+//     deleted (DELETE answers 500) until the handle's releaseStubborn().
+//   DELETE /v1/assets/<id>   ->  204, 404 when none. state.assets lists each
+//     upload (bytes and type, never the file); state.deletedAssets the ids
+//     deleted; openAssets() the assets the provider still holds.
+//   POST /v1/flows/image   (AITOOLS-09)
+//     header xi-api-key, JSON { model_id, prompt, aspect_ratio?, resolution?,
+//     images? [{ type: asset, asset_id }] }  ->  200 { id, status: pending }.
+//     An unknown model, an empty prompt, a shape or size outside the model's
+//     lists, or an image that names an asset the stand-in does not hold is 422.
+//   POST /v1/flows/video   (AITOOLS-10)
+//     Veo: { model_id, prompt, duration_secs: "4" | "6" | "8", aspect_ratio?,
+//     resolution?, generate_audio?, start_frame? }. Aurora: { model_id,
+//     image: { type: asset, asset_id }, audio: { type: asset, asset_id },
+//     resolution? }.  ->  200 { id, status: pending }.
+//     What the PROMPT (a clip and a picture) or the ASSET FILES (an edit and a
+//     talking photo) can ask of it (found in their bytes):
+//       [[reject]] the POST answers 422, [[start-fail]] 500, [[status:402]]
+//       (any 400 to 599), [[fail]] the generation ends failed (model_error),
+//       [[moderated]] failed (moderated), [[invalid]] failed
+//       (invalid_parameters), [[slow:MS]] how long until it is completed (the
+//       generation is pending for the first third and generating for the rest;
+//       the default is --gen-delay-ms, 0: completed at the first read),
+//       [[stuck]] it stays generating forever, [[type:MIME]] the file's type,
+//       [[bytes:N]] the file is N bytes (streamed, never built whole),
+//       [[nolink]] completed with no link, [[outfail]] the link answers 500.
+//   GET /v1/flows/image/<id> and /v1/flows/video/<id>  ->  200 { status:
+//     pending | generating | completed | failed, id, content_url,
+//     content_mime_type | failure_reason, error_message }. The link is
+//     absolute and back to this stand-in (/__standin/gen-out/<id>); it is
+//     fetched with no key (state.genKeyLeaks counts a fetch that sent one).
+//     state.images and state.videos list each start (model, shape, size,
+//     length, the assets named; never the words), state.genReads each read and
+//     state.genDownloads each fetch of a link.
 //   GET /__standin/state lists the calls so far (never the text).
 // Nothing of a real provider beyond these. The Hub never sees a control route.
 // Nothing here leaves 127.0.0.1.
@@ -136,6 +174,7 @@ function startVoiceStandin({
   key = 'standin-key',
   delayMs = 0,
   dubDelayMs = 0,
+  genDelayMs = 0,
 } = {}) {
   const VOICES = new Set(['stand-in-ada', 'stand-in-tunde']);
   const state = {
@@ -178,7 +217,25 @@ function startVoiceStandin({
     /** Fetches of a signed link that carried the provider's key (the Hub must never send it). */
     dubKeyLeaks: 0,
     deletedDubs: [],
+    /** Each asset upload (AITOOLS-09, AITOOLS-10): the id, bytes and type; never the file. */
+    assets: [],
+    deletedAssets: [],
+    /** Each picture start: the model, shape, size, the assets named and the description's length. */
+    images: [],
+    /** Each video start: a clip or a talking photo, the model, shape, length, size, sound and the assets named. */
+    videos: [],
+    /** Each read of a generation and the status answered. */
+    genReads: [],
+    /** Each fetch of a generation's link, the status, and whether it carried the provider's key. */
+    genDownloads: [],
+    genKeyLeaks: 0,
   };
+  // asset id -> { bytes, type, marks }.
+  const assets = new Map();
+  let assetSeq = 0;
+  // generation id -> what it was asked for and when it began.
+  const gens = new Map();
+  let genSeq = 0;
   // project id -> the dub: its language, when it began, how long it takes, what its file asked for, and the delete fields shared with the transcripts.
   const dubProjects = new Map();
   let dubSeq = 0;
@@ -791,6 +848,225 @@ function startVoiceStandin({
     return json(res, 200, { status: 'ok' });
   }
 
+
+  // ---- Studio pictures and video (AITOOLS-09, AITOOLS-10) -------------------
+
+  const IMAGE_MODELS = new Set([
+    'bytedance-seedream-5-lite',
+    'bytedance-seedream-5-pro',
+    'gemini-2.5-flash-image',
+    'gemini-3-pro-image',
+    'gemini-3.1-flash-image',
+    'gemini-3.1-flash-lite-image',
+    'gpt-image-1',
+    'gpt-image-1.5',
+  ]);
+  const IMAGE_SHAPES = new Set([
+    'auto', '1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', '1:4', '4:1', '1:8', '8:1',
+  ]);
+  const IMAGE_SIZES = new Set(['512', '1K', '2K', '4K']);
+  const VIDEO_MODELS = new Set(['veo-3.1-fast-generate-001', 'veo-3.1-generate-001', 'creatify-aurora']);
+
+  function assetUpload(req, res, _m, raw) {
+    if (req.headers['xi-api-key'] !== key) return json(res, 401, { detail: 'bad key' });
+    const form = parseMultipart(req.headers['content-type'], raw);
+    const file = form?.get('asset');
+    if (!form || !file || file.data.length === 0 || !form.has('name'))
+      return json(res, 422, { detail: 'no asset' });
+    const marks = file.data.toString('latin1');
+    if (marks.includes('[[asset-fail]]')) return json(res, 500, { detail: 'down' });
+    if (marks.includes('[[asset-reject]]')) return json(res, 422, { detail: 'refused' });
+    assetSeq += 1;
+    const id = `asset-${assetSeq}`;
+    assets.set(id, { bytes: file.data.length, type: file.type, marks });
+    state.assets.push({ id, bytes: file.data.length, type: file.type, name: form.get('name').data.toString('utf8') });
+    if (marks.includes('[[asset-delete-fail]]')) stubborn.add(id);
+    return json(res, 200, {
+      asset_id: id,
+      name: form.get('name').data.toString('utf8'),
+      mime_type: file.type,
+      created_at_unix: Math.floor(Date.now() / 1000),
+      content_url: null,
+    });
+  }
+
+  function assetDelete(req, res, m) {
+    if (req.headers['xi-api-key'] !== key) return json(res, 401, { detail: 'bad key' });
+    const id = decodeURIComponent(m[1]);
+    if (stubborn.has(id)) {
+      state.removeRefused += 1;
+      return json(res, 500, { detail: 'down' });
+    }
+    if (!assets.delete(id)) return json(res, 404, { detail: 'no such asset' });
+    state.deletedAssets.push(id);
+    res.statusCode = 204;
+    return res.end();
+  }
+
+  /** The asset a reference names, or null when it names none the stand-in holds. */
+  function assetOf(ref) {
+    if (!ref || ref.type !== 'asset' || typeof ref.asset_id !== 'string') return null;
+    return assets.has(ref.asset_id) ? ref.asset_id : null;
+  }
+
+  async function genStart(req, res, m, raw) {
+    const kind = m[1];
+    if (req.headers['xi-api-key'] !== key) return json(res, 401, { detail: 'bad key' });
+    let body;
+    try {
+      body = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return json(res, 400, { detail: 'bad body' });
+    }
+    const bad = (why) => json(res, 422, { detail: [{ loc: ['body'], msg: why, type: 'value_error' }] });
+    const named = [];
+    let marks = '';
+    const take = (ref) => {
+      const id = assetOf(ref);
+      if (id === null) return false;
+      named.push(id);
+      marks += assets.get(id).marks;
+      return true;
+    };
+    let record;
+    if (kind === 'image') {
+      if (!IMAGE_MODELS.has(body.model_id)) return bad('model_id');
+      if (typeof body.prompt !== 'string' || body.prompt === '') return bad('prompt');
+      if (body.aspect_ratio !== undefined && !IMAGE_SHAPES.has(body.aspect_ratio)) return bad('aspect_ratio');
+      if (body.resolution !== undefined && !IMAGE_SIZES.has(body.resolution)) return bad('resolution');
+      for (const ref of body.images ?? []) if (!take(ref)) return bad('images');
+      marks += body.prompt;
+      record = {
+        model: body.model_id,
+        shape: body.aspect_ratio ?? null,
+        resolution: body.resolution ?? null,
+        assetIds: named,
+        promptChars: body.prompt.length,
+      };
+      state.images.push(record);
+    } else {
+      if (!VIDEO_MODELS.has(body.model_id)) return bad('model_id');
+      if (body.model_id === 'creatify-aurora') {
+        if (!take(body.image) || !take(body.audio)) return bad('image or audio');
+        if (body.resolution !== undefined && !['480p', '720p'].includes(body.resolution)) return bad('resolution');
+        record = { kind: 'talking', model: body.model_id, resolution: body.resolution ?? null, assetIds: named };
+      } else {
+        if (typeof body.prompt !== 'string' || body.prompt === '') return bad('prompt');
+        if (!['4', '6', '8'].includes(body.duration_secs)) return bad('duration_secs');
+        if (body.aspect_ratio !== undefined && !['16:9', '9:16'].includes(body.aspect_ratio)) return bad('aspect_ratio');
+        if (body.resolution !== undefined && !['720p', '1080p', '4K'].includes(body.resolution)) return bad('resolution');
+        if (body.start_frame !== undefined && body.start_frame !== null && !take(body.start_frame)) return bad('start_frame');
+        marks += body.prompt;
+        record = {
+          kind: 'clip',
+          model: body.model_id,
+          shape: body.aspect_ratio ?? null,
+          seconds: body.duration_secs,
+          resolution: body.resolution ?? null,
+          withSound: body.generate_audio ?? null,
+          assetIds: named,
+          promptChars: body.prompt.length,
+        };
+      }
+      state.videos.push(record);
+    }
+    if (marks.includes('[[reject]]')) return json(res, 422, { detail: 'refused' });
+    if (marks.includes('[[start-fail]]')) return json(res, 500, { detail: 'down' });
+    const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(marks);
+    if (status) return json(res, Number(status[1]), { detail: 'no' });
+    genSeq += 1;
+    const id = `gen-${genSeq}`;
+    const slow = /\[\[slow:(\d{1,7})\]\]/.exec(marks);
+    const bytes = /\[\[bytes:(\d{1,10})\]\]/.exec(marks);
+    const type = /\[\[type:([a-z0-9.+\/-]{3,40})\]\]/.exec(marks);
+    gens.set(id, {
+      kind,
+      marks,
+      startedAt: Date.now(),
+      delay: slow ? Number(slow[1]) : genDelayMs,
+      bytes: bytes ? Number(bytes[1]) : kind === 'image' ? 2048 : 4096,
+      type: type ? type[1] : kind === 'image' ? 'image/png' : 'video/mp4',
+    });
+    return json(res, 200, { id, status: 'pending' });
+  }
+
+  function genRead(req, res, m) {
+    if (req.headers['xi-api-key'] !== key) return json(res, 401, { detail: 'bad key' });
+    const id = decodeURIComponent(m[2]);
+    const g = gens.get(id);
+    if (!g || g.kind !== m[1]) {
+      state.genReads.push({ id, status: 404 });
+      return json(res, 404, { detail: 'no such generation' });
+    }
+    const elapsed = Date.now() - g.startedAt;
+    let st;
+    if (g.marks.includes('[[stuck]]')) st = elapsed < g.delay / 3 ? 'pending' : 'generating';
+    else if (elapsed >= g.delay) st = 'terminal';
+    else st = elapsed < g.delay / 3 ? 'pending' : 'generating';
+    if (st === 'terminal') {
+      if (g.marks.includes('[[fail]]') || g.marks.includes('[[moderated]]') || g.marks.includes('[[invalid]]')) {
+        const reason = g.marks.includes('[[moderated]]')
+          ? 'moderated'
+          : g.marks.includes('[[invalid]]')
+            ? 'invalid_parameters'
+            : 'model_error';
+        state.genReads.push({ id, status: 200, answered: 'failed', reason });
+        return json(res, 200, { status: 'failed', id, failure_reason: reason, error_message: 'the generation could not be made' });
+      }
+      state.genReads.push({ id, status: 200, answered: 'completed' });
+      if (g.marks.includes('[[nolink]]')) return json(res, 200, { status: 'completed', id });
+      return json(res, 200, {
+        status: 'completed',
+        id,
+        content_url: `http://${req.headers.host}/__standin/gen-out/${encodeURIComponent(id)}`,
+        content_mime_type: g.type,
+      });
+    }
+    state.genReads.push({ id, status: 200, answered: st });
+    return json(res, 200, { status: st, id });
+  }
+
+  /** The signed link of a finished generation: no key is needed, and one that is sent is counted. The file is streamed, never built whole. */
+  async function genOut(req, res, m) {
+    const id = decodeURIComponent(m[1]);
+    const leaked = req.headers['xi-api-key'] !== undefined;
+    if (leaked) state.genKeyLeaks += 1;
+    const g = gens.get(id);
+    if (!g) {
+      state.genDownloads.push({ id, status: 404, leaked });
+      return json(res, 404, { detail: 'no such file' });
+    }
+    if (g.marks.includes('[[outfail]]')) {
+      state.genDownloads.push({ id, status: 500, leaked });
+      return json(res, 500, { detail: 'down' });
+    }
+    state.genDownloads.push({ id, status: 200, leaked });
+    res.statusCode = 200;
+    res.setHeader('content-type', g.type);
+    res.setHeader('content-length', String(g.bytes));
+    // A real header at the front (a PNG signature and header, or an MP4 'ftyp' box), then zeros.
+    const head =
+      g.type === 'video/mp4'
+        ? Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(12)])
+        : Buffer.concat([
+            Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]),
+            Buffer.from('IHDR'),
+            Buffer.from([0, 0, 0, 16, 0, 0, 0, 16, 8, 2, 0, 0, 0]),
+            Buffer.alloc(4),
+          ]);
+    let left = g.bytes;
+    const first = head.subarray(0, Math.min(head.length, left));
+    left -= first.length;
+    res.write(first);
+    const chunk = Buffer.alloc(64 * 1024);
+    while (left > 0) {
+      const part = left >= chunk.length ? chunk : chunk.subarray(0, left);
+      left -= part.length;
+      if (!res.write(part)) await new Promise((r) => res.once('drain', r));
+    }
+    res.end();
+  }
+
   function stateRoute(_req, res) {
     return json(res, 200, state);
   }
@@ -885,6 +1161,19 @@ function startVoiceStandin({
       path: /^\/__standin\/dub-out\/([^/]+)\/(audio|subtitles)$/,
       handle: dubOut,
     },
+    { method: 'POST', path: /^\/v1\/assets$/, handle: assetUpload },
+    { method: 'DELETE', path: /^\/v1\/assets\/([^/]+)$/, handle: assetDelete },
+    { method: 'POST', path: /^\/v1\/flows\/(image|video)$/, handle: genStart },
+    {
+      method: 'GET',
+      path: /^\/v1\/flows\/(image|video)\/([^/]+)$/,
+      handle: genRead,
+    },
+    {
+      method: 'GET',
+      path: /^\/__standin\/gen-out\/([^/]+)$/,
+      handle: genOut,
+    },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];
@@ -927,6 +1216,8 @@ function startVoiceStandin({
         openIsolations: () => isolations.size,
         /** Dub projects the provider still holds (AITOOLS-05). */
         openDubs: () => dubProjects.size,
+        /** Assets (a person's photo or voice) the provider still holds (AITOOLS-09, AITOOLS-10). */
+        openAssets: () => assets.size,
       }),
     );
   });
@@ -940,6 +1231,7 @@ if (require.main === module) {
     key: opt('--key', 'standin-key'),
     delayMs: Number(opt('--delay-ms', 0)),
     dubDelayMs: Number(opt('--dub-delay-ms', 0)),
+    genDelayMs: Number(opt('--gen-delay-ms', 0)),
   }).then(({ port }) => {
     console.log(`LISTENING ${port}`);
   });
