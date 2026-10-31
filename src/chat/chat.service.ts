@@ -640,7 +640,11 @@ export class ChatService {
   }
 
   private async assertCanMessage(me: string, other: string): Promise<void> {
-    if (await this.blocks.isBlockedEitherWay(me, other)) {
+    // USER-SUSPEND (R-121): nobody opens or writes to a chat with a suspended person, in the block's neutral words.
+    if (
+      (await this.blocks.isBlockedEitherWay(me, other)) ||
+      (await this.blocks.isSuspended(other))
+    ) {
       throw new ForbiddenException({
         message: BLOCKED_MESSAGE,
         reason: { code: 'chat_blocked' },

@@ -4,6 +4,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { FeedCardsService } from '../content-piece/feed-cards.service';
 import { StorageService } from '../storage/storage.service';
+import { suspendedIds } from '../common/suspension/user-suspension';
 import { decodeMeCursor, pageOf } from './me-cursor';
 import type {
   LessonDoneState,
@@ -43,18 +44,23 @@ export class MePurchasesService {
     private readonly storage: StorageService,
   ) {}
 
-  private bought(me: string): Prisma.PurchaseWhereInput {
-    return {
+  private async bought(me: string): Promise<Prisma.PurchaseWhereInput> {
+    const base: Prisma.PurchaseWhereInput = {
       buyerWawuId: me,
       type: 'content',
       status: 'completed',
       contentId: { not: null },
     };
+    // USER-SUSPEND (R-121, round 2 M1): a block keeps what a person bought; a moderator's suspension does not. While a
+    // creator is suspended their pieces are left off the buyer's list and count, and they come back when it is lifted.
+    const suspended = await suspendedIds(this.prisma, me);
+    if (suspended.length === 0) return base;
+    return { ...base, content: { creatorWawuId: { notIn: suspended } } };
   }
 
   /** M7's "My purchases 12". */
-  count(me: string): Promise<number> {
-    return this.prisma.purchase.count({ where: this.bought(me) });
+  async count(me: string): Promise<number> {
+    return this.prisma.purchase.count({ where: await this.bought(me) });
   }
 
   /** GET /me/purchases. */
@@ -65,7 +71,7 @@ export class MePurchasesService {
     limit: number,
   ): Promise<PurchasePage> {
     const cursor = decodeMeCursor(rawCursor);
-    const where: Prisma.PurchaseWhereInput = { ...this.bought(me) };
+    const where: Prisma.PurchaseWhereInput = { ...(await this.bought(me)) };
     const and: Prisma.PurchaseWhereInput[] = [];
     if (q) {
       // Prisma's `contains` passes % and _ to LIKE as wildcards, so they are
@@ -213,7 +219,7 @@ export class MePurchasesService {
         LESSON_NOT_FOUND,
       );
       const purchase = await this.prisma.purchase.findFirst({
-        where: { ...this.bought(me), contentId: lesson.contentId },
+        where: { ...(await this.bought(me)), contentId: lesson.contentId },
         select: { id: true },
       });
       const open =

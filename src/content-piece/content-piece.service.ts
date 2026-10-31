@@ -292,6 +292,14 @@ export class ContentPieceService {
         content.creatorWawuId,
         'Content not found',
       );
+    } else {
+      // USER-SUSPEND (R-121): a block keeps what a person bought, a moderator's suspension does not; the piece is gone
+      // for everyone but its creator while it is in force.
+      await this.blockedAccounts.assertNotSuspended(
+        requesterWawuId,
+        content.creatorWawuId,
+        'Content not found',
+      );
     }
     return this.toResponse(content, unlockedSet.has(content.id));
   }
@@ -1411,7 +1419,21 @@ export class ContentPieceService {
     page: number,
     perPage: number,
   ): Promise<Paginated<Record<string, unknown>>> {
-    const where = { buyerWawuId, type: 'content' as const };
+    // USER-SUSPEND (R-121, round 2 M1): while a creator is suspended the pieces they sold are left off the buyer's list
+    // too (a block keeps a purchase, a moderator's suspension does not). Nobody suspended: the query is the one it was.
+    const suspended = await this.blockedAccounts.suspendedPeople(buyerWawuId);
+    const where: Prisma.PurchaseWhereInput = {
+      buyerWawuId,
+      type: 'content' as const,
+      ...(suspended.length === 0
+        ? {}
+        : {
+            OR: [
+              { contentId: null },
+              { content: { creatorWawuId: { notIn: suspended } } },
+            ],
+          }),
+    };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.purchase.findMany({
         where,

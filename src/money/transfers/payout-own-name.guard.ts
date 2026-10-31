@@ -4,6 +4,10 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  isSuspended,
+  suspendedRefusal,
+} from '../../common/suspension/user-suspension';
 import { dropTransactionPin } from '../gate/wallet-gate';
 import { PayoutAccountService } from '../saved-accounts/payout-account.service';
 import { BANK_TARGET_KEY, type TargetRequest } from './bank-send-target';
@@ -29,6 +33,12 @@ import { BANK_TARGET_KEY, type TargetRequest } from './bank-send-target';
  * The payout account is found by the number and bank the request names, so
  * the same account saved as a beneficiary too is still a withdrawal. Reads
  * our own database only; the bank was asked once, by the guard before this.
+ *
+ * While the sender is suspended (USER-SUSPEND, R-121 tightened in round 2, H1)
+ * money leaves only to a bank account in the sender's own verified name, saved
+ * or not: any other account is `403 account_suspended` in the Hub's words,
+ * answered before the PIN is looked at, like the rule above. Nobody who is not
+ * suspended is looked at here more than before (one indexed read).
  */
 @Injectable()
 export class PayoutOwnNameGuard implements CanActivate {
@@ -47,6 +57,14 @@ export class PayoutOwnNameGuard implements CanActivate {
       );
     }
     try {
+      if (await isSuspended(this.prisma, owner)) {
+        // The bank was just asked for the holder's name (`resolved.target`); the person's verified name decides.
+        const notOwn = await this.payout.notYourNameRefusal(
+          owner,
+          resolved.target,
+        );
+        if (notOwn) throw suspendedRefusal();
+      }
       const body = req.body as { bankCode: string; accountNumber: string };
       const isPayout = await this.prisma.moneyPayoutAccount.findFirst({
         where: {
