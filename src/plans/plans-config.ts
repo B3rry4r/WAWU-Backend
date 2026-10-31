@@ -31,7 +31,7 @@ import type { BillingCurrency } from '../../generated/prisma/enums';
  * final ones; the file's own `provisional` object says why for each of these
  * markers, and plans-config.spec.ts keeps the two lists equal:
  *
- * PROVISIONAL(PLAN-PRICES, owner=YOU, why=R-43 the owner sends final prices; every figure in plans.config.json is an example value until then)
+ * PROVISIONAL(PLAN-PRICES, owner=YOU, why=R-43 the owner sends final prices; every figure in plans.config.json is an example value until then, except the three tiers' prices and lengths (R-89) and the products each allows (R-112))
  * PROVISIONAL(PLAN-CASHOUT-MINIMUM, owner=YOU, why=the brief gives no cash-out minimum and PT6 draws one; the file's value is the number of points the rate is quoted per)
  * PROVISIONAL(PLAN-BOUGHT-POINTS-DAYS, owner=YOU, why=the brief does not say how long bought points last; the file's value is the longest period the plan uses)
  * PROVISIONAL(PLAN-ENDING-DAYS, owner=YOU, why=VF14 draws a tier that is ending but no window; the file's value gives a week to renew)

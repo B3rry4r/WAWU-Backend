@@ -1,6 +1,7 @@
 {
   "provisional": {
     "DV2-BOARD-FIGURE": "R-65: the owner did not name this figure; it is the value drawn on a VF, PT, RF or W board of the 16 Oct 2026 designs, loaded as a setting until the owner confirms it.",
+    "TIER-PRODUCTS": "R-112 (owner, 27 Oct 2026): the owner named this figure. Verify allows 4 products, Verify Plus 8 and Founding Maker 15 (migration 20261224090000_tier_counts moved any saved setting to them). It was marked as a board figure until then. An admin may change it here.",
     "REF-CLAIM-DAYS": "R-65: no board or ruling gives the number of days after sign-up in which a person can claim a referral code. 7 matches the 7-day reward hold the RF boards draw.",
     "W44-PASS-LINES": "G-804: the lines under a pass on W44 (the board draws three under the Maker Pass, priority: Entry to the event and the maker area; A table to show your work; Priority when places are given out). No pass has lines until the owner confirms them; an admin sets them here, and a pass with none shows none.",
     "PLAN-TRANSFER-WINDOW": "TIER-05: no ruling says how long a person has to send the money for a purchase they chose to pay by bank transfer. 24 hours covers an evening's delay and a bank's slow day; nothing is taken when it lapses, and any money sent stays in the wallet.",

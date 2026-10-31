@@ -1,6 +1,6 @@
 {
   "provisional": {
-    "PLAN-PRICES": "R-43: every figure in this file is the owner's example value from the Developer Brief v2.0 of 5 Oct 2026, kept until the owner sends final prices and rules. The three tiers are the exception: the owner set their prices (Verify 2,999, Verify Plus 5,999, Founding Maker 9,999 naira) and made all three last one year on 26 Oct 2026 (R-89).",
+    "PLAN-PRICES": "R-43: every figure in this file is the owner's example value from the Developer Brief v2.0 of 5 Oct 2026, kept until the owner sends final prices and rules. The three tiers are the exception: the owner set their prices (Verify 2,999, Verify Plus 5,999, Founding Maker 9,999 naira) and made all three last one year on 26 Oct 2026 (R-89), and named the products each allows on 27 Oct 2026 (Verify 4, Verify Plus 8, Founding Maker 15; R-112).",
     "PLAN-CASHOUT-MINIMUM": "The brief gives no cash-out minimum and PT6 draws one. 1,000 points is the unit the cash-out rate is quoted in.",
     "PLAN-BOUGHT-POINTS-DAYS": "The brief does not say how long bought points last. 365 days is the longest period the plan uses.",
     "PLAN-ENDING-DAYS": "VF14 draws a tier ending in 3 days but gives no window. 7 days gives a week to renew."

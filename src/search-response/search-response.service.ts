@@ -203,7 +203,7 @@ export class SearchResponseService {
     );
 
     const needle = q.trim().toLowerCase();
-    return matches
+    const ranked = matches
       .map((c) => ({
         ...c,
         memberCount: memberCounts.get(c.id) ?? 0,
@@ -217,6 +217,15 @@ export class SearchResponseService {
           a.name.localeCompare(b.name),
       )
       .slice(0, RESULT_LIMIT);
+    // HUB-SWEEP-1 (F1): a room's picture is stored as the key or as a link that dies a week after upload. The app's
+    // requests (`X-Wawu-Client: app`) get a fresh link; the web's answer keeps the stored value, byte for byte.
+    if (!isAppRequest()) return ranked;
+    return Promise.all(
+      ranked.map(async (c) => ({
+        ...c,
+        imageUrl: await this.fresh(c.imageUrl),
+      })),
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -338,22 +347,42 @@ export class SearchResponseService {
       requesterWawuId,
       items.map((i) => i.id),
     );
-    // CONTENT-COVER (R-114): the app's requests (`X-Wawu-Client: app`) get `coverUrl`; the web's answer keeps every byte.
-    const withCover = isAppRequest();
+    // CONTENT-COVER (R-114) and HUB-SWEEP-1 (F1): the app's requests (`X-Wawu-Client: app`) get `coverUrl` and fresh
+    // links on the piece's own files (`previewAssetUrl`, and `fullAssetUrl` when it is unlocked), which are stored as a
+    // key or as a link that dies a week after upload. The web's answer keeps every byte, stored values included.
+    const withApp = isAppRequest();
     return Promise.all(
       items.map(async ({ coverKey, ...item }) => {
         const isFree = item.accessType === 'free';
         const locked = !isFree && !unlockedSet.has(item.id);
-        return {
+        const piece = {
           ...item,
           fullAssetUrl: locked ? null : item.fullAssetUrl,
           fullAssetLocked: locked,
-          ...(withCover
-            ? { coverUrl: (await this.storage?.coverUrlFor(coverKey)) ?? null }
-            : {}),
+        };
+        if (!withApp) return piece;
+        const [previewAssetUrl, fullAssetUrl, coverUrl] = await Promise.all([
+          this.fresh(item.previewAssetUrl),
+          this.fresh(piece.fullAssetUrl),
+          this.storage?.coverUrlFor(coverKey),
+        ]);
+        return {
+          ...piece,
+          previewAssetUrl: previewAssetUrl ?? item.previewAssetUrl,
+          fullAssetUrl,
+          coverUrl: coverUrl ?? null,
         };
       }),
     );
+  }
+
+  /**
+   * A fresh read link for a stored picture or file value (a key, or a link that has expired), the way the feed, the
+   * saved list and My content serve theirs. Null stays null; with no storage in the spec that built the service by hand
+   * the stored value is returned as it is.
+   */
+  private async fresh(stored: string | null): Promise<string | null> {
+    return this.storage ? this.storage.freshUrlFor(stored) : stored;
   }
 
   private async resolveUnlockedSet(
@@ -485,6 +514,24 @@ export class SearchResponseService {
       communityCounts.map((c) => [c.hostWawuId, c._count._all]),
     );
 
+    // HUB-SWEEP-1 (F1): a creator's picture and cover are stored as the key or as a link that dies a week after upload.
+    // The app's requests (`X-Wawu-Client: app`) get fresh links, as the feed's cards do; the web's answer keeps the
+    // stored values, byte for byte.
+    const pictures = new Map<
+      string,
+      { avatarUrl: string | null; coverUrl: string | null }
+    >();
+    if (isAppRequest()) {
+      await Promise.all(
+        profiles.map(async (p) =>
+          pictures.set(p.wawuUserId, {
+            avatarUrl: await this.fresh(p.avatarUrl),
+            coverUrl: await this.fresh(p.coverUrl),
+          }),
+        ),
+      );
+    }
+
     const result: CreatorProfile[] = [];
     for (const id of orderedWawuUserIds) {
       if (result.some((r) => r.wawuUserId === id)) continue; // de-dupe, preserve first occurrence's rank
@@ -501,8 +548,8 @@ export class SearchResponseService {
         bio: profile.bio,
         // Same omission as the public profile had: search returned every
         // creator without a face, so a results list was a column of initials.
-        avatarUrl: profile.avatarUrl,
-        coverUrl: profile.coverUrl,
+        avatarUrl: pictures.get(id)?.avatarUrl ?? profile.avatarUrl,
+        coverUrl: pictures.get(id)?.coverUrl ?? profile.coverUrl,
         interests: profile.interests,
         instagramHandle: profile.instagramHandle,
         xHandle: profile.xHandle,
