@@ -679,4 +679,221 @@ describe('A paid audio or video piece has its preview made from its file (PREVIE
       full.key,
     );
   });
+
+  // ── UPLOAD-REST: a free piece edited to paid needs no separate preview either (R-118) ─────────────────────────
+
+  const patch = (id: string, body: Record<string, unknown>) =>
+    request(server())
+      .patch(`/content/${id}`)
+      .set('Authorization', bearer(MAKER))
+      .set(APP)
+      .send(body);
+  const pieceOf = (res: request.Response) =>
+    (res.body as { data: Piece }).data.id;
+  const freeAudio = async () => {
+    const full = await fullFile('audio/mpeg', mp3File(100));
+    const made = await post(
+      listing({ accessType: 'free', price: 0, fullAsset: full.fileUrl }),
+    );
+    expect(made.status).toBe(201);
+    return { full, id: pieceOf(made) };
+  };
+
+  it("an edit to paid with previewFromFile cuts a free audio piece's preview from its stored file, counted once", async () => {
+    const { full, id } = await freeAudio();
+    const before = await used();
+    const res = await patch(id, {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(res.status).toBe(200);
+    const row = await prisma.contentPiece.findUniqueOrThrow({ where: { id } });
+    expect(row.accessType).toBe('paid');
+    expect(row.price).toBe(2000);
+    const key = objectKeyFrom(row.previewAssetUrl);
+    expect(key).toMatch(
+      new RegExp(`^content/preview/${MAKER}/auto-[0-9a-f]{20}\\.mp3$`),
+    );
+    expect(key).not.toBe(full.key);
+    expect(await seconds(bucket.get(key)!, 'audio/mpeg')).toBeCloseTo(30, 0);
+    expect(await used()).toBe(before + bucket.get(key)!.length);
+    // Saved again (a retry, or a new price): the piece has a preview of its own now, so nothing more is made or counted.
+    const again = await patch(id, {
+      price: 2500,
+      previewFromFile: true,
+    });
+    expect(again.status).toBe(200);
+    expect(puts).toHaveLength(1);
+    expect(await used()).toBe(before + bucket.get(key)!.length);
+  });
+
+  it('refuses the same edit without the flag exactly as before, and ignores the flag while the piece stays free', async () => {
+    const { id } = await freeAudio();
+    const plain = await patch(id, { accessType: 'paid', price: 2000 });
+    expect(plain.status).toBe(400);
+    expect(message(plain)).toContain(
+      'Paid content needs a separate free preview',
+    );
+    const stillFree = await patch(id, {
+      title: 'A new title',
+      previewFromFile: true,
+    });
+    expect(stillFree.status).toBe(200);
+    expect(puts).toEqual([]);
+    const row = await prisma.contentPiece.findUniqueOrThrow({ where: { id } });
+    expect(row.accessType).toBe('free');
+    expect(objectKeyFrom(row.previewAssetUrl)).toBe(
+      objectKeyFrom(row.fullAssetUrl!),
+    );
+  });
+
+  it("makes a free PDF's preview on an edit to paid (3 pages), and refuses a picture and a file too short in the Hub's words, storing nothing", async () => {
+    const pdf = await fullFile('application/pdf', await pdfFile(9));
+    const made = await post(
+      listing({
+        contentType: 'pdf',
+        accessType: 'free',
+        price: 0,
+        fullAsset: pdf.fileUrl,
+      }),
+    );
+    const res = await patch(pieceOf(made), {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(res.status).toBe(200);
+    const row = await pieceRow(made);
+    const key = objectKeyFrom(row.previewAssetUrl);
+    expect(key).toMatch(/\/auto-[0-9a-f]{20}\.pdf$/);
+    expect(await pdfPageCount(bucket.get(key)!)).toBe(3);
+
+    const png = await fullFile('image/png', Buffer.alloc(9000, 3));
+    const picture = await post(
+      listing({
+        contentType: 'image',
+        accessType: 'free',
+        price: 0,
+        fullAsset: png.fileUrl,
+      }),
+    );
+    const putsBefore = puts.length;
+    const refused = await patch(pieceOf(picture), {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(refused.status).toBe(400);
+    expect(message(refused)).toBe(CANNOT_MAKE);
+    expect(puts).toHaveLength(putsBefore);
+    expect((await pieceRow(picture)).accessType).toBe('free');
+
+    const short = await fullFile('audio/mpeg', mp3File(2));
+    const tiny = await post(
+      listing({ accessType: 'free', price: 0, fullAsset: short.fileUrl }),
+    );
+    const tooShort = await patch(pieceOf(tiny), {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(tooShort.status).toBe(400);
+    expect(message(tooShort)).toBe(CUT_WORDS.too_short);
+    expect((await pieceRow(tiny)).accessType).toBe('free');
+  });
+
+  it('makes a template preview from its cover on an edit, and asks for a cover in words when it has none', async () => {
+    const sheet = await fullFile(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      Buffer.alloc(5000, 7),
+    );
+    const bare = await post(
+      listing({
+        contentType: 'template',
+        accessType: 'free',
+        price: 0,
+        fullAsset: sheet.fileUrl,
+      }),
+    );
+    const needsCover = await patch(pieceOf(bare), {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(needsCover.status).toBe(400);
+    expect(message(needsCover)).toBe(NEEDS_COVER);
+    const cover = await landed(
+      'content/cover',
+      'image/png',
+      Buffer.from('89504e470d0a1a0a-cover-bytes', 'utf8'),
+    );
+    const withCover = await patch(pieceOf(bare), {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+      coverAsset: cover.fileUrl,
+    });
+    expect(withCover.status).toBe(200);
+    const key = objectKeyFrom((await pieceRow(bare)).previewAssetUrl);
+    expect(key).not.toBe(cover.key);
+    expect(bucket.get(key)!.equals(bucket.get(cover.key)!)).toBe(true);
+  });
+
+  it('gives the cut back when the edit does not go through (counted once, nothing left over)', async () => {
+    const { id } = await freeAudio();
+    const before = await used();
+    const missingCover = `https://bucket.example-storage.dev/content/cover/${MAKER}/${crypto.randomUUID()}.png`;
+    const bad = await patch(id, {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+      coverAsset: missingCover,
+    });
+    expect(bad.status).toBe(400);
+    expect(puts).toHaveLength(1); // it was cut, then the edit was refused
+    expect(await used()).toBe(before); // and given back
+    const row = await prisma.contentPiece.findUniqueOrThrow({ where: { id } });
+    expect(row.accessType).toBe('free');
+    const good = await patch(id, {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(good.status).toBe(200);
+    expect(puts[1]).toBe(puts[0]); // the same name: replaced in place
+    expect(await used()).toBe(before + bucket.get(puts[0])!.length);
+  });
+
+  it('refuses the cut when the creator has no room for it (the storage 413) and the piece stays free', async () => {
+    const { id } = await freeAudio();
+    const limit = (await storage.usageFor(MAKER)).limitBytes;
+    let left = limit - (await used()) - 100;
+    for (let i = 0; left > 0; i += 1) {
+      const bytes = Math.min(left, 1_500_000_000);
+      await prisma.storageObject.create({
+        data: {
+          wawuUserId: MAKER,
+          key: `content/full/${MAKER}/filler-edit-${i}.mp4`,
+          bytes,
+          contentType: 'video/mp4',
+          folder: 'content/full',
+          status: 'confirmed',
+          confirmedAt: new Date(),
+        },
+      });
+      left -= bytes;
+    }
+    const res = await patch(id, {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(res.status).toBe(413);
+    expect(puts).toEqual([]);
+    expect(
+      (await prisma.contentPiece.findUniqueOrThrow({ where: { id } }))
+        .accessType,
+    ).toBe('free');
+  });
 });
