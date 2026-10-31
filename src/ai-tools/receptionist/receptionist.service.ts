@@ -33,8 +33,9 @@ import {
 } from '../tools/receptionist.tool';
 import { podcastLinkOk } from '../tools/podcast.tool';
 import {
+  CONVERSATION_GIVE_UP_MS,
+  copyOfMarker,
   markerOf,
-  NOT_STORED_YET_MS,
   ProviderCopyService,
 } from '../voice/provider-copy.service';
 import {
@@ -472,7 +473,8 @@ export class ReceptionistService {
   /**
    * Clears the Receptionist: the agent and every document are deleted at the provider, then every row (the agent, the
    * knowledge and the earlier messages). A provider delete that fails leaves its row and answers `pending`; asking again
-   * carries on. Always works, also while the tool is off.
+   * carries on. A conversation of the person's the provider still keeps is cleared from the notes only once a read says
+   * it is gone (REC-DELETE). Always works, also while the tool is off.
    */
   async clear(wawuUserId: string): Promise<ReceptionistRemovedView> {
     let pending = false;
@@ -492,14 +494,30 @@ export class ReceptionistService {
       });
     }
     // REC-PRIVACY: every conversation of the person's the provider may still keep (a text chat or a talk whose delete did
-    // not go through) is deleted too; one that cannot be leaves its note on the row and answers `pending`.
-    if (await this.deleteKeptConversations(wawuUserId)) pending = true;
+    // not go through) is dealt with below; an open talk is left alone and answers `pending`.
+    const kept = await this.keptConversations(wawuUserId);
+    if (kept.open) pending = true;
     const agent = await this.prisma.receptionistAgent.findUnique({
       where: { wawuUserId },
     });
+    let agentDeleted = true;
     if (agent?.providerAgentId) {
       const out = await this.voice.deleteAgent(agent.providerAgentId);
-      if (out === 'failed') pending = true;
+      if (out === 'failed') {
+        pending = true;
+        agentDeleted = false;
+      }
+    }
+    // REC-DELETE: a delete the provider answers 204 may be ignored (a conversation not yet finished), and after the
+    // agent is deleted a 404 by id proves nothing: a conversation still being finished is kept, listed, and 404 by id
+    // (proven on the real provider, round 1). So no note is cleared on those answers. Each is tried the ordinary way
+    // (read, the provider's list, a delete once finished, a read of both after it) for a moment, stays noted until it
+    // is proven gone, and the answer is `pending` while one is left: the sweep carries on.
+    if (agentDeleted) {
+      const tried = await Promise.all(
+        kept.noted.map((c) => this.copies.afterAgentDeleted(c.jobId, c.copy)),
+      );
+      if (tried.includes('kept')) pending = true;
     }
     if (!pending) {
       await this.prisma.receptionistAgent.deleteMany({ where: { wawuUserId } });
@@ -512,19 +530,22 @@ export class ReceptionistService {
   }
 
   /**
-   * Deletes every conversation the Hub still has a note of for this person: `conversation:<id>` (a text chat, or a talk
-   * once it ended) and `convo:<id>` (a talk that ended but whose note was not yet swapped). A row whose job is still
-   * `working` (a talk in progress, or an answer not yet given) is left alone and counts as left: its conversation is the
-   * only read of the talk's real length, so deleting it would make the settle step charge the longest talk, or a talk
-   * the provider never closed. The settle step (or the end of the job) ends it and deletes its conversation, and asking
-   * again then finds nothing. Answers true while one is left. A 404 counts as gone only once the row is older than
-   * `NOT_STORED_YET_MS` (the provider may answer 404 for a conversation it has not stored yet).
+   * The conversations the Hub still has a note of for this person: `conversation:<id>` (a text chat, or a talk once it
+   * ended, with `@<ms>` once a delete was sent after it finished) and `convo:<id>` (a talk that ended but whose note was
+   * not yet swapped). A row whose job is still `working` (a talk in progress, or an answer not yet given) is not listed:
+   * `open` says one exists. Its conversation is the only read of the talk's real length, so deleting it would make the
+   * settle step charge the longest talk, or a talk the provider never closed. The settle step (or the end of the job)
+   * ends it and deletes its conversation, and asking again then finds nothing.
    */
-  private async deleteKeptConversations(wawuUserId: string): Promise<boolean> {
-    let pending = false;
+  private async keptConversations(wawuUserId: string): Promise<{
+    open: boolean;
+    noted: { jobId: string; copy: { kind: 'conversation'; id: string } }[];
+  }> {
     const rows = await this.prisma.aiToolJob.findMany({
       where: {
         wawuUserId,
+        // A note older than the sweep's give-up age is ignored here as there (the provider's own limit has passed).
+        createdAt: { gte: new Date(Date.now() - CONVERSATION_GIVE_UP_MS) },
         OR: [
           { providerRef: { startsWith: 'conversation:' } },
           {
@@ -533,42 +554,44 @@ export class ReceptionistService {
           },
         ],
       },
-      select: {
-        id: true,
-        providerRef: true,
-        state: true,
-        createdAt: true,
-        finishedAt: true,
-      },
+      select: { id: true, providerRef: true, state: true },
       orderBy: { createdAt: 'asc' },
       take: SETTLE_PAGE * SETTLE_MAX_PAGES,
     });
+    let open = false;
+    const noted: {
+      jobId: string;
+      copy: { kind: 'conversation'; id: string };
+    }[] = [];
     for (const row of rows) {
       if (row.state === 'working') {
-        pending = true;
+        open = true;
         continue;
       }
-      const id = row.providerRef?.startsWith('conversation:')
-        ? row.providerRef.slice('conversation:'.length)
-        : conversationOf(row.providerRef);
+      const talk = !row.providerRef?.startsWith('conversation:');
+      const id = talk
+        ? conversationOf(row.providerRef)
+        : copyOfMarker(row.providerRef)?.copy.id;
       if (!id || !/^[A-Za-z0-9_-]{1,100}$/.test(id)) continue;
-      const out = await this.voice.deleteConversation(id);
-      const age = Date.now() - (row.finishedAt ?? row.createdAt).getTime();
-      if (
-        out === 'failed' ||
-        (out === 'not_found' && age < NOT_STORED_YET_MS)
-      ) {
-        pending = true;
-        continue;
+      const copy = { kind: 'conversation' as const, id };
+      if (talk) {
+        // A talk that ended but whose note was not yet swapped: noted as a conversation to delete, as the settle step does.
+        const swapped = await this.prisma.aiToolJob.updateMany({
+          where: {
+            id: row.id,
+            state: { not: 'working' },
+            providerRef: { startsWith: 'convo:' },
+          },
+          data: { providerRef: markerOf(copy) },
+        });
+        if (swapped.count === 0) {
+          open = true;
+          continue;
+        }
       }
-      await this.prisma.aiToolJob
-        .updateMany({
-          where: { id: row.id, providerRef: row.providerRef },
-          data: { providerRef: null },
-        })
-        .catch(() => undefined);
+      noted.push({ jobId: row.id, copy });
     }
-    return pending;
+    return { open, noted };
   }
 
   /** Account deletion: every agent and document of the person is deleted at the provider first; throws while one is left (the purge then tries again). */
@@ -896,7 +919,9 @@ export class ReceptionistService {
         select: { state: true },
       });
       if (!row || row.state === 'working') return;
-      await this.copies.discard(jobId, copy);
+      // Off the request: the provider's delete of a finished conversation takes 7 to 8 seconds (round 1), so POST /end
+      // waits for it only a moment and the rest carries on in the background (then the retries and the sweep).
+      await this.copies.discardWithin(jobId, copy);
     } catch {
       this.logger.warn(
         `receptionist session ${jobId}: its conversation was not noted for deletion yet`,

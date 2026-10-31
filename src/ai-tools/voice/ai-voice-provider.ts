@@ -428,6 +428,13 @@ export interface VoiceSessionLink {
   conversationId: string;
 }
 
+/** One conversation as the provider's list shows it (REC-DELETE). */
+export interface ConversationListed {
+  conversationId: string;
+  /** The same statuses as `ConversationRead`. */
+  status: ConversationRead['status'];
+}
+
 /** A finished conversation as the provider reports it. */
 export interface ConversationRead {
   /** `done` when the provider has closed it and knows its length. */
@@ -892,12 +899,30 @@ export interface AiVoiceProvider {
     opts?: { signal?: AbortSignal },
   ): Promise<VoiceSessionLink>;
 
-  /** Reads a conversation (`GET /v1/convai/conversations/{id}`): whether it is over and how long it lasted. Throws `AiVoiceProviderError`. */
+  /** Reads a conversation (`GET /v1/convai/conversations/{id}`): whether it is over and how long it lasted. Throws `AiVoiceProviderError` (`status` 404 when the provider has none by that id, which for a conversation made a moment ago may only mean "not stored yet"). */
   readConversation(
     conversationId: string,
     opts?: { signal?: AbortSignal },
   ): Promise<ConversationRead>;
 
-  /** One try at deleting a conversation the provider kept (`DELETE /v1/convai/conversations/{id}`), so it holds none of the person's words. Never throws. */
+  /**
+   * REC-DELETE: the conversations the provider's LIST shows that started between two times (`GET /v1/convai/conversations`
+   * with `call_start_after_unix` and `call_start_before_unix`, oldest first, every page). The list is the only read that
+   * still shows a conversation whose agent was deleted while it was being finished: `readConversation` answers 404 for
+   * it (proven on the real provider, 31 Oct 2026) although the provider keeps it, and a DELETE by id still removes it.
+   * Throws `AiVoiceProviderError` when a page cannot be read or the window holds more than the pages read (an incomplete
+   * list proves nothing).
+   */
+  listConversations(window: {
+    afterUnix: number;
+    beforeUnix: number;
+  }): Promise<ConversationListed[]>;
+
+  /**
+   * One try at deleting a conversation the provider kept (`DELETE /v1/convai/conversations/{id}`), so it holds none of the
+   * person's words. Never throws. REC-DELETE: the real provider answers 204 to a delete sent before the conversation is
+   * `done` and ignores it, so a `deleted` answer proves nothing: the caller sends it only to a conversation a read shows
+   * finished and clears its note only when a read after it says 404 (`ProviderCopyService`).
+   */
   deleteConversation(conversationId: string): Promise<CopyRemoval>;
 }

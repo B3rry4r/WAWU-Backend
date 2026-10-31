@@ -27,6 +27,7 @@ import {
   type AiVoiceProvider,
   type AssetUpload,
   type ChatTurn,
+  type ConversationListed,
   type ConversationRead,
   type PodcastProgress,
   type SpeakChapterRequest,
@@ -77,6 +78,8 @@ export const AI_VOICE_ENV = {
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** REC-DELETE: the most pages (of 100) one read of the provider's conversation list follows. */
+const CONVERSATION_LIST_PAGES = 5;
 /**
  * How long a Music track call may run (AITOOLS-03). NO long real run has
  * happened (only a 3 second track), so this is set from the longest track the
@@ -2342,6 +2345,63 @@ export class HttpVoiceProvider implements AiVoiceProvider {
           ? Math.round(secs)
           : null,
     };
+  }
+
+  async listConversations(window: {
+    afterUnix: number;
+    beforeUnix: number;
+  }): Promise<ConversationListed[]> {
+    if (!this.agentsConfigured)
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    if (
+      !Number.isInteger(window.afterUnix) ||
+      !Number.isInteger(window.beforeUnix)
+    )
+      throw new AiVoiceProviderError('rejected', 'bad window');
+    const statuses = [
+      'initiated',
+      'in-progress',
+      'processing',
+      'done',
+      'failed',
+    ];
+    const out: ConversationListed[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < CONVERSATION_LIST_PAGES; page += 1) {
+      const raw = (await this.jsonCall(
+        'GET',
+        `/v1/convai/conversations?call_start_after_unix=${window.afterUnix}&call_start_before_unix=${window.beforeUnix}&page_size=100&sort_direction=asc${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        undefined,
+      )) as {
+        conversations?: unknown;
+        has_more?: unknown;
+        next_cursor?: unknown;
+      };
+      if (!Array.isArray(raw.conversations))
+        throw new AiVoiceProviderError('unavailable', 'not a list');
+      for (const item of raw.conversations as {
+        conversation_id?: unknown;
+        status?: unknown;
+      }[]) {
+        if (
+          typeof item?.conversation_id !== 'string' ||
+          !PROVIDER_ID.test(item.conversation_id)
+        )
+          continue;
+        out.push({
+          conversationId: item.conversation_id,
+          status: statuses.includes(String(item.status))
+            ? (item.status as ConversationListed['status'])
+            : 'processing',
+        });
+      }
+      if (raw.has_more !== true) return out;
+      cursor = typeof raw.next_cursor === 'string' ? raw.next_cursor : null;
+      if (!cursor)
+        throw new AiVoiceProviderError('unavailable', 'list has no cursor');
+    }
+    // More than the pages read: the list is incomplete, and an id missing from it proves nothing.
+    throw new AiVoiceProviderError('unavailable', 'list too long');
   }
 
   deleteConversation(conversationId: string): Promise<CopyRemoval> {

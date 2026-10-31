@@ -10,7 +10,9 @@ import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { assetIdsOf } from '../flow/flow-support';
 import {
   AI_VOICE_PROVIDER,
+  AiVoiceProviderError,
   type AiVoiceProvider,
+  type ConversationRead,
   type CopyPresence,
   type ProviderCopy,
 } from './ai-voice-provider';
@@ -43,6 +45,42 @@ export const COPY_GIVE_UP_MS = 24 * 60 * 60_000;
 /** A job still `working` this long after it started is swept too (its run died). */
 const STALE_WORKING_MS = 15 * 60_000;
 const SWEEP_BATCH = 50;
+/**
+ * REC-DELETE: a Receptionist conversation the Hub could not prove deleted is dropped from the notes this long after it
+ * was made, with one warning in the log. The provider's own one-day limit (the agent's `retention_days` 1) has passed
+ * by then, so the provider deletes it itself; the extra hour is a margin.
+ */
+export const CONVERSATION_GIVE_UP_MS = 25 * 60 * 60_000;
+/** A conversation sweep reads notes in pages of `SWEEP_BATCH`, at most this many pages in one pass. */
+const CONVERSATION_PAGES = 20;
+/**
+ * REC-DELETE round 1: the sweep reads only notes made in the last `CONVERSATION_GIVE_UP_MS` (the partial index serves
+ * this), and a separate small step drops the notes between that age and this one. A note older still is left alone: it
+ * is past the provider's own limit by a day and a half, and nothing reads it.
+ */
+const CONVERSATION_DROP_FLOOR_MS = 48 * 60 * 60_000;
+/**
+ * A conversation the provider answers 404 for, by id, is not read from the provider's list until its job ended this
+ * long ago: a few seconds after a reply it is usually just not stored yet, and the list read would only cost a call.
+ */
+const LIST_AFTER_MS = 30_000;
+/** The list is read for the window the job ran in, widened by this much each side (a conversation starts inside it). */
+const LIST_WINDOW_MARGIN_MS = 5 * 60_000;
+/** The most in-process retry loops (2, 6, 15 and 40 seconds) running at once; the rest wait for the sweep. */
+export const RETRY_LOOPS_MAX = 10;
+/** How long a request waits for a conversation's delete before it answers and lets the delete carry on. */
+export const REQUEST_WAIT_MS = 2_000;
+/**
+ * REC-DELETE: how often the sweep tries a conversation, by how long ago its job ended (the first minute has its own
+ * short waits, `COPY_TRY_DELAYS_MS`): every minute for the first 5 minutes, every 5 minutes up to the first hour, every
+ * 30 minutes after that. The sweep runs every minute and a try is due in a 2 minute window of each period, so a pass
+ * that is late or skipped still tries once in the period.
+ */
+export function conversationDue(ageMs: number): boolean {
+  if (ageMs < 5 * 60_000) return true;
+  const period = ageMs < 60 * 60_000 ? 5 * 60_000 : 30 * 60_000;
+  return ageMs % period < 2 * 60_000;
+}
 
 /**
  * How one try went. `gone`: a cleaned item's delete answered 2xx (confirmed).
@@ -57,7 +95,10 @@ export type CopyTry = 'gone' | 'not_found' | 'absent' | 'keep';
  * What a job's `providerRef` holds while the provider's copy is not yet
  * confirmed deleted: `transcript:<id>`, `isolation:<id>`, `voice:<id>` (AITOOLS-07), `asset:<id>+<id>` (AITOOLS-09) or `conversation:<id>` (REC-PRIVACY); for a transcript
  * that has answered 404 once after the confirm window opened, `@<ms>` is added
- * (when that first 404 was read), and a later read of the copy removes it.
+ * (when that first 404 was read), and a later read of the copy removes it. For
+ * a `conversation:<id>` (REC-DELETE) `@<ms>` means "a delete was sent after a
+ * read showed the conversation finished, at this time": from then on a read that
+ * says 404 proves it gone, and before that a 404 proves nothing.
  */
 export function markerOf(copy: ProviderCopy, absentSince?: number): string {
   return `${copy.kind}:${copy.id}${absentSince === undefined ? '' : `@${absentSince}`}`;
@@ -65,7 +106,10 @@ export function markerOf(copy: ProviderCopy, absentSince?: number): string {
 
 export interface NotedCopy {
   copy: ProviderCopy;
-  /** When a read of the transcript first said 404 in the confirm window (ms), if it has. */
+  /**
+   * When a read of the transcript first said 404 in the confirm window (ms), if it has. For a conversation: when a delete
+   * was sent after a read showed it finished (a later 404 then proves it gone).
+   */
   absentSince: number | null;
 }
 
@@ -132,9 +176,16 @@ export class ProviderCopyService implements OnModuleDestroy {
   private readonly logger = new Logger(ProviderCopyService.name);
   /** The waits between the first tries; a spec shortens them. */
   delaysMs: number[] = [...COPY_TRY_DELAYS_MS];
+  /** The most retry loops at once (a burst of chats cannot make five reads each at the same moment); a spec sets it. */
+  retryLimit = RETRY_LOOPS_MAX;
+  /** How long a request waits for a conversation's delete before answering; a spec shortens it. */
+  requestWaitMs = REQUEST_WAIT_MS;
+  private retrying = 0;
   private closed = false;
   private sweeping = false;
   private readonly timers = new Set<NodeJS.Timeout>();
+  /** Work a request stopped waiting for; it carries on here. */
+  private readonly background = new Set<Promise<unknown>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -186,9 +237,51 @@ export class ProviderCopyService implements OnModuleDestroy {
    */
   async discard(jobId: string, copy: ProviderCopy): Promise<void> {
     const endedAt = Date.now();
-    const first = await this.attempt(jobId, { copy, absentSince: null }, 0);
+    // A conversation's note may already say a delete was sent (REC-DELETE): that is the one thing a 404 is read by.
+    const current =
+      copy.kind === 'conversation'
+        ? ((await this.pending(jobId, copy)) ?? { copy, absentSince: null })
+        : { copy, absentSince: null };
+    const first = await this.attempt(jobId, current, 0);
     if (first === 'cleared') return;
-    void this.retry(jobId, copy, endedAt).catch(() => undefined);
+    // REC-DELETE round 1: the retry loops are shared. Past `retryLimit` running at once the rest wait for the sweep.
+    if (this.retrying >= this.retryLimit) return;
+    this.retrying += 1;
+    void this.retry(jobId, copy, endedAt)
+      .catch(() => undefined)
+      .finally(() => {
+        this.retrying -= 1;
+      });
+  }
+
+  /**
+   * `discard`, for a request: waits for it at most `requestWaitMs` and then lets it carry on in the background (the
+   * provider's DELETE of a finished conversation takes 7 to 8 seconds), so the request does not wait for the provider.
+   */
+  async discardWithin(jobId: string, copy: ProviderCopy): Promise<void> {
+    await this.within(this.discard(jobId, copy), undefined);
+  }
+
+  /** Resolves when the work a request stopped waiting for has ended. For specs and a clean stop. */
+  async idle(): Promise<void> {
+    await Promise.allSettled([...this.background]);
+  }
+
+  /** Waits for `work` at most `requestWaitMs`; if it is not done by then `fallback` is the answer and `work` carries on. */
+  private async within<T>(work: Promise<T>, fallback: T): Promise<T> {
+    const tracked = work.catch(() => fallback);
+    this.background.add(tracked);
+    void tracked.finally(() => this.background.delete(tracked));
+    let timer: NodeJS.Timeout | undefined;
+    const wait = new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), this.requestWaitMs);
+      timer.unref();
+    });
+    try {
+      return await Promise.race([tracked, wait]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async retry(
@@ -252,16 +345,6 @@ export class ProviderCopyService implements OnModuleDestroy {
       const removed = await this.voice.removePodcast(copy.id);
       return removed === 'failed' ? 'keep' : 'gone';
     }
-    if (copy.kind === 'conversation') {
-      // REC-PRIVACY: a conversation the provider kept. Like a cleaned item it has no read the Hub relies on, and a 404
-      // soon after it was made may only mean "not stored yet", so a 404 clears it once `NOT_STORED_YET_MS` has passed.
-      const removed = await this.voice.deleteConversation(copy.id);
-      return removed === 'deleted'
-        ? 'gone'
-        : removed === 'not_found'
-          ? 'not_found'
-          : 'keep';
-    }
     if (copy.kind === 'isolation') {
       const removed = await this.voice.deleteIsolation(copy.id);
       return removed === 'deleted'
@@ -303,6 +386,9 @@ export class ProviderCopyService implements OnModuleDestroy {
     now: number = Date.now(),
   ): Promise<'cleared' | 'kept'> {
     const { copy, absentSince } = noted;
+    // REC-DELETE: a conversation is read before it is deleted, and cleared only on proof (below).
+    if (copy.kind === 'conversation')
+      return this.attemptConversation(jobId, noted, now, age);
     const { afterMs, gapMs } = this.confirmWindow();
     const outcome = await this.tryOnce(
       copy,
@@ -312,8 +398,7 @@ export class ProviderCopyService implements OnModuleDestroy {
       copy.kind === 'voice' ||
       copy.kind === 'isolation' ||
       copy.kind === 'asset' ||
-      copy.kind === 'podcast' ||
-      copy.kind === 'conversation'
+      copy.kind === 'podcast'
     ) {
       if (
         outcome === 'gone' ||
@@ -340,6 +425,121 @@ export class ProviderCopyService implements OnModuleDestroy {
     return 'cleared';
   }
 
+  /** What a read of a conversation by id says: `absent` (404), `unknown` (no answer, or a fault), or its status. */
+  private async seen(
+    conversationId: string,
+  ): Promise<'absent' | 'unknown' | ConversationRead['status']> {
+    try {
+      return (await this.voice.readConversation(conversationId)).status;
+    } catch (e) {
+      return e instanceof AiVoiceProviderError && e.status === 404
+        ? 'absent'
+        : 'unknown';
+    }
+  }
+
+  /**
+   * What the provider's LIST says about a conversation: `absent` (a complete read of the window does not hold it),
+   * `unknown` (no answer, a page that cannot be read, or more than the pages read), or its status. REC-DELETE round 1:
+   * a conversation whose agent was deleted while it was being finished reads 404 by id and is still listed (and a delete
+   * by id still removes it), so a 404 by id alone never proves one gone. The window is the job's own time, widened.
+   */
+  private async listedAs(
+    jobId: string,
+    conversationId: string,
+    now: number,
+  ): Promise<'absent' | 'unknown' | ConversationRead['status']> {
+    try {
+      const row = await this.prisma.aiToolJob.findUnique({
+        where: { id: jobId },
+        select: { createdAt: true, finishedAt: true },
+      });
+      if (!row) return 'unknown';
+      const listed = await this.voice.listConversations({
+        afterUnix: Math.floor(
+          (row.createdAt.getTime() - LIST_WINDOW_MARGIN_MS) / 1000,
+        ),
+        beforeUnix: Math.ceil(
+          ((row.finishedAt?.getTime() ?? now) + LIST_WINDOW_MARGIN_MS) / 1000,
+        ),
+      });
+      return (
+        listed.find((c) => c.conversationId === conversationId)?.status ??
+        'absent'
+      );
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * REC-DELETE: one try at a Receptionist conversation the provider kept. Real provider, 30 and 31 Oct 2026: a
+   * conversation reads 404 for a moment after it is made, then `in-progress`, `processing` and (about 3 to 4 seconds
+   * after the reply) `done`; a DELETE sent before `done` answers 204 and is ignored (the conversation reads 404 for a
+   * second or two and then comes back as `done` with its words); a DELETE sent once it is `done` answers 204 and the
+   * next read says 404 for good. If its agent is deleted while it is still being finished, it is kept, reads 404 by id
+   * and stays in the provider's list. So:
+   *   - a read by id that says 404 is looked up in the provider's list (not for a note younger than `LIST_AFTER_MS`
+   *     with no delete sent: it is probably not stored yet). Listed and finished: it is deleted by id (the delete works
+   *     on it). Listed and not finished: left alone. Not listed: the note is cleared only if a delete was sent after a
+   *     read showed it finished (the marker `@<ms>`); otherwise the note stays (nothing proves it ever existed, or is gone);
+   *   - a finished one is marked, deleted, and read again; the note is cleared only when that read says 404 AND the
+   *     list no longer holds it.
+   * Never throws; no log line holds an id of the provider.
+   */
+  private async attemptConversation(
+    jobId: string,
+    noted: NotedCopy,
+    now: number,
+    age: number,
+  ): Promise<'cleared' | 'kept'> {
+    const id = noted.copy.id;
+    let status = await this.seen(id);
+    if (status === 'unknown') return 'kept';
+    if (status === 'absent') {
+      if (noted.absentSince === null && age < LIST_AFTER_MS) return 'kept';
+      status = await this.listedAs(jobId, id, now);
+      if (status === 'unknown') return 'kept';
+      if (status === 'absent') {
+        if (noted.absentSince === null) return 'kept';
+        await this.clear(jobId, noted);
+        return 'cleared';
+      }
+    }
+    if (status !== 'done' && status !== 'failed') return 'kept';
+    // Marked before the delete is sent, so a delete whose answer is lost still counts when a later read says gone.
+    let sent = noted;
+    if (noted.absentSince === null) {
+      const marked = { copy: noted.copy, absentSince: now };
+      if (await this.rewrite(jobId, noted, markerOf(noted.copy, now)))
+        sent = marked;
+    }
+    if ((await this.voice.deleteConversation(id)) === 'failed') return 'kept';
+    if ((await this.seen(id)) !== 'absent') return 'kept';
+    if ((await this.listedAs(jobId, id, now)) !== 'absent') return 'kept';
+    await this.clear(jobId, sent);
+    return 'cleared';
+  }
+
+  /**
+   * REC-DELETE: the Receptionist's agent was just deleted at the provider. A 404 by id for one of its conversations
+   * proves nothing now: the provider keeps one that was still being finished (listed, and 404 by id). So the note is
+   * tried like any other (read, the list, a delete once finished, a read of both after it) and cleared only by that; a
+   * note with no delete sent stays pending for the sweep. Waits for the provider at most `requestWaitMs`.
+   */
+  async afterAgentDeleted(
+    jobId: string,
+    copy: ProviderCopy,
+  ): Promise<'cleared' | 'kept'> {
+    // No such note on the row any more (cleared meanwhile): nothing is left to keep.
+    const noted = await this.pending(jobId, copy);
+    if (!noted) return 'cleared';
+    return this.within(
+      this.attemptConversation(jobId, noted, Date.now(), Infinity),
+      'kept',
+    );
+  }
+
   /** The note as the row holds it now, or null when it is cleared or another copy's. */
   private async pending(
     jobId: string,
@@ -363,19 +563,21 @@ export class ProviderCopyService implements OnModuleDestroy {
     jobId: string,
     from: NotedCopy,
     to: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
-      await this.prisma.aiToolJob.updateMany({
+      const written = await this.prisma.aiToolJob.updateMany({
         where: {
           id: jobId,
           providerRef: markerOf(from.copy, from.absentSince ?? undefined),
         },
         data: { providerRef: to },
       });
+      return written.count > 0;
     } catch {
       this.logger.warn(
         `ai job ${jobId}: the provider's copy note was not updated`,
       );
+      return false;
     }
   }
 
@@ -419,7 +621,6 @@ export class ProviderCopyService implements OnModuleDestroy {
                 { providerRef: { startsWith: 'dub:' } },
                 { providerRef: { startsWith: 'asset:' } },
                 { providerRef: { startsWith: 'podcast:' } },
-                { providerRef: { startsWith: 'conversation:' } },
               ],
             },
             {
@@ -466,6 +667,7 @@ export class ProviderCopyService implements OnModuleDestroy {
           out.cleared += 1;
         } else out.pending += 1;
       }
+      await this.sweepConversations(now, out);
     } catch (e) {
       this.logger.error(
         `provider copy sweep: a pass failed (${(e as Error).name ?? 'Error'})`,
@@ -474,5 +676,114 @@ export class ProviderCopyService implements OnModuleDestroy {
       this.sweeping = false;
     }
     return out;
+  }
+
+  /**
+   * REC-DELETE: the notes of Receptionist conversations, tried on the schedule of `conversationDue` (a job that ended
+   * long ago is tried less often), at most `SWEEP_BATCH` tries a pass.
+   *   - Bounded: only notes made in the last `CONVERSATION_GIVE_UP_MS` are read (the partial index serves it), so the
+   *     read stays small however many jobs there are.
+   *   - Fair: NEWEST FIRST, read in pages by (time, id). A burst of old notes that are stuck can never keep a newer note
+   *     waiting; an old note that is due is tried when the newer ones leave room, and it is on the slow schedule anyway.
+   *   - A note older than `CONVERSATION_GIVE_UP_MS` (and under 48 hours) is dropped with one warning each, by a separate
+   *     small read: the provider's own one-day limit has passed.
+   */
+  private async sweepConversations(
+    now: Date,
+    out: { cleared: number; pending: number },
+  ): Promise<void> {
+    const nowMs = now.getTime();
+    const settled = new Date(nowMs - 30_000);
+    const giveUp = new Date(nowMs - CONVERSATION_GIVE_UP_MS);
+    const select = {
+      id: true,
+      providerRef: true,
+      createdAt: true,
+      finishedAt: true,
+    } as const;
+    for (let round = 0; round < CONVERSATION_PAGES; round += 1) {
+      const old = await this.prisma.aiToolJob.findMany({
+        where: {
+          providerRef: { startsWith: 'conversation:' },
+          createdAt: {
+            gte: new Date(nowMs - CONVERSATION_DROP_FLOOR_MS),
+            lt: giveUp,
+          },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: SWEEP_BATCH,
+        select,
+      });
+      for (const row of old) {
+        const noted = copyOfMarker(row.providerRef);
+        if (!noted) continue;
+        this.logger.warn(
+          `ai job ${row.id}: a Receptionist conversation was not proven deleted within 25 hours; the provider's own limit has passed, so the note is dropped`,
+        );
+        await this.clear(
+          row.id,
+          (await this.pending(row.id, noted.copy)) ?? noted,
+        );
+        out.cleared += 1;
+      }
+      if (old.length < SWEEP_BATCH) break;
+    }
+    let last: { createdAt: Date; id: string } | null = null;
+    let tries = 0;
+    for (let page = 0; page < CONVERSATION_PAGES; page += 1) {
+      const rows: {
+        id: string;
+        providerRef: string | null;
+        createdAt: Date;
+        finishedAt: Date | null;
+      }[] = await this.prisma.aiToolJob.findMany({
+        where: {
+          AND: [
+            { providerRef: { startsWith: 'conversation:' } },
+            { createdAt: { gte: giveUp } },
+            {
+              OR: [
+                {
+                  state: { in: ['done', 'failed'] },
+                  OR: [{ finishedAt: { lt: settled } }, { finishedAt: null }],
+                },
+                {
+                  state: 'working',
+                  createdAt: { lt: new Date(nowMs - STALE_WORKING_MS) },
+                },
+              ],
+            },
+            ...(last
+              ? [
+                  {
+                    OR: [
+                      { createdAt: { lt: last.createdAt } },
+                      { createdAt: last.createdAt, id: { lt: last.id } },
+                    ],
+                  },
+                ]
+              : []),
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: SWEEP_BATCH,
+        select,
+      });
+      for (const row of rows) {
+        const noted = copyOfMarker(row.providerRef);
+        if (!noted || noted.copy.kind !== 'conversation') continue;
+        const age = nowMs - (row.finishedAt ?? row.createdAt).getTime();
+        if (!conversationDue(age) || tries >= SWEEP_BATCH) {
+          out.pending += 1;
+          continue;
+        }
+        tries += 1;
+        if ((await this.attempt(row.id, noted, age, nowMs)) === 'cleared')
+          out.cleared += 1;
+        else out.pending += 1;
+      }
+      if (rows.length < SWEEP_BATCH) break;
+      last = rows[rows.length - 1];
+    }
   }
 }
