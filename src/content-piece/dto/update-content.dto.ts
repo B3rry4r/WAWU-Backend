@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -73,6 +74,20 @@ export class UpdateContentDto {
   @IsOptional()
   @IsUrl({ require_tld: false })
   previewAsset?: string;
+
+  /**
+   * UPLOAD-REST (R-118): "make my preview from the file I already have". For a piece that this edit leaves PAID and that has no
+   * preview of its own yet (a free piece going to paid: its preview is its own file) and that sends no `previewAsset`, the Hub
+   * makes the preview from the piece's stored full file exactly as `POST /content` does with the same flag: the first 30 seconds
+   * of audio or video (a third of a file under 45 seconds), the first 3 pages of a PDF (the first page of a file under 6 pages),
+   * the same of a course's first lesson, or a copy of the cover for a template or a course whose first lesson is not a video. It is
+   * stored as the piece's preview, counted once in the creator's storage, and given back if the edit does not go through. A picture
+   * is refused in words (it sends its own smaller copy as `previewAsset`). Left out, the edit reads exactly as it always did; sent on
+   * a piece that already has a preview of its own, or that stays free, it does nothing.
+   */
+  @IsOptional()
+  @IsBoolean()
+  previewFromFile?: boolean;
 
   @IsOptional()
   @IsUrl({ require_tld: false })

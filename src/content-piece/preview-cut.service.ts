@@ -118,7 +118,13 @@ export class PreviewCutService {
     }
   }
 
-  /** The stored row of a file the creator names, proved to be theirs, confirmed and still held. */
+  /**
+   * The stored row of a file the creator names, proved to be theirs and still held, and confirmed. The app never calls
+   * `POST /uploads/confirm` for a creator's upload (the sweep confirms it a quarter of an hour on), so a file sent for a piece
+   * a moment after it landed is still `pending`: the creator's OWN pending row is confirmed here exactly as storage confirms any
+   * upload (`StorageService.confirmUpload`: the bucket is asked, nothing else is a rule of ours), then cut. Another person's row,
+   * a released one and one the bucket does not hold are the same refusal as a file that never existed.
+   */
   private async ownedFile(
     creatorWawuId: string,
     asset: string,
@@ -128,6 +134,7 @@ export class PreviewCutService {
     const row = await this.prisma.storageObject.findUnique({
       where: { key },
       select: {
+        id: true,
         wawuUserId: true,
         folder: true,
         status: true,
@@ -140,9 +147,18 @@ export class PreviewCutService {
       !row ||
       row.wawuUserId !== creatorWawuId ||
       row.folder !== folder ||
-      row.status !== 'confirmed' ||
+      (row.status !== 'confirmed' && row.status !== 'pending') ||
       row.releasedAt ||
       row.removingAt
+    )
+      throw new BadRequestException(NO_SUCH_FILE);
+    // Asked of the bucket outside any lock or transaction (a network call); a bucket that cannot be asked is storage's own 503.
+    if (
+      !(await this.storage.confirmUpload({
+        id: row.id,
+        status: row.status,
+        key,
+      }))
     )
       throw new BadRequestException(NO_SUCH_FILE);
     return { key, contentType: row.contentType };

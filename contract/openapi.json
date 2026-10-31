@@ -47680,6 +47680,10 @@
             "type": "string",
             "format": "uri"
           },
+          "previewFromFile": {
+            "type": "boolean",
+            "description": "UPLOAD-REST (R-118): \"make my preview from the file I already have\". For a piece that this edit leaves PAID and that has no\npreview of its own yet (a free piece going to paid: its preview is its own file) and that sends no `previewAsset`, the Hub\nmakes the preview from the piece's stored full file exactly as `POST /content` does with the same flag: the first 30 seconds\nof audio or video (a third of a file under 45 seconds), the first 3 pages of a PDF (the first page of a file under 6 pages),\nthe same of a course's first lesson, or a copy of the cover for a template or a course whose first lesson is not a video. It is\nstored as the piece's preview, counted once in the creator's storage, and given back if the edit does not go through. A picture\nis refused in words (it sends its own smaller copy as `previewAsset`). Left out, the edit reads exactly as it always did; sent on\na piece that already has a preview of its own, or that stays free, it does nothing."
+          },
           "fullAsset": {
             "type": "string",
             "format": "uri"

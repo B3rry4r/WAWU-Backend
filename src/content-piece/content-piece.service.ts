@@ -118,8 +118,9 @@ class PlaceNotClaimed extends Error {
 }
 
 // Imported here, after the exported types, so they stay where they were.
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Optional, ServiceUnavailableException } from '@nestjs/common';
 import { PriceListService } from '../price-list/price-list.service';
+import { PreviewCutService } from './preview-cut.service';
 
 /**
  * Said when a listing names a file another person uploaded (SWEEP-APP-5, row
@@ -151,6 +152,9 @@ export class ContentPieceService {
     private readonly blockedAccounts: BlockedAccountService,
     private readonly gate: PublishingGate,
     private readonly priceList: PriceListService,
+    // UPLOAD-REST: makes the preview of a free piece that an edit turns to paid. Optional so a spec that builds this service by
+    // hand keeps working; without it the flag is ignored and the edit reads as it always did.
+    @Optional() private readonly previews?: PreviewCutService,
   ) {}
 
   /**
@@ -1181,9 +1185,20 @@ export class ContentPieceService {
     // already, or gets one when it is sent again (`resubmit`).
     // CONTENT-COVER: `coverAsset` is the key of the cover, or null to take it off; left out, the cover stays.
     const coverKey = coverKeyOf(creatorWawuId, dto.coverAsset);
+    // UPLOAD-REST (R-118): a free piece edited to paid has no preview of its own (its preview is its file). With the flag, the Hub
+    // makes one from the stored file, so nobody uploads a separate clip. That stores a file, so it needs a way to publish too.
+    const fullAsset = dto.fullAsset ?? existing.fullAssetUrl;
+    const wantsMade =
+      dto.previewFromFile === true &&
+      this.previews !== undefined &&
+      fullAsset !== null &&
+      (dto.accessType ?? existing.accessType) === 'paid' &&
+      dto.previewAsset === undefined &&
+      objectKeyFrom(existing.previewAssetUrl) === objectKeyFrom(fullAsset);
     if (
       dto.previewAsset !== undefined ||
       dto.fullAsset !== undefined ||
+      wantsMade ||
       (coverKey !== undefined && coverKey !== null)
     )
       await this.gate.assertMayUpload(creatorWawuId);
@@ -1227,9 +1242,12 @@ export class ContentPieceService {
     ) {
       this.priceList.assertOnList(price);
     }
-    const previewAsset = dto.previewAsset ?? existing.previewAssetUrl;
-    const fullAsset = dto.fullAsset ?? existing.fullAssetUrl;
-    if (accessType === 'paid' && previewAsset === fullAsset) {
+    // A paid piece whose preview is its own file is refused as it always was, unless the Hub is asked to make the preview.
+    if (
+      !wantsMade &&
+      accessType === 'paid' &&
+      (dto.previewAsset ?? existing.previewAssetUrl) === fullAsset
+    ) {
       throw new BadRequestException(
         'Paid content needs a separate free preview. previewAsset must not be the same file as fullAsset.',
       );
@@ -1241,6 +1259,50 @@ export class ContentPieceService {
       coverAsset: dto.coverAsset,
     });
 
+    // UPLOAD-REST: the preview made from the stored file, after every other check has passed so a refused edit stores nothing.
+    // The cut is a file of the creator's, counted once (the same name for the same full file, so a retry replaces it in place);
+    // it is given back below when the edit does not go through.
+    let made: { previewAsset: string; made: string | null } | null = null;
+    if (wantsMade && this.previews && fullAsset) {
+      made = await this.previews.resolve(creatorWawuId, {
+        contentType: existing.contentType,
+        accessType: 'paid',
+        fullAsset,
+        previewFromFile: true,
+        coverAsset:
+          typeof dto.coverAsset === 'string'
+            ? dto.coverAsset
+            : dto.coverAsset === null
+              ? null
+              : existing.coverKey,
+      });
+      changes.previewAssetUrl = made.previewAsset;
+    }
+    try {
+      return await this.writeEdit(
+        id,
+        creatorWawuId,
+        dto,
+        changes,
+        coverKey,
+        made?.previewAsset,
+      );
+    } catch (err) {
+      // A cut made for an edit that did not go through is given back, so it never counts.
+      await this.previews?.giveBack(creatorWawuId, made?.made ?? null);
+      throw err;
+    }
+  }
+
+  /** The write half of `updateMine`: the transaction that lands the edit, then the cover bookkeeping. */
+  private async writeEdit(
+    id: string,
+    creatorWawuId: string,
+    dto: UpdateContentDto,
+    changes: Prisma.ContentPieceUpdateManyMutationInput,
+    coverKey: string | null | undefined,
+    madePreview: string | undefined,
+  ): Promise<MyContentItem> {
     // Conditional on the status read above: a reviewer approving the piece
     // at this instant must win, and the edit must not land on a live piece.
     const { written, oldCover } = await inPersonsTurn(creatorWawuId, () =>
@@ -1248,6 +1310,7 @@ export class ContentPieceService {
         // A file this edit names must still be the person's (ME-04 round 4).
         await this.assertFilesNotGivenUp(tx, creatorWawuId, [
           dto.previewAsset,
+          madePreview,
           dto.fullAsset,
           dto.coverAsset,
         ]);
