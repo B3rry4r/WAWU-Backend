@@ -26582,6 +26582,68 @@
         ]
       }
     },
+    "/api/hub/admin/moderation/words": {
+      "get": {
+        "operationId": "AdminModerationWordsController_words",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "number"
+                    },
+                    "builtIn": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "category": {
+                            "type": "string"
+                          },
+                          "language": {
+                            "type": "string"
+                          },
+                          "words": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "category",
+                          "language",
+                          "words"
+                        ]
+                      }
+                    },
+                    "fromEnvironment": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "builtIn",
+                    "fromEnvironment"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminModerationWords"
+        ]
+      }
+    },
     "/api/hub/creators/{wawuId}/evg": {
       "get": {
         "operationId": "EvgScoreController_getEvgScore",
@@ -34332,6 +34394,172 @@
         },
         "tags": [
           "CommunityMessage"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/moderation": {
+      "get": {
+        "operationId": "CommunityRoomModerationController_view",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomModerationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/messages/{messageId}": {
+      "delete": {
+        "operationId": "CommunityRoomModerationController_deleteMessage",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/mutes/{userWawuId}": {
+      "put": {
+        "operationId": "CommunityRoomModerationController_mute",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userWawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "muted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "muted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      },
+      "delete": {
+        "operationId": "CommunityRoomModerationController_unmute",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userWawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "muted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "muted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
         ]
       }
     },
@@ -75388,6 +75616,24 @@
           "videoUrl",
           "voiceUrl",
           "costInCredits"
+        ]
+      },
+      "RoomModerationView": {
+        "type": "object",
+        "properties": {
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedMembers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "muted",
+          "mutedMembers"
         ]
       },
       "EventView": {

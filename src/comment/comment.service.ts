@@ -12,6 +12,7 @@ import { assertBuyerOnlyIfHidden } from '../content-piece/deletion-hid';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { Comment, CommentAuthor } from '../common/types';
 import type { CreateCommentDto } from './dto/create-comment.dto';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 /**
  * Comment resource — registry.json "Comment". Both endpoints require an
@@ -272,6 +273,9 @@ export class CommentService {
       content.creatorWawuId,
       'You cannot comment on this content.',
     );
+
+    // MOD-ROOMS (R-122). No listed word is posted: refused before anything is saved.
+    assertContentAllowed(dto.text);
 
     if (dto.replyToId) {
       const parent = await this.prisma.comment.findUnique({

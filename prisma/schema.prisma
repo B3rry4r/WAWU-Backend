@@ -1353,9 +1353,45 @@ model Community {
   /// INBOX-24 (R-63). Relation fields only: no column is added to Community.
   passPrice    CommunityPassPrice?
   passes       CommunityPass[]
+  /// MOD-ROOMS (R-122). Relation field only: no column is added to Community.
+  mutes        CommunityMute[]
 
   @@index([hostWawuId])
   @@index([kind])
+}
+
+/// MOD-ROOMS (R-122). A member the room's host has muted: they still read the room, but sending is refused ("The host
+/// has muted you in this room."). One row per room and member; unmuting deletes the row (the log below keeps the
+/// history). The row stays if the member leaves and joins again, so leaving is not a way round a mute. Muting never
+/// touches money: a pass, a credit or a refund is exactly what it was.
+model CommunityMute {
+  id            String    @id @default(uuid())
+  communityId   String
+  community     Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userWawuId    String
+  mutedByWawuId String
+  mutedAt       DateTime  @default(now())
+
+  @@unique([communityId, userWawuId])
+  @@index([userWawuId])
+}
+
+/// MOD-ROOMS (R-122). What a room's host did to a message or a member in their own room: who, what, when. Written in the
+/// same transaction as the act. No foreign key to the room on purpose: the record outlives the room. `action` is one of
+/// `message_deleted`, `member_muted`, `member_unmuted` (a CHECK in the migration). For a deleted message `messageId` and
+/// `messageKind` (text, photo, video or voice) say which one and `targetWawuId` who wrote it; the words are not kept.
+model CommunityModerationLog {
+  id           String   @id @default(uuid())
+  communityId  String
+  actorWawuId  String
+  action       String
+  targetWawuId String?
+  messageId    String?
+  messageKind  String?
+  createdAt    DateTime @default(now())
+
+  @@index([communityId, createdAt])
+  @@index([actorWawuId])
 }
 
 /// INBOX-24 (R-63). The monthly price a private community sells its pass at,

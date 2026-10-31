@@ -121,6 +121,7 @@ class PlaceNotClaimed extends Error {
 import { Optional, ServiceUnavailableException } from '@nestjs/common';
 import { PriceListService } from '../price-list/price-list.service';
 import { PreviewCutService } from './preview-cut.service';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 /**
  * Said when a listing names a file another person uploaded (SWEEP-APP-5, row
@@ -879,6 +880,8 @@ export class ContentPieceService {
     dto: CreateContentDto,
     inTransaction?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<ContentPieceResponse> {
+    // MOD-ROOMS (R-122). No listed word in a title or description: refused before anything is checked or saved.
+    assertContentAllowed(dto.title, dto.description);
     // Publishing needs a tier (R-43, TIER-02), or a verification tick that has
     // not ended, and a free place for one more product. CreatorAccountGuard on
     // POST /content has already proved this caller is a creator account.
@@ -1174,6 +1177,8 @@ export class ContentPieceService {
     creatorWawuId: string,
     dto: UpdateContentDto,
   ): Promise<MyContentItem> {
+    // MOD-ROOMS (R-122). Only the words this edit carries are read.
+    assertContentAllowed(dto.title, dto.description);
     const existing = await this.ownPieceOrThrow(id, creatorWawuId);
     if (existing.status === 'live') {
       throw new ConflictException(

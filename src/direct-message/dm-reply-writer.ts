@@ -11,6 +11,7 @@ import type {
 import { PrismaService } from '../common/prisma/prisma.service';
 import { DmAnsweredHooks } from './dm-answered-hooks';
 import { isStoreQuestionRef } from './store-question-ref';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 /** `first`: the legacy route, which answers a question once. `any`: INBOX-08, which adds bubbles while the window is open. */
 export type ReplyMode = 'first' | 'any';
@@ -76,6 +77,8 @@ export class DmReplyWriter {
     mode: ReplyMode,
     idempotencyKey?: string,
   ): Promise<PostedReply> {
+    // MOD-ROOMS (R-122). No listed word is answered: refused before the bubble is stored or the held price is released.
+    assertContentAllowed(text);
     if (idempotencyKey) {
       const earlier = await this.earlierReply(creatorWawuId, idempotencyKey);
       if (earlier) return this.replayOf(earlier, messageId, text);

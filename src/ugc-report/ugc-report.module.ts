@@ -5,6 +5,7 @@ import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { AdminContentReviewModule } from '../admin/content-review/admin-content-review.module';
 import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
 import { UserSuspensionModule } from '../user-suspension/user-suspension.module';
+import { ModerationModule } from '../moderation/moderation.module';
 import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { AdminUgcReportsController } from './admin-ugc-reports.controller';
 import { AdminUgcReportsService } from './admin-ugc-reports.service';
@@ -21,6 +22,8 @@ import { UgcReportService } from './ugc-report.service';
     AdminContentReviewModule,
     UserSuspensionModule,
     AdminOpsAuditModule,
+    // MOD-ROOMS (R-122): the moderators' read of the word list.
+    ModerationModule,
   ],
   controllers: [UgcReportController, AdminUgcReportsController],
   providers: [

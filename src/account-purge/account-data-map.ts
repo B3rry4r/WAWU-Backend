@@ -75,6 +75,21 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // USER-SUSPEND (R-121): a suspension is a moderator's act on a person. Kept deliberately, like the other audit rows:
   // a record of why someone was suspended must not vanish when they delete their account.
   { model: 'UserSuspension', column: 'wawuUserId', disposition: 'AUDIT' },
+  // MOD-ROOMS (R-122): a mute is a host's act on a member of their room. The row exists because the member does, so it
+  // goes with them; the ones a host placed go with the host.
+  { model: 'CommunityMute', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'CommunityMute', column: 'mutedByWawuId', disposition: 'OWNED' },
+  // What a host did in their room (who, what, when) is a moderation record: kept, like the other audit rows.
+  {
+    model: 'CommunityModerationLog',
+    column: 'actorWawuId',
+    disposition: 'AUDIT',
+  },
+  {
+    model: 'CommunityModerationLog',
+    column: 'targetWawuId',
+    disposition: 'AUDIT',
+  },
   // The key a reply bubble was sent under (INBOX-18 round 2): one row per
   // bubble, made by the same creator, so it is their sending record. Listed
   // before DmReply, which it points at; it would also go with the bubble

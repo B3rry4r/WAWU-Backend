@@ -41,6 +41,7 @@ import { eventOptions, type EventOptionsView } from './event-options';
 import type { EventFromPricesView } from './event-view.type';
 import type { UpdateEventDto } from './dto/update-event.dto';
 import type { ListEventsQueryDto } from './dto/list-events-query.dto';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 type EventWithSpeakers = EventModel & { speakers: EventSpeakerModel[] };
 
@@ -358,6 +359,14 @@ export class EventService {
    * event detail carry the event's ticket types (R-42, EVENTS-11).
    */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
+    // MOD-ROOMS (R-122). No listed word in what an event shows: refused before anything is checked or saved.
+    assertContentAllowed(
+      dto.name,
+      dto.description,
+      dto.hostOrg,
+      dto.hostOrgBio,
+      dto.ticketTypes?.map((t) => t.name),
+    );
     const listCheck = this.priceList.forThisRequest();
     await this.assertMayHost(userWawuId);
     const startsAt = new Date(dto.startsAt);
@@ -424,6 +433,13 @@ export class EventService {
     userWawuId: string,
     dto: UpdateEventDto,
   ): Promise<EventView> {
+    // MOD-ROOMS (R-122). Only the words this edit carries are read.
+    assertContentAllowed(
+      dto.name,
+      dto.description,
+      dto.hostOrg,
+      dto.hostOrgBio,
+    );
     // Checked on the edit as well as the create. A tick or tier that lapses
     // after an event was approved must not leave its host with a write path
     // that the create path refuses, and every edit re-enters the moderation

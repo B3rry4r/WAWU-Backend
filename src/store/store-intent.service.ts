@@ -24,6 +24,7 @@ import {
 } from './question/store-question-rules';
 import type { StoreIntentDto, StorePurchaseDto } from './store.dto';
 import type { StoreIntentView } from './store-view.type';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 /** What `prepare` has checked, ready to open an intent from. */
 export interface ReadyIntent {
@@ -88,6 +89,8 @@ export class StoreIntentService {
    * that price. Nothing is written.
    */
   async prepare(userId: string, dto: StoreIntentDto): Promise<ReadyIntent> {
+    // MOD-ROOMS (R-122). A store question's words are checked before anything else, so no intent is made for them.
+    if (dto.kind === 'question') assertContentAllowed(dto.text);
     await this.catalog.assertOpen(dto.platform);
     const targetId = this.targetIdOf(dto);
     this.prices.assertOnList(dto.listPriceNaira);

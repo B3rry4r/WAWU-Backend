@@ -21,6 +21,11 @@ import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityKind } from '../../generated/prisma/enums';
 import type { CommunityMessage, CommunityMessageSender } from '../common/types';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { assertContentAllowed } from '../moderation/content-filter';
+import {
+  MUTED_IN_ROOM_CODE,
+  MUTED_IN_ROOM_MESSAGE,
+} from './community-room-moderation.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import { LivePublisher } from '../live/live-publisher.service';
@@ -678,6 +683,25 @@ export class CommunityMessageService {
       communityId,
     );
     await this.assertMember(communityId, senderWawuId, community.hostWawuId);
+
+    // MOD-ROOMS (R-122). A member the host muted reads the room but cannot send. Checked before the words, the charge and
+    // the repeat shortcut, so a muted person is told so whatever they send and nothing is stored or spent.
+    if (senderWawuId !== community.hostWawuId) {
+      const muted = await this.prisma.communityMute.findUnique({
+        where: {
+          communityId_userWawuId: { communityId, userWawuId: senderWawuId },
+        },
+        select: { id: true },
+      });
+      if (muted) {
+        throw new ForbiddenException({
+          message: MUTED_IN_ROOM_MESSAGE,
+          reason: { code: MUTED_IN_ROOM_CODE, message: MUTED_IN_ROOM_MESSAGE },
+        });
+      }
+    }
+    // MOD-ROOMS (R-122). No listed word is posted: refused here, before anything is stored or charged.
+    assertContentAllowed(text);
 
     // A repeat that is not racing anything: answered from the row, nothing
     // stored or charged (see create() for why the index, not this, decides).

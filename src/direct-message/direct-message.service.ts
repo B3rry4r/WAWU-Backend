@@ -22,6 +22,7 @@ import { PaidDmPauseService } from './paid-dm-pause.service';
 import type { SendDmDto } from './dto/send-dm.dto';
 import type { VerifyDmDto } from './dto/verify-dm.dto';
 import type { RespondDmDto } from './dto/respond-dm.dto';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 /** Fallback only, for a creator row written before dmResponseHours existed. */
@@ -226,6 +227,9 @@ export class DirectMessageService {
     if (creatorWawuId === senderWawuId) {
       throw new BadRequestException('Cannot send a paid DM to yourself');
     }
+
+    // MOD-ROOMS (R-122). No listed word is asked: refused before the charge is made.
+    assertContentAllowed(dto.text);
 
     // THE blocking gate. Enforced here — at send-init, before the
     // Flutterwave charge is created — and deliberately not at

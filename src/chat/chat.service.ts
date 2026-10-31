@@ -43,6 +43,7 @@ import type {
   MarkChatReadDto,
   ChatSendMessageDto,
 } from './dto/chat.dto';
+import { assertContentAllowed } from '../moderation/content-filter';
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -365,6 +366,9 @@ export class ChatService {
         'A message needs some text, a photo, a video or a file.',
       );
     }
+
+    // MOD-ROOMS (R-122). No listed word is sent: refused before anything is saved. A file's name is read by the other person too.
+    assertContentAllowed(dto.text, dto.attachment?.name);
 
     if (dto.clientMessageId !== undefined) {
       const earlier = await this.prisma.chatMessage.findUnique({
