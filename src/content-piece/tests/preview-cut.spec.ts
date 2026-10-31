@@ -6,6 +6,7 @@ import {
 } from '../../../test/ai-tools/media-fixtures';
 import { cutMp3, cutWav } from '../preview-cut/cut-audio';
 import { cutMp4 } from '../preview-cut/cut-mp4';
+import { cutPdf, previewPagesFor } from '../preview-cut/cut-pdf';
 import {
   CutRefusal,
   CUT_WORDS,
@@ -16,6 +17,8 @@ import {
   VIDEO_SAMPLE,
   sourceOf,
   syntheticMp4,
+  pdfFile,
+  pdfPageCount,
 } from '../../../test/content-piece/preview-fixtures';
 
 /**
@@ -181,5 +184,54 @@ describe('an MP4 preview', () => {
       0,
     );
     expect(read).toBeLessThan(full.length / 4);
+  });
+});
+
+describe('a PDF preview (R-118)', () => {
+  it('holds 3 pages for 6 or more, and 1 for fewer', () => {
+    expect(previewPagesFor(84)).toBe(3);
+    expect(previewPagesFor(6)).toBe(3);
+    expect(previewPagesFor(5)).toBe(1);
+    expect(previewPagesFor(2)).toBe(1);
+  });
+
+  it('is the first 3 pages of a long file, counted from the stored cut', async () => {
+    const full = await pdfFile(12, { pad: 40_000 });
+    const out = await cutPdf(sourceOf(full));
+    expect(out.contentType).toBe('application/pdf');
+    expect(out.pages).toBe(3);
+    expect(out.sourcePages).toBe(12);
+    expect(await pdfPageCount(out.body)).toBe(3);
+    // only what its pages use came along: the nine pages left out take their pictures with them
+    expect(out.body.length).toBeLessThan(full.length / 2);
+  });
+
+  it('is the first page of a file under 6 pages, and of a file of exactly 6 it is 3', async () => {
+    expect(
+      await pdfPageCount((await cutPdf(sourceOf(await pdfFile(5)))).body),
+    ).toBe(1);
+    expect(
+      await pdfPageCount((await cutPdf(sourceOf(await pdfFile(6)))).body),
+    ).toBe(3);
+  });
+
+  it("refuses a one page file, a locked file and a file that is not a PDF, each in the Hub's own words", async () => {
+    await expect(cutPdf(sourceOf(await pdfFile(1)))).rejects.toMatchObject({
+      message: CUT_WORDS.single_page,
+    });
+    await expect(
+      cutPdf(sourceOf(await pdfFile(8, { locked: true }))),
+    ).rejects.toMatchObject({ message: CUT_WORDS.locked });
+    await expect(
+      cutPdf(sourceOf(Buffer.from('not a pdf at all, just words'))),
+    ).rejects.toMatchObject({ message: CUT_WORDS.unsupported });
+    await expect(cutPdf(sourceOf(Buffer.alloc(0)))).rejects.toBeInstanceOf(
+      CutRefusal,
+    );
+  });
+
+  it('none of the refusal words sends the creator to an own clip the app no longer has', () => {
+    for (const words of Object.values(CUT_WORDS))
+      expect(words.toLowerCase()).not.toContain('own clip');
   });
 });

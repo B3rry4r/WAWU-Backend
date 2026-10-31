@@ -188,6 +188,36 @@ export function syntheticMp4(
   return Buffer.concat([ftyp, mdat, moovFor(ftyp.length + 8)]);
 }
 
+/**
+ * A PDF of `pages` pages, each carrying its own page number as text (so a cut can be read back page by page), with a font and, on every
+ * page, a picture-sized stream of `pad` bytes (so a cut that drops what its pages do not use is smaller than the whole). `locked` writes
+ * a trailer that names an encryption dictionary, as a PDF with a password does.
+ */
+export async function pdfFile(
+  pages: number,
+  opts: { pad?: number; locked?: boolean } = {},
+): Promise<Buffer> {
+  const { PDFDocument, StandardFonts, PDFName } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 1; i <= pages; i += 1) {
+    const page = doc.addPage([300, 400]);
+    page.drawText(`Page ${i} of the sample`, { x: 20, y: 360, size: 14, font });
+    if (opts.pad) {
+      const pad = doc.context.flateStream(Buffer.alloc(opts.pad, i & 0xff));
+      page.node.set(PDFName.of(`Pad${i}`), doc.context.register(pad));
+    }
+  }
+  if (opts.locked) doc.context.trailerInfo.Encrypt = doc.context.obj({});
+  return Buffer.from(await doc.save());
+}
+
+/** The pages of a PDF, as text in reading order: `Page 1 of the sample`, ... (read back with the same library the Hub cuts with). */
+export async function pdfPageCount(file: Buffer): Promise<number> {
+  const { PDFDocument } = await import('pdf-lib');
+  return (await PDFDocument.load(file)).getPageCount();
+}
+
 /** A source over a buffer, as the cutters read a stored file. */
 export function sourceOf(file: Buffer): {
   length: number;

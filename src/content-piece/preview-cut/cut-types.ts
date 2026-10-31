@@ -31,20 +31,33 @@ export interface CutSource {
 export interface CutResult {
   body: Buffer;
   contentType: string;
-  /** The length of the preview, in seconds. */
+  /** The length of the preview, in seconds (0 for a PDF, which is cut by pages). */
   seconds: number;
-  /** The length of the whole file, in seconds (read from the file, or estimated for an MP3 with no length header). */
+  /** The length of the whole file, in seconds (read from the file, or estimated for an MP3 with no length header; 0 for a PDF). */
   sourceSeconds: number;
+  /** A PDF only: the pages the preview holds, and the pages the whole file has. */
+  pages?: number;
+  sourcePages?: number;
 }
 
-export type CutRefusalCode = 'too_short' | 'unsupported' | 'too_big';
+export type CutRefusalCode =
+  'too_short' | 'unsupported' | 'too_big' | 'single_page' | 'locked';
 
-/** The words the creator is shown when the Hub cannot cut a preview (the creator can always use their own clip). */
+/**
+ * The words the creator is shown when the Hub cannot make a preview. R-118: the app has no "own clip" any more, so none of them
+ * sends the creator to one; each says what to do with the piece itself.
+ */
 export const CUT_WORDS: Record<CutRefusalCode, string> = {
   too_short:
-    'This file is too short to make a preview from. Use your own clip.',
-  unsupported: 'We could not make a preview from this file. Use your own clip.',
-  too_big: 'This file is too large to make a preview from. Use your own clip.',
+    'This file is too short to make a preview from. Choose a longer one.',
+  unsupported:
+    'We could not make a preview from this file. Choose another one.',
+  too_big:
+    'This file is too large to make a preview from. Choose a smaller one.',
+  single_page:
+    'This PDF has only one page, so there is nothing to keep back for a preview. Add more pages, or make it free.',
+  locked:
+    'This PDF is protected with a password, so we cannot make a preview from it. Remove the protection and upload it again.',
 };
 
 /** A file the cutters cannot make a preview from; `message` is the Hub's own words. */

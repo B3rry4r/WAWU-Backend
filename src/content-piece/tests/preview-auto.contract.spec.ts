@@ -29,8 +29,16 @@ import { StorageModule } from '../../storage/storage.module';
 import { StorageService, objectKeyFrom } from '../../storage/storage.service';
 import { ContentPieceModule } from '../content-piece.module';
 import { CUT_WORDS } from '../preview-cut/cut-types';
-import { NEEDS_PREVIEW, CANNOT_MAKE } from '../preview-cut.service';
-import { syntheticMp4 } from '../../../test/content-piece/preview-fixtures';
+import {
+  NEEDS_PREVIEW,
+  CANNOT_MAKE,
+  NEEDS_COVER,
+} from '../preview-cut.service';
+import {
+  syntheticMp4,
+  pdfFile,
+  pdfPageCount,
+} from '../../../test/content-piece/preview-fixtures';
 
 /**
  * PREVIEW-AUTO (owner, 31 Oct 2026: "why would audio ask for a 30 60 second preview clip?"). Over HTTP on the real database; the
@@ -88,12 +96,15 @@ describe('A paid audio or video piece has its preview made from its file (PREVIE
   }
 
   /** A full file that has landed: presigned, in the bucket with its real bytes, confirmed. */
-  async function fullFile(contentType: string, body: Buffer) {
+  const fullFile = (contentType: string, body: Buffer) =>
+    landed('content/full', contentType, body);
+
+  async function landed(folder: string, contentType: string, body: Buffer) {
     const res = await request(server())
       .post('/uploads/presign')
       .set('Authorization', bearer(MAKER))
       .send({
-        folder: 'content/full',
+        folder,
         contentType,
         extension: 'x',
         contentLength: body.length,
@@ -384,16 +395,19 @@ describe('A paid audio or video piece has its preview made from its file (PREVIE
     ).toBe(0);
   });
 
-  it('refuses a paid piece that asks for no preview, and a pdf that asks for a cut', async () => {
+  it('refuses a paid piece that asks for no preview, and a picture that asks the Hub for its preview', async () => {
     const full = await fullFile('audio/mpeg', mp3File(100));
     const none = await post(listing({ fullAsset: full.fileUrl }));
     expect(none.status).toBe(400);
     expect(message(none)).toBe(NEEDS_PREVIEW);
-    const pdf = await fullFile('application/pdf', Buffer.from('%PDF-1.4 x'));
+    const picture = await fullFile(
+      'image/png',
+      Buffer.from('not really a png'),
+    );
     const cut = await post(
       listing({
-        contentType: 'pdf',
-        fullAsset: pdf.fileUrl,
+        contentType: 'image',
+        fullAsset: picture.fileUrl,
         previewFromFile: true,
       }),
     );
@@ -466,5 +480,203 @@ describe('A paid audio or video piece has its preview made from its file (PREVIE
       .send({ fullAsset: full.fileUrl });
     expect(res.status).toBe(201);
     expect(objectKeyFrom((await pieceRow(res)).previewAssetUrl)).toBe(full.key);
+  });
+
+  // ── R-118 for the other kinds ─────────────────────────────────────────────
+
+  it("makes a PAID PDF piece's preview from its first 3 pages (counted from the stored preview), counted once", async () => {
+    const whole = await pdfFile(12, { pad: 30_000 });
+    const full = await fullFile('application/pdf', whole);
+    const res = await post(
+      listing({
+        contentType: 'pdf',
+        fullAsset: full.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const key = objectKeyFrom((await pieceRow(res)).previewAssetUrl);
+    expect(key).toMatch(
+      new RegExp(`^content/preview/${MAKER}/auto-[0-9a-f]{20}\\.pdf$`),
+    );
+    expect(puts).toEqual([key]);
+    const stored = bucket.get(key)!;
+    expect(await pdfPageCount(stored)).toBe(3);
+    expect(stored.length).toBeLessThan(whole.length / 2);
+    const row = await prisma.storageObject.findUniqueOrThrow({
+      where: { key },
+    });
+    expect(row).toMatchObject({
+      status: 'confirmed',
+      folder: 'content/preview',
+      contentType: 'application/pdf',
+    });
+    expect(await used()).toBe(whole.length + stored.length);
+  });
+
+  it('takes the first page of a PDF under 6 pages, and refuses a one page PDF and a locked one in words', async () => {
+    const short = await fullFile('application/pdf', await pdfFile(4));
+    const ok = await post(
+      listing({
+        contentType: 'pdf',
+        fullAsset: short.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(ok.status).toBe(201);
+    expect(
+      await pdfPageCount(
+        bucket.get(objectKeyFrom((await pieceRow(ok)).previewAssetUrl))!,
+      ),
+    ).toBe(1);
+    puts = [];
+    const one = await fullFile('application/pdf', await pdfFile(1));
+    const refused = await post(
+      listing({
+        contentType: 'pdf',
+        fullAsset: one.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(refused.status).toBe(400);
+    expect(message(refused)).toBe(CUT_WORDS.single_page);
+    const locked = await fullFile(
+      'application/pdf',
+      await pdfFile(9, { locked: true }),
+    );
+    const lockedRes = await post(
+      listing({
+        contentType: 'pdf',
+        fullAsset: locked.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(lockedRes.status).toBe(400);
+    expect(message(lockedRes)).toBe(CUT_WORDS.locked);
+    expect(puts).toEqual([]);
+  });
+
+  it("cuts a PAID course's preview from its FIRST LESSON when that is a video", async () => {
+    const lesson = await fullFile('video/mp4', syntheticMp4(100));
+    const res = await post(
+      listing({
+        contentType: 'course',
+        fullAsset: lesson.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const key = objectKeyFrom((await pieceRow(res)).previewAssetUrl);
+    expect(key).toMatch(/\/auto-[0-9a-f]{20}\.mp4$/);
+    expect(await seconds(bucket.get(key)!, 'video/mp4')).toBeCloseTo(30, 0);
+    expect(await used()).toBe(
+      syntheticMp4(100).length + bucket.get(key)!.length,
+    );
+  });
+
+  it("makes a course's preview from its cover when the first lesson is not a video, and a template's from its cover; each is a copy of its own, counted once", async () => {
+    const cover = await landed(
+      'content/cover',
+      'image/png',
+      Buffer.from('89504e470d0a1a0a-cover-bytes', 'utf8'),
+    );
+    const doc = await fullFile('application/pdf', await pdfFile(9));
+    const course = await post(
+      listing({
+        contentType: 'course',
+        fullAsset: doc.fileUrl,
+        coverAsset: cover.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(course.status).toBe(201);
+    const key = objectKeyFrom((await pieceRow(course)).previewAssetUrl);
+    expect(key).toMatch(
+      new RegExp(`^content/preview/${MAKER}/auto-[0-9a-f]{20}\\.png$`),
+    );
+    expect(key).not.toBe(cover.key);
+    expect(bucket.get(key)!.equals(bucket.get(cover.key)!)).toBe(true);
+    const sheet = await fullFile(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      Buffer.alloc(5000, 7),
+    );
+    const template = await post(
+      listing({
+        contentType: 'template',
+        fullAsset: sheet.fileUrl,
+        coverAsset: cover.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(template.status).toBe(201);
+    const tKey = objectKeyFrom((await pieceRow(template)).previewAssetUrl);
+    expect(tKey).toBe(key); // the same name for the same cover: replaced in place, never counted twice
+    const previews = await prisma.storageObject.count({
+      where: {
+        wawuUserId: MAKER,
+        folder: 'content/preview',
+        status: 'confirmed',
+      },
+    });
+    expect(previews).toBe(1);
+  });
+
+  it('asks for a cover, in words, when a template or a course of documents has none', async () => {
+    const sheet = await fullFile(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      Buffer.alloc(5000, 7),
+    );
+    const template = await post(
+      listing({
+        contentType: 'template',
+        fullAsset: sheet.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(template.status).toBe(400);
+    expect(message(template)).toBe(NEEDS_COVER);
+    const doc = await fullFile('application/pdf', await pdfFile(9));
+    const course = await post(
+      listing({
+        contentType: 'course',
+        fullAsset: doc.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(course.status).toBe(400);
+    expect(message(course)).toBe(NEEDS_COVER);
+    expect(puts).toEqual([]);
+  });
+
+  it("a picture's own smaller copy is used as sent, and a FREE picture needs none", async () => {
+    const full = await fullFile('image/png', Buffer.alloc(9000, 3));
+    const small = await landed(
+      'content/preview',
+      'image/jpeg',
+      Buffer.alloc(900, 4),
+    );
+    const paid = await post(
+      listing({
+        contentType: 'image',
+        fullAsset: full.fileUrl,
+        previewAsset: small.fileUrl,
+      }),
+    );
+    expect(paid.status).toBe(201);
+    expect(objectKeyFrom((await pieceRow(paid)).previewAssetUrl)).toBe(
+      small.key,
+    );
+    const free = await post(
+      listing({
+        contentType: 'image',
+        accessType: 'free',
+        price: 0,
+        fullAsset: full.fileUrl,
+      }),
+    );
+    expect(free.status).toBe(201);
+    expect(objectKeyFrom((await pieceRow(free)).previewAssetUrl)).toBe(
+      full.key,
+    );
   });
 });

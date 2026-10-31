@@ -247,6 +247,7 @@ export class ProductDraftService {
           fullAsset: piece.fullAsset,
           previewAsset: dto.previewAsset,
           previewFromFile: dto.previewFromFile,
+          coverAsset: piece.coverAsset,
         })
       : { previewAsset: dto.previewAsset, made: null };
     const out = { ...piece, previewAsset: preview.previewAsset };
