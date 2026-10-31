@@ -1268,6 +1268,36 @@ model DmReport {
   @@index([reporterWawuId])
 }
 
+/// REPORT-UGC (store review: Apple 1.2, Google Play UGC policy). One report of one thing a person saw: a piece, a
+/// comment, a profile, a community message, a chat message or a paid question. `targetId` is that thing's id (a profile's
+/// is the person's wawuId); there is no foreign key because the target is one of six tables. `subjectWawuId` is the
+/// person who made it (for a profile, the person), so a moderator and the account purge find the reports about a person.
+/// One report per person per item: a repeat answers this row. `status` is open, dismissed or actioned (the item was taken
+/// down); the resolving admin is kept on the row. `emailedAt` is set when the support mail was handed to WAWU ID.
+model UgcReport {
+  id                   String     @id @default(uuid())
+  kind                 String
+  targetId             String
+  subjectWawuId        String
+  reporterWawuId       String
+  reason               String
+  note                 String?
+  status               String     @default("open")
+  resolution           String?
+  resolvedAt           DateTime?
+  resolvedByAdminId    String?
+  resolvedByAdminEmail String?
+  resolvedByAdminRole  AdminRole?
+  emailedAt            DateTime?
+  createdAt            DateTime   @default(now())
+
+  @@unique([reporterWawuId, kind, targetId])
+  @@index([status, createdAt])
+  @@index([kind, targetId])
+  @@index([subjectWawuId])
+  @@index([reporterWawuId, kind])
+}
+
 // -----------------------------------------------------------------------------
 // Communities & credits
 // -----------------------------------------------------------------------------

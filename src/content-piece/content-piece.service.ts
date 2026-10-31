@@ -307,6 +307,11 @@ export class ContentPieceService {
       scope === 'mine'
         ? []
         : await this.blockedAccounts.hiddenFrom(requesterWawuId);
+    // REPORT-UGC: a piece the caller reported never comes back to them (them only).
+    const reported =
+      scope === 'mine'
+        ? []
+        : await this.blockedAccounts.reportedIds(requesterWawuId, 'piece');
 
     // Following (HOME-04): live pieces by the people the requester follows,
     // newest first. A follow edge is one row per (follower, creator), so
@@ -327,6 +332,7 @@ export class ContentPieceService {
         ? {
             status: 'live' as const,
             creatorWawuId: { in: followedIds, notIn: hidden },
+            id: { notIn: reported },
             ...(category ? { category } : {}),
           }
         : scope === 'mine'
@@ -342,6 +348,7 @@ export class ContentPieceService {
           : {
               status: 'live' as const,
               creatorWawuId: { notIn: hidden },
+              id: { notIn: reported },
               ...(category ? { category } : {}),
             };
 
@@ -375,6 +382,7 @@ export class ContentPieceService {
           page,
           perPage,
           hidden,
+          reported,
         );
       } catch (e) {
         this.logger.error(
@@ -417,6 +425,7 @@ export class ContentPieceService {
     page: number,
     perPage: number,
     hidden: string[],
+    reported: string[] = [],
   ): Promise<[ContentPieceRow[], number]> {
     // Every weight is cast to numeric. Postgres infers a bound parameter's type
     // from its context, so `c."views" * $n` typed the 0.1 view weight as an
@@ -454,6 +463,7 @@ export class ContentPieceService {
       ) p ON p."contentId" = c."id"
       WHERE c."status" = 'live' ${categoryFilter}
         AND NOT (c."creatorWawuId" = ANY(${hidden}::text[]))
+        AND NOT (c."id" = ANY(${reported}::text[]))
       ORDER BY ${score} DESC, c."createdAt" DESC
       LIMIT ${perPage} OFFSET ${(page - 1) * perPage}
     `);
@@ -462,6 +472,7 @@ export class ContentPieceService {
       where: {
         status: 'live',
         creatorWawuId: { notIn: hidden },
+        id: { notIn: reported },
         ...(category ? { category } : {}),
       },
     });
@@ -511,7 +522,17 @@ export class ContentPieceService {
       });
       if (!exists) throw new NotFoundException('User not found');
     }
-    const where = { creatorWawuId, status: 'live' as const };
+    // REPORT-UGC: a piece the caller reported is left out of the creator's shelf for them only.
+    // A signed-out reader has reported nothing. Opening the piece by its own link still works.
+    const reported = await this.blockedAccounts.reportedIds(
+      requesterWawuId,
+      'piece',
+    );
+    const where = {
+      creatorWawuId,
+      status: 'live' as const,
+      id: { notIn: reported },
+    };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.contentPiece.findMany({

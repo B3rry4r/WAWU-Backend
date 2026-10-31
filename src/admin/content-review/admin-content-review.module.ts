@@ -33,5 +33,7 @@ import { GeoModule } from '../../geo/geo.module';
   ],
   controllers: [AdminContentReviewController],
   providers: [AdminContentReviewService],
+  // REPORT-UGC: the reports queue takes a reported piece down through the same take-down.
+  exports: [AdminContentReviewService],
 })
 export class AdminContentReviewModule {}

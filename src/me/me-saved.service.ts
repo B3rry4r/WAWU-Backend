@@ -46,6 +46,8 @@ const COURSE_NOT_FOUND = 'Course not found.';
  * A save of something hidden by a block (SETTINGS-04: the caller blocked its
  * creator, host or the person, or was blocked by them) is not listed and not
  * counted. The save row itself is kept: unblocking brings it back.
+ * A piece the caller reported (REPORT-UGC) is left out the same way, for the
+ * caller only.
  *
  * The rows come from three tables (SavedItem, EventSave, SavedCreator). One
  * SQL statement merges them, so a page is ordered across all three and the
@@ -61,7 +63,12 @@ export class MeSavedService {
   ) {}
 
   /** The union of the caller's visible saves, as (kind, id, at, ref). */
-  private rowsSql(me: string, hidden: string[], tab: SavedTab): Prisma.Sql {
+  private rowsSql(
+    me: string,
+    hidden: string[],
+    tab: SavedTab,
+    reported: string[],
+  ): Prisma.Sql {
     const parts: Prisma.Sql[] = [];
     if (tab === 'all' || tab === 'content') {
       parts.push(Prisma.sql`
@@ -70,7 +77,8 @@ export class MeSavedService {
         JOIN "ContentPiece" c ON c."id" = s."contentId"
         WHERE s."userWawuId" = ${me}
           AND c."status" = 'live'
-          AND NOT (c."creatorWawuId" = ANY(${hidden}::text[]))`);
+          AND NOT (c."creatorWawuId" = ANY(${hidden}::text[]))
+          AND NOT (c."id" = ANY(${reported}::text[]))`);
     }
     if (tab === 'all' || tab === 'events') {
       parts.push(Prisma.sql`
@@ -106,8 +114,9 @@ export class MeSavedService {
   /** M7's "Saved 31": what GET /me/saved would list in full. */
   async count(me: string): Promise<number> {
     const hidden = await this.blocked.hiddenFrom(me);
+    const reported = await this.blocked.reportedIds(me, 'piece');
     const [row] = await this.prisma.$queryRaw<{ n: bigint }[]>(Prisma.sql`
-      SELECT COUNT(*)::bigint AS "n" FROM (${this.rowsSql(me, hidden, 'all')}) x`);
+      SELECT COUNT(*)::bigint AS "n" FROM (${this.rowsSql(me, hidden, 'all', reported)}) x`);
     return Number(row?.n ?? 0);
   }
 
@@ -120,12 +129,14 @@ export class MeSavedService {
   ): Promise<SavedPage> {
     const cursor = decodeMeCursor(rawCursor);
     const hidden = await this.blocked.hiddenFrom(me);
+    // REPORT-UGC: a piece the caller reported is left out of Saved for them only (the save row is kept).
+    const reported = await this.blocked.reportedIds(me, 'piece');
     const after = cursor
       ? Prisma.sql`WHERE (x."at", x."id") < ((${cursor.at.toISOString()}::timestamptz AT TIME ZONE 'UTC'), ${cursor.id}::text)`
       : Prisma.empty;
     const fetched = await this.prisma.$queryRaw<SavedRow[]>(Prisma.sql`
       SELECT x."kind", x."id", x."at", x."ref"
-      FROM (${this.rowsSql(me, hidden, tab)}) x
+      FROM (${this.rowsSql(me, hidden, tab, reported)}) x
       ${after}
       ORDER BY x."at" DESC, x."id" DESC
       LIMIT ${limit + 1}`);

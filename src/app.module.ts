@@ -31,6 +31,7 @@ import { CreditSpendModule } from './credit-spend/credit-spend.module';
 import { CreditsStateModule } from './credits-state/credits-state.module';
 import { DataExportRequestModule } from './data-export-request/data-export-request.module';
 import { DmReportModule } from './dm-report/dm-report.module';
+import { UgcReportModule } from './ugc-report/ugc-report.module';
 import { EvgScoreModule } from './evg-score/evg-score.module';
 import { LearnCourseModule } from './learn-course/learn-course.module';
 import { LearnGuideModule } from './learn-guide/learn-guide.module';
@@ -311,6 +312,7 @@ import { PushModule } from './push/push.module';
     CreditsStateModule,
     DataExportRequestModule,
     DmReportModule,
+    UgcReportModule,
     EvgScoreModule,
     LearnCourseModule,
     LearnGuideModule,
