@@ -26582,68 +26582,6 @@
         ]
       }
     },
-    "/api/hub/admin/moderation/words": {
-      "get": {
-        "operationId": "AdminModerationWordsController_words",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "total": {
-                      "type": "number"
-                    },
-                    "builtIn": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "category": {
-                            "type": "string"
-                          },
-                          "language": {
-                            "type": "string"
-                          },
-                          "words": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          }
-                        },
-                        "required": [
-                          "category",
-                          "language",
-                          "words"
-                        ]
-                      }
-                    },
-                    "fromEnvironment": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    }
-                  },
-                  "required": [
-                    "total",
-                    "builtIn",
-                    "fromEnvironment"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "AdminModerationWords"
-        ]
-      }
-    },
     "/api/hub/creators/{wawuId}/evg": {
       "get": {
         "operationId": "EvgScoreController_getEvgScore",

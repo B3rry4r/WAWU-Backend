@@ -69,7 +69,6 @@ import type {
   PaidQuestionQuoteView,
   PaidQuestionWalletView,
 } from './paid-dm-wallet-view.type';
-import { assertContentAllowed } from '../../moderation/content-filter';
 
 /** Rows one pass of the sweep reads for each of its steps. */
 const SWEEP_PAGE = 100;
@@ -174,8 +173,6 @@ export class PaidDmWalletService implements OnModuleInit {
     if (key !== undefined && !KEY_PATTERN.test(key)) {
       throw new MoneyError('idempotency_key_required', KEY_MALFORMED);
     }
-    // MOD-ROOMS (R-122). No listed word is asked: refused before a draft is made, so nothing can be paid for it.
-    assertContentAllowed(dto.text);
     const sender = wallet.wawuUserId;
     if (key !== undefined) {
       const again = await this.sameKey(sender, key, creatorWawuId, dto.text);

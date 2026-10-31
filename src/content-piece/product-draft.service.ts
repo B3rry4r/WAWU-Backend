@@ -18,7 +18,6 @@ import type {
   UpdateProductDraftDto,
 } from './dto/product-draft.dto';
 import type { ProductDraftView } from './dto/product-draft.view';
-import { assertContentAllowed } from '../moderation/content-filter';
 
 /**
  * How many drafts one person may keep at once. A draft holds no file and no
@@ -103,8 +102,6 @@ export class ProductDraftService {
     wawuUserId: string,
     dto: CreateProductDraftDto,
   ): Promise<ProductDraftView> {
-    // MOD-ROOMS (R-122). A draft's title and description are checked as a piece's are.
-    assertContentAllowed(dto.title, dto.description);
     if (dto.mediaJobId)
       await this.assertOwnFinishedJob(wawuUserId, dto.mediaJobId);
     const row = await this.prisma.$transaction(async (tx) => {
@@ -157,7 +154,6 @@ export class ProductDraftService {
     id: string,
     dto: UpdateProductDraftDto,
   ): Promise<ProductDraftView> {
-    assertContentAllowed(dto.title, dto.description);
     await this.ownOrThrow(wawuUserId, id);
     if (dto.mediaJobId)
       await this.assertOwnFinishedJob(wawuUserId, dto.mediaJobId);

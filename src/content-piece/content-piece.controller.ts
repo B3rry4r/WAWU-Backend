@@ -31,7 +31,6 @@ import { MyContentQueryDto } from './dto/my-content-query.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
 import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
 import { PreviewCutService } from './preview-cut.service';
-import { assertContentAllowed } from '../moderation/content-filter';
 
 /**
  * registry.json "ContentPiece". Route order deliberately puts literal
@@ -161,9 +160,6 @@ export class ContentPieceController {
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: CreateContentDto,
   ) {
-    // MOD-ROOMS (R-122). The words are read first, so a refused title or description never reaches the work below (settling an
-    // upload, cutting a preview). The service reads them again, for the callers that do not come through here.
-    assertContentAllowed(dto.title, dto.description);
     // A file whose upload outlasted the Hub's wait is counted first, outside
     // any lock (SWEEP-APP-5, ME-04 R4-5).
     await this.contentPieceService.settleSlowUploads(user.sub, dto);

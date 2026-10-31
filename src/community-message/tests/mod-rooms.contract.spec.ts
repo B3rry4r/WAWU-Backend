@@ -1,20 +1,15 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- supertest bodies are untyped JSON */
-// MOD-ROOMS (R-122). (1) The word filter at every field a person writes for others: refused with `content_blocked`, nothing
-// saved, clean text unchanged. (2) The host's tools in their own room: delete any message, mute and unmute a member; only the
-// host; a muted member reads but cannot send; the audit rows. (3) A block in a room both ways. The whole Hub (AppModule),
-// real database, mock WAWU ID. No money is moved and nothing is paid.
+// MOD-ROOMS (R-122). (1) There is NO automatic word filter (owner, 31 Oct 2026: "Remove the bad words filter please"): text
+// the earlier filter refused is sent and saved as typed, and the admin word-list route is gone. (2) The host's tools in their
+// own room: delete any message, mute and unmute a member; only the host; a muted member reads but cannot send; the audit
+// rows. (3) A block in a room both ways. The whole Hub (AppModule), real database, mock WAWU ID. No money is moved and
+// nothing is paid.
 
 import {
   boot,
   type Harness,
   type Who,
 } from '../../../test/user-suspension/suspension-harness';
-import { StoreIntentService } from '../../store/store-intent.service';
-import { PaidDmWalletService } from '../../direct-message/wallet/paid-dm-wallet.service';
-import {
-  CONTENT_BLOCKED_CODE,
-  CONTENT_BLOCKED_MESSAGE,
-} from '../../moderation/content-filter';
 import {
   MUTED_IN_ROOM_CODE,
   MUTED_IN_ROOM_MESSAGE,
@@ -22,7 +17,9 @@ import {
 
 jest.setTimeout(240_000);
 
-const BAD = 'you are a piece of shit';
+// Words the earlier (withdrawn) filter refused. They are sent and saved as typed now; moderation is Report, Block, the
+// moderators' Reports queue and the host's tools.
+const ROUGH = 'you are a piece of shit';
 const GOOD = 'A kind, clean sentence about the class at Scunthorpe.';
 
 describe('MOD-ROOMS (R-122)', () => {
@@ -50,13 +47,6 @@ describe('MOD-ROOMS (R-122)', () => {
         200,
       )) as { body: { data: { text: string }[] } }
     ).body.data.map((m) => m.text);
-  const blocked = (res: { status: number; body: any }) => {
-    expect(res.status).toBe(400);
-    expect(res.body.reason?.code).toBe(CONTENT_BLOCKED_CODE);
-    expect(res.body.message).toBe(CONTENT_BLOCKED_MESSAGE);
-    expect(JSON.stringify(res.body)).not.toMatch(/shit/i);
-  };
-
   beforeAll(async () => {
     h = await boot(TAG);
     host = await h.person('host', 'creator');
@@ -127,9 +117,6 @@ describe('MOD-ROOMS (R-122)', () => {
     });
     await h.prisma.comment.deleteMany({ where: { contentId: pieceId } });
     await h.prisma.contentPiece.deleteMany({ where: { id: pieceId } });
-    await h.prisma.productDraft.deleteMany({
-      where: { wawuUserId: { in: people } },
-    });
     await h.prisma.community.deleteMany({
       where: {
         OR: [
@@ -143,105 +130,43 @@ describe('MOD-ROOMS (R-122)', () => {
   });
 
   // ------------------------------------------------------------------------------------------------------------------
-  describe('the word filter', () => {
-    it('a room message with a listed word is refused and nothing is saved; clean text is unchanged', async () => {
-      blocked(await say(ann, BAD));
-      blocked(await say(ann, 'f*cking hell'.replace('hell', 'idiots')));
-      expect(await texts(host)).not.toContain(BAD);
-      const ok = await say(ann, GOOD).expect(201);
-      expect(ok.body.data.text).toBe(GOOD);
-      expect(await texts(host)).toContain(GOOD);
+  describe('there is no word filter', () => {
+    it('a room message with the words the old filter refused is sent and saved as typed', async () => {
+      const ok = await say(ann, ROUGH).expect(201);
+      expect(ok.body.data.text).toBe(ROUGH);
+      expect(await texts(host)).toContain(ROUGH);
       expect(
         await h.prisma.communityMessage.count({
-          where: { communityId: roomId, text: BAD },
+          where: { communityId: roomId, text: ROUGH },
         }),
-      ).toBe(0);
-    });
-
-    it('a comment is refused and not saved; a clean one is saved as typed', async () => {
-      const before = await h.prisma.comment.count({
-        where: { contentId: pieceId },
+      ).toBe(1);
+      await h.prisma.communityMessage.deleteMany({
+        where: { communityId: roomId, text: ROUGH },
       });
-      blocked(await post(ann, `/content/${pieceId}/comments`, { text: BAD }));
-      expect(
-        await h.prisma.comment.count({ where: { contentId: pieceId } }),
-      ).toBe(before);
-      const ok = await post(ann, `/content/${pieceId}/comments`, {
-        text: GOOD,
-      }).expect(201);
-      expect(ok.body.data.text).toBe(GOOD);
     });
 
-    it('a chat message (and a file name) is refused and not saved; a clean one is saved', async () => {
+    it('a comment and a chat message with those words are saved as typed', async () => {
+      const comment = await post(ann, `/content/${pieceId}/comments`, {
+        text: ROUGH,
+      }).expect(201);
+      expect(comment.body.data.text).toBe(ROUGH);
       const chat = await post(ann, '/chats', { wawuId: cat.sub }).expect(200);
       const chatId = chat.body.data.id as string;
-      blocked(await post(ann, `/chats/${chatId}/messages`, { text: BAD }));
+      const sent = await post(ann, `/chats/${chatId}/messages`, {
+        text: ROUGH,
+      }).expect(201);
+      expect(sent.body.data.text).toBe(ROUGH);
       expect(
         await h.prisma.chatMessage.count({ where: { conversationId: chatId } }),
-      ).toBe(0);
-      const ok = await post(ann, `/chats/${chatId}/messages`, {
-        text: GOOD,
-      }).expect(201);
-      expect(ok.body.data.text).toBe(GOOD);
+      ).toBe(1);
     });
 
-    it('a paid question (web route) and a paid answer are refused before anything else; a clean one gets past the filter', async () => {
-      blocked(await post(ann, `/dm/${host.sub}/send`, { text: BAD }));
-      const clean = await post(ann, `/dm/${host.sub}/send`, { text: GOOD });
-      expect(clean.body.reason?.code).not.toBe(CONTENT_BLOCKED_CODE);
-      const noSuchMessage = '00000000-0000-4000-8000-0000000000aa';
-      blocked(await post(host, `/dm/${noSuchMessage}/respond`, { text: BAD }));
-      const cleanAnswer = await post(host, `/dm/${noSuchMessage}/respond`, {
-        text: GOOD,
-      });
-      expect(cleanAnswer.body.reason?.code).not.toBe(CONTENT_BLOCKED_CODE);
-    });
-
-    it('a paid question from the wallet and one bought in a store are refused before a draft or an intent is made', async () => {
-      const wallet = h.app.get(PaidDmWalletService);
-      await expect(
-        wallet.ask({ wawuUserId: ann.sub } as never, host.sub, { text: BAD }),
-      ).rejects.toMatchObject({
-        response: { reason: { code: CONTENT_BLOCKED_CODE } },
-      });
-      expect(
-        await h.prisma.paidDmDraft.count({ where: { senderWawuId: ann.sub } }),
-      ).toBe(0);
-      const store = h.app.get(StoreIntentService);
-      await expect(
-        store.prepare(ann.sub, {
-          platform: 'ios',
-          kind: 'question',
-          creatorWawuId: host.sub,
-          listPriceNaira: 500,
-          text: BAD,
-        } as never),
-      ).rejects.toMatchObject({
-        response: { reason: { code: CONTENT_BLOCKED_CODE } },
-      });
-    });
-
-    it('a profile name, handle and bio are refused and the profile is unchanged', async () => {
-      const before = await h.prisma.userProfile.findUnique({
-        where: { wawuUserId: ann.sub },
-      });
-      for (const body of [
-        { bio: BAD },
-        { handle: 'shit_head' },
-        { headline: BAD },
-      ]) {
-        blocked(await h.http().patch(api('/users/me')).set(as(ann)).send(body));
-      }
-      const after = await h.prisma.userProfile.findUnique({
-        where: { wawuUserId: ann.sub },
-      });
-      expect(after?.bio).toBe(before?.bio);
-      expect(after?.handle).toBe(before?.handle);
+    it('a profile bio with those words is saved as typed, and the old word-list route no longer exists', async () => {
       const ok = await h
         .http()
         .patch(api('/users/me'))
         .set(as(ann))
-        .send({ bio: GOOD });
+        .send({ bio: ROUGH });
       expect(ok.status).toBe(200);
       expect(
         (
@@ -249,120 +174,12 @@ describe('MOD-ROOMS (R-122)', () => {
             where: { wawuUserId: ann.sub },
           })
         )?.bio,
-      ).toBe(GOOD);
-    });
-
-    it('a piece title and description, an edit, and a draft are refused; nothing is saved', async () => {
-      const piece = {
-        contentType: 'video',
-        category: 'agriculture_food',
-        accessType: 'free',
-        price: 0,
-        fullAsset: 'https://example.invalid/full.mp4',
-        previewAsset: 'https://example.invalid/prev.mp4',
-      };
-      blocked(
-        await post(host, '/content', {
-          ...piece,
-          title: BAD,
-          description: GOOD,
-        }),
-      );
-      blocked(
-        await post(host, '/content', {
-          ...piece,
-          title: GOOD,
-          description: BAD,
-        }),
-      );
-      expect(
-        await h.prisma.contentPiece.count({
-          where: { creatorWawuId: host.sub, title: BAD },
-        }),
-      ).toBe(0);
-      blocked(
-        await h
-          .http()
-          .patch(api(`/content/${pieceId}`))
-          .set(as(host))
-          .send({ title: BAD }),
-      );
-      expect(
-        (await h.prisma.contentPiece.findUnique({ where: { id: pieceId } }))
-          ?.title,
-      ).toBe(`${TAG} piece`);
-      blocked(
-        await post(host, '/product-drafts', {
-          title: BAD,
-          contentType: 'video',
-        }),
-      );
-      expect(
-        await h.prisma.productDraft.count({ where: { wawuUserId: host.sub } }),
-      ).toBe(0);
-    });
-
-    it('an event name and description are refused before the host check; a community name and description likewise', async () => {
-      const event = {
-        name: BAD,
-        description: GOOD,
-        hostOrg: 'Org',
-        format: 'online',
-        type: 'webinar',
-        startsAt: new Date(Date.now() + 86_400_000).toISOString(),
-      };
-      blocked(await post(host, '/events', event));
-      blocked(
-        await post(host, '/events', { ...event, name: GOOD, description: BAD }),
-      );
-      expect(await h.prisma.event.count({ where: { name: BAD } })).toBe(0);
-      blocked(
-        await post(host, '/communities', {
-          name: BAD,
-          description: GOOD,
-          kind: 'open',
-        }),
-      );
-      blocked(
-        await post(host, '/communities', {
-          name: GOOD,
-          description: BAD,
-          kind: 'open',
-        }),
-      );
-      blocked(
-        await h
-          .http()
-          .patch(api(`/communities/${roomId}`))
-          .set(as(host))
-          .send({ description: BAD }),
-      );
-      expect(
-        (await h.prisma.community.findUnique({ where: { id: roomId } }))
-          ?.description,
-      ).toBe('fixture');
-      const ok = await post(host, '/communities', {
-        name: `${TAG} clean`,
-        description: GOOD,
-        kind: 'open',
-      });
-      expect(ok.status).toBe(201);
-    });
-
-    it('an admin can read the list; a finance admin cannot; nobody else', async () => {
-      const read = await h
-        .http()
-        .get(api('/admin/moderation/words'))
-        .set({ Authorization: `Bearer ${h.admin('support')}` })
-        .expect(200);
-      expect(read.body.data.total).toBeGreaterThan(100);
-      expect(read.body.data.builtIn.length).toBeGreaterThan(5);
+      ).toBe(ROUGH);
       await h
         .http()
         .get(api('/admin/moderation/words'))
-        .set({ Authorization: `Bearer ${h.admin('finance')}` })
-        .expect(403);
-      await get(ann, '/admin/moderation/words').expect(401);
+        .set({ Authorization: `Bearer ${h.admin('support')}` })
+        .expect(404);
     });
   });
 
@@ -610,7 +427,7 @@ describe('MOD-ROOMS (R-122)', () => {
       ).toBe(true);
     });
 
-    it('a muted member cannot get round it with a photo, and the word filter still applies to the host', async () => {
+    it('a muted member cannot send and the host is never muted; unmuting restores the member', async () => {
       await h
         .http()
         .put(api(`/communities/${roomId}/mutes/${cat.sub}`))
@@ -625,7 +442,8 @@ describe('MOD-ROOMS (R-122)', () => {
         .delete(api(`/communities/${roomId}/mutes/${cat.sub}`))
         .set(as(host))
         .expect(200);
-      blocked(await say(host, BAD));
+      await say(host, GOOD).expect(201);
+      await say(cat, GOOD).expect(201);
     });
   });
 

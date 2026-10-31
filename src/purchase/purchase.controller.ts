@@ -2,7 +2,6 @@ import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
-import { assertContentAllowed } from '../moderation/content-filter';
 import { PurchaseService } from './purchase.service';
 import { CreateTipDto } from './dto/create-tip.dto';
 import { VerifyTipDto } from './dto/verify-tip.dto';
@@ -19,8 +18,6 @@ export class PurchaseController {
 
   @Post()
   createTip(@CurrentUser() user: WawuJwtClaims, @Body() dto: CreateTipDto) {
-    // MOD-ROOMS r2 (L1, R-122): the creator reads the note, so it is checked before a charge is initialised or a row is made.
-    assertContentAllowed(dto.note);
     return this.purchaseService.createTip(user.sub, dto);
   }
 

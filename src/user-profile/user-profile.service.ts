@@ -31,7 +31,6 @@ import { objectKeyFrom, StorageService } from '../storage/storage.service';
 import { cleanPhotoLink, keepPhotoPosition } from '../storage/photo-position';
 import { WalletService } from '../wallet/wallet.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
-import { assertContentAllowed } from '../moderation/content-filter';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -202,17 +201,6 @@ export class UserProfileService {
   ): Promise<UserProfile> {
     const dto = this.cleanPhotoLinks(body);
     const wawuUserId = claims.sub;
-    // MOD-ROOMS (R-122). A name, handle, bio or headline other people read is checked before the name goes to WAWU ID or
-    // anything is saved.
-    assertContentAllowed(
-      dto.firstName,
-      dto.middleName,
-      dto.lastName,
-      dto.handle,
-      dto.bio,
-      dto.headline,
-      dto.company,
-    );
     // The name goes to WAWU ID FIRST, and a failure there stops the whole
     // update. Names are checked against a government ID at KYC, so a rename
     // that silently did not take is worse than one that visibly failed: the

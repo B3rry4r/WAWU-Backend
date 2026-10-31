@@ -1,4 +1,3 @@
-import { assertContentAllowed } from '../../moderation/content-filter';
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -376,9 +375,6 @@ export class WalletTransferService implements OnModuleInit {
     inClaim?: SendClaimHook,
   ): Promise<TransferView> {
     const payer = wallet.wawuUserId;
-    // MOD-ROOMS r2 (L1, R-122): the person who gets the money reads its note. Refused before the recipient is read, a fee
-    // is quoted, a balance is asked or any row is claimed.
-    assertContentAllowed(dto.note);
     // Who the money goes to, read again now: the guard asked before the PIN,
     // and a block or a deletion since is caught here, before anything is claimed.
     const recipient = await this.recipients.resolve(
@@ -490,8 +486,6 @@ export class WalletTransferService implements OnModuleInit {
   ): Promise<TransferView> {
     const payer = wallet.wawuUserId;
     const { target } = resolved;
-    // MOD-ROOMS r2 (L1, R-122): the bank puts this note on the receiver's statement, so it is read like the in-app one.
-    assertContentAllowed(dto.note);
     // The guard resolves the target from this very body, so the account
     // number is the one asked; anything else throws before a send is claimed.
     if (target.accountNumber !== dto.accountNumber) {

@@ -21,7 +21,6 @@ import { passIsActive } from './pass/community-pass-rules';
 import type { CommunityPassRemovalQuoteView } from './pass/community-pass-view.type';
 import type { CreateCommunityDto } from './dto/create-community.dto';
 import type { UpdateCommunityDto } from './dto/update-community.dto';
-import { assertContentAllowed } from '../moderation/content-filter';
 
 /**
  * Community resource — registry.json "Community". Frozen contract:
@@ -214,8 +213,6 @@ export class CommunityService {
     passPriceKobo?: number,
     countHost = false,
   ): Promise<CommunityResponse> {
-    // MOD-ROOMS (R-122). No listed word in a community's name or description (a room is made through this too).
-    assertContentAllowed(dto.name, dto.description);
     // Hosting used to need a live subscription, and a PRIVATE community used
     // to need a paid tier above Basic. Both were subscription entitlements and
     // both are gone with it. CreatorAccountGuard on POST /communities still
@@ -264,8 +261,6 @@ export class CommunityService {
     editorWawuId: string,
     dto: UpdateCommunityDto,
   ): Promise<CommunityResponse> {
-    // MOD-ROOMS (R-122). Only the words this edit carries are read.
-    assertContentAllowed(dto.name, dto.description);
     if (
       dto.name === undefined &&
       dto.description === undefined &&
