@@ -896,4 +896,174 @@ describe('A paid audio or video piece has its preview made from its file (PREVIE
         .accessType,
     ).toBe('free');
   });
+
+  // ── UPLOAD-REST r2: the app never calls POST /uploads/confirm for a creator's upload, so a file sent within the Hub's
+  // quarter of an hour is still `pending` when the piece goes out with previewFromFile. The creator's OWN pending row is
+  // confirmed the way storage confirms it (StorageService.confirmUpload), then cut. ────────────────────────────────
+
+  /** A file that has landed in the bucket but whose row is still `pending`: presigned, PUT, and nobody has confirmed it. */
+  const unconfirmed = async (
+    folder: string,
+    contentType: string,
+    body: Buffer,
+  ) => {
+    const res = await request(server())
+      .post('/uploads/presign')
+      .set('Authorization', bearer(MAKER))
+      .send({
+        folder,
+        contentType,
+        extension: 'x',
+        contentLength: body.length,
+      });
+    expect(res.status).toBe(200);
+    const out = (res.body as { data: { key: string; fileUrl: string } }).data;
+    bucket.set(out.key, body);
+    expect(
+      (
+        await prisma.storageObject.findUniqueOrThrow({
+          where: { key: out.key },
+        })
+      ).status,
+    ).toBe('pending');
+    return out;
+  };
+  const statusOf = async (key: string) =>
+    (await prisma.storageObject.findUniqueOrThrow({ where: { key } })).status;
+
+  it('POST /content: a paid audio piece sent straight after its upload (row still pending) has its preview cut, and the full file is confirmed', async () => {
+    const full = await unconfirmed('content/full', 'audio/mpeg', mp3File(100));
+    const res = await post(
+      listing({ fullAsset: full.fileUrl, previewFromFile: true }),
+    );
+    expect(res.status).toBe(201);
+    const key = objectKeyFrom((await pieceRow(res)).previewAssetUrl);
+    expect(key).toMatch(
+      new RegExp(`^content/preview/${MAKER}/auto-[0-9a-f]{20}\\.mp3$`),
+    );
+    expect(await seconds(bucket.get(key)!, 'audio/mpeg')).toBeCloseTo(30, 0);
+    expect(await statusOf(full.key)).toBe('confirmed');
+    expect(
+      (
+        await prisma.storageObject.findUniqueOrThrow({
+          where: { key: full.key },
+        })
+      ).confirmedAt,
+    ).not.toBeNull();
+    // the full file and the cut, each counted once
+    expect(await used()).toBe(mp3File(100).length + bucket.get(key)!.length);
+  });
+
+  it("POST /product-drafts/:id/publish: a paid draft's audio sent straight after its upload has its preview cut", async () => {
+    const full = await unconfirmed('content/full', 'audio/mpeg', mp3File(100));
+    const draft = await request(server())
+      .post('/product-drafts')
+      .set('Authorization', bearer(MAKER))
+      .send({
+        title: 'A paid draft',
+        contentType: 'audio',
+        description: 'Paid audio',
+        category: 'business_entrepreneurship',
+        accessType: 'paid',
+        price: 2000,
+      });
+    expect(draft.status).toBe(201);
+    const id = (draft.body as { data: { id: string } }).data.id;
+    const res = await request(server())
+      .post(`/product-drafts/${id}/publish`)
+      .set('Authorization', bearer(MAKER))
+      .send({ fullAsset: full.fileUrl, previewFromFile: true });
+    expect(res.status).toBe(201);
+    const key = objectKeyFrom((await pieceRow(res)).previewAssetUrl);
+    expect(key).toMatch(/^content\/preview\/.+\/auto-[0-9a-f]{20}\.mp3$/);
+    expect(await seconds(bucket.get(key)!, 'audio/mpeg')).toBeCloseTo(30, 0);
+    expect(await statusOf(full.key)).toBe('confirmed');
+  });
+
+  it('PATCH /content/:id: a free piece edited to paid right after it went out (its file still pending) has its preview cut', async () => {
+    const full = await unconfirmed('content/full', 'audio/mpeg', mp3File(100));
+    const made = await post(
+      listing({ accessType: 'free', price: 0, fullAsset: full.fileUrl }),
+    );
+    expect(made.status).toBe(201);
+    expect(await statusOf(full.key)).toBe('pending');
+    const res = await patch(pieceOf(made), {
+      accessType: 'paid',
+      price: 2000,
+      previewFromFile: true,
+    });
+    expect(res.status).toBe(200);
+    const row = await prisma.contentPiece.findUniqueOrThrow({
+      where: { id: pieceOf(made) },
+    });
+    expect(row.accessType).toBe('paid');
+    const key = objectKeyFrom(row.previewAssetUrl);
+    expect(key).not.toBe(full.key);
+    expect(await seconds(bucket.get(key)!, 'audio/mpeg')).toBeCloseTo(30, 0);
+    expect(await statusOf(full.key)).toBe('confirmed');
+  });
+
+  it("a template's cover that is still pending is confirmed and copied too", async () => {
+    const cover = await unconfirmed(
+      'content/cover',
+      'image/jpeg',
+      Buffer.alloc(900, 5),
+    );
+    const full = await fullFile('application/zip', Buffer.alloc(4000, 6));
+    const res = await post(
+      listing({
+        contentType: 'template',
+        fullAsset: full.fileUrl,
+        coverAsset: cover.fileUrl,
+        previewFromFile: true,
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(await statusOf(cover.key)).toBe('confirmed');
+    const key = objectKeyFrom((await pieceRow(res)).previewAssetUrl);
+    expect(bucket.get(key)!.length).toBe(900);
+  });
+
+  it("refuses a pending row that is someone else's, in the Hub's words, and does not confirm it, cut or store anything", async () => {
+    const OTHER = OWN(2);
+    const body = mp3File(100);
+    const key = `content/full/${OTHER}/theirs.mp3`;
+    bucket.set(key, body);
+    await prisma.storageObject.create({
+      data: {
+        wawuUserId: OTHER,
+        key,
+        bytes: body.length,
+        contentType: 'audio/mpeg',
+        folder: 'content/full',
+        status: 'pending',
+      },
+    });
+    const res = await post(
+      listing({
+        fullAsset: `${STORAGE_ENV.STORAGE_ENDPOINT}/${key}`,
+        previewFromFile: true,
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(message(res)).toBe('We could not find your file. Upload it again.');
+    expect(await statusOf(key)).toBe('pending');
+    expect(puts).toEqual([]);
+    expect(
+      await prisma.contentPiece.count({ where: { creatorWawuId: MAKER } }),
+    ).toBe(0);
+    await prisma.storageObject.deleteMany({ where: { wawuUserId: OTHER } });
+  });
+
+  it('refuses my own pending row when the file never reached the bucket, and leaves the row pending', async () => {
+    const ghost = await unconfirmed('content/full', 'audio/mpeg', mp3File(100));
+    bucket.delete(ghost.key);
+    const res = await post(
+      listing({ fullAsset: ghost.fileUrl, previewFromFile: true }),
+    );
+    expect(res.status).toBe(400);
+    expect(message(res)).toBe('We could not find your file. Upload it again.');
+    expect(await statusOf(ghost.key)).toBe('pending');
+    expect(puts).toEqual([]);
+  });
 });
