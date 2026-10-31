@@ -259,8 +259,12 @@ describe('Profile stats (contract)', () => {
     });
 
     it('leaves a view from before this month out of "this month"', async () => {
-      const lastMonth = new Date(today());
-      lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1);
+      // The last day of the previous month. setUTCMonth(-1) from the 31st
+      // lands on a day that does not exist and rolls into this month.
+      const t = today();
+      const lastMonth = new Date(
+        Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 0),
+      );
       await prisma.profileView.create({
         data: {
           profileWawuId: OWNER_SUB,
