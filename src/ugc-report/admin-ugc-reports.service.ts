@@ -3,6 +3,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { suspendedIds } from '../common/suspension/user-suspension';
+import { UserSuspensionService } from '../user-suspension/user-suspension.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
@@ -10,6 +12,7 @@ import type { AdminUserView } from '../admin/auth/admin-user-view.type';
 import { AdminContentReviewService } from '../admin/content-review/admin-content-review.service';
 import type { AdminUgcReportsQueryDto } from './dto/admin-ugc-reports-query.dto';
 import type { ResolveUgcReportDto } from './dto/resolve-ugc-report.dto';
+import type { SuspensionReason } from '../common/suspension/user-suspension';
 import {
   UGC_KIND_LABELS,
   UGC_REASON_LABELS,
@@ -50,6 +53,10 @@ export interface AdminUgcReportView {
   emailed: boolean;
   /** What a moderator can do with it: every kind can be dismissed; these can also come down. */
   canTakeDown: boolean;
+  /** USER-SUSPEND (R-121): the person who made it is suspended right now. */
+  subjectSuspended: boolean;
+  /** The person can be suspended from here: they are not already, and the Hub still has them. */
+  canSuspend: boolean;
 }
 
 export interface AdminUgcResolveView {
@@ -59,8 +66,11 @@ export interface AdminUgcResolveView {
   status: 'dismissed' | 'actioned';
   /** How many open reports on the item this settled. */
   resolved: number;
+  /** USER-SUSPEND (R-121): the person who made the item is suspended now (by this call, or already). */
+  suspended: boolean;
 }
 
+/** The kinds whose item a moderator can remove. A profile is not removed: it is suspended with its person. */
 const TAKE_DOWN_KINDS: ReadonlySet<UgcKind> = new Set([
   'piece',
   'comment',
@@ -80,9 +90,12 @@ const cut = (text: string | null | undefined, max = 240): string | null => {
  *
  * Take-down uses what exists. A piece goes through the existing content take-down (`AdminContentReviewService.takeDown`:
  * status removed, the creator told, the audit row written). The Hub has no admin removal for a comment, a community
- * message or a chat message, so those are deleted here (a comment also gives its piece's count back). A profile and a paid
- * question have no take-down on the Hub (no account suspension exists here, and a paid question carries money), so
- * those can only be dismissed; asking for more answers 409.
+ * message or a chat message, so those are deleted here (a comment also gives its piece's count back). A paid question
+ * carries money, so it cannot be removed; asking for it answers 409.
+ *
+ * USER-SUSPEND (R-121): a report can also end in the person being suspended. `take_down` on a profile suspends the
+ * person; `take_down_and_suspend` removes the item and suspends whoever made it; `suspend` suspends and leaves the item
+ * (the way to act on a paid question). The suspension is `UserSuspensionService`'s, with the report on its row.
  */
 @Injectable()
 export class AdminUgcReportsService {
@@ -90,6 +103,7 @@ export class AdminUgcReportsService {
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
     private readonly content: AdminContentReviewService,
+    private readonly suspensions: UserSuspensionService,
   ) {}
 
   async list(
@@ -138,6 +152,19 @@ export class AdminUgcReportsService {
     const people = await this.people(
       [...firstOf.values()].flatMap((r) => [r.reporterWawuId, r.subjectWawuId]),
     );
+    const suspended = new Set(await suspendedIds(this.prisma));
+    const kept = new Set(
+      (
+        await this.prisma.userProfile.findMany({
+          where: {
+            wawuUserId: {
+              in: [...firstOf.values()].map((r) => r.subjectWawuId),
+            },
+          },
+          select: { wawuUserId: true },
+        })
+      ).map((p) => p.wawuUserId),
+    );
     const items: AdminUgcReportView[] = [];
     for (const g of groups) {
       const r = firstOf.get(`${g.kind}:${g.targetId}`);
@@ -168,6 +195,9 @@ export class AdminUgcReportsService {
         item: await this.itemOf(kind, r.targetId),
         emailed: r.emailedAt !== null,
         canTakeDown: TAKE_DOWN_KINDS.has(kind),
+        subjectSuspended: suspended.has(r.subjectWawuId),
+        canSuspend:
+          kept.has(r.subjectWawuId) && !suspended.has(r.subjectWawuId),
       });
     }
     return {
@@ -196,26 +226,51 @@ export class AdminUgcReportsService {
         targetId: report.targetId,
         status: report.status === 'actioned' ? 'actioned' : 'dismissed',
         resolved: 0,
+        suspended: await this.suspensions.isSuspended(report.subjectWawuId),
       };
     }
 
-    if (dto.action === 'take_down') {
-      if (!TAKE_DOWN_KINDS.has(kind)) {
-        throw new ConflictException(
-          kind === 'profile'
-            ? 'A profile cannot be taken down here. Dismiss the report, or act on the account in WAWU ID.'
-            : 'A paid question cannot be taken down. Dismiss the report.',
+    // What this call does. A profile has no item to remove: `take_down` on it is the suspension (R-121).
+    const removes =
+      kind !== 'profile' &&
+      (dto.action === 'take_down' || dto.action === 'take_down_and_suspend');
+    const suspends =
+      dto.action === 'suspend' ||
+      dto.action === 'take_down_and_suspend' ||
+      (dto.action === 'take_down' && kind === 'profile');
+
+    if (removes && !TAKE_DOWN_KINDS.has(kind)) {
+      throw new ConflictException(
+        'A paid question cannot be taken down. Dismiss the report, or suspend the person.',
+      );
+    }
+    if ((removes || suspends) && !note) {
+      throw new ConflictException(
+        suspends && !removes
+          ? 'A suspension needs a note. It is the only record of why the person was suspended.'
+          : 'A take-down needs a note. It is the only record of why the item came down.',
+      );
+    }
+    if (removes) await this.takeDown(kind, report.targetId, note!, admin);
+
+    if (suspends) {
+      try {
+        await this.suspensions.suspend(
+          report.subjectWawuId,
+          {
+            reason: dto.suspendReason ?? (report.reason as SuspensionReason),
+            note: note ?? undefined,
+            reportId: report.id,
+          },
+          admin,
         );
+      } catch (e) {
+        // The person has deleted their account since: there is nobody left to suspend, and the item is dealt with.
+        if (!(e instanceof NotFoundException)) throw e;
       }
-      if (!note) {
-        throw new ConflictException(
-          'A take-down needs a note. It is the only record of why the item came down.',
-        );
-      }
-      await this.takeDown(kind, report.targetId, note, admin);
     }
 
-    const status = dto.action === 'take_down' ? 'actioned' : 'dismissed';
+    const status = removes || suspends ? 'actioned' : 'dismissed';
     const done = await this.prisma.ugcReport.updateMany({
       where: { kind: report.kind, targetId: report.targetId, status: 'open' },
       data: {
@@ -233,6 +288,7 @@ export class AdminUgcReportsService {
       targetId: report.targetId,
       status,
       resolved: done.count,
+      suspended: await this.suspensions.isSuspended(report.subjectWawuId),
     };
   }
 

@@ -1298,6 +1298,32 @@ model UgcReport {
   @@index([reporterWawuId, kind])
 }
 
+/// USER-SUSPEND (R-121; store review: Apple 1.2, Google Play UGC policy). A moderator suspended a person. One row per
+/// suspension; `liftedAt` null means it is in force (a partial unique index allows one in force per person). While it is,
+/// the person's profile, pieces, comments, messages and listings are hidden from everyone else and every write they try
+/// is refused in words, except the ones that get them out (export, delete the account, withdraw what they earned).
+/// Nothing of theirs is deleted: lifting sets `liftedAt` and everything is back. No foreign key, like every id here. The
+/// admin's email and role are snapshots. `reportId` is the report that led to it, when there was one.
+model UserSuspension {
+  id                    String    @id @default(uuid())
+  wawuUserId            String
+  reason                String
+  note                  String?
+  reportId              String?
+  suspendedAt           DateTime  @default(now())
+  suspendedByAdminId    String
+  suspendedByAdminEmail String
+  suspendedByAdminRole  AdminRole
+  liftedAt              DateTime?
+  liftNote              String?
+  liftedByAdminId       String?
+  liftedByAdminEmail    String?
+  liftedByAdminRole     AdminRole?
+
+  @@index([wawuUserId, suspendedAt])
+  @@index([liftedAt])
+}
+
 // -----------------------------------------------------------------------------
 // Communities & credits
 // -----------------------------------------------------------------------------
@@ -2773,6 +2799,8 @@ enum AdminOpsResource {
   plan_setting
   /// A person's WAWU card, frozen or blocked by support (WALLET-31, R-84).
   wallet_card
+  /// A moderator suspended a person, or lifted it (USER-SUSPEND, R-121).
+  user_suspension
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2811,6 +2839,9 @@ enum AdminOpsAction {
   wallet_card_frozen
   wallet_card_unfrozen
   wallet_card_cancelled
+  /// USER-SUSPEND (R-121): a moderator suspended a person, or lifted it. `detail` carries the reason and note.
+  user_suspended
+  user_suspension_lifted
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto

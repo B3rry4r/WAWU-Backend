@@ -32,6 +32,7 @@ import { CreditsStateModule } from './credits-state/credits-state.module';
 import { DataExportRequestModule } from './data-export-request/data-export-request.module';
 import { DmReportModule } from './dm-report/dm-report.module';
 import { UgcReportModule } from './ugc-report/ugc-report.module';
+import { UserSuspensionModule } from './user-suspension/user-suspension.module';
 import { EvgScoreModule } from './evg-score/evg-score.module';
 import { LearnCourseModule } from './learn-course/learn-course.module';
 import { LearnGuideModule } from './learn-guide/learn-guide.module';
@@ -313,6 +314,10 @@ import { PushModule } from './push/push.module';
     DataExportRequestModule,
     DmReportModule,
     UgcReportModule,
+    // USER-SUSPEND (R-121): a moderator suspends and lifts a person (`admin/users/:id/suspend|lift|suspension`) and the
+    // person reads their own state (`me/suspension`). `admin/users` and `me/suspension` are segments nothing else declares.
+    // The module also registers the write guard (a global interceptor) that refuses a suspended person's writes.
+    UserSuspensionModule,
     EvgScoreModule,
     LearnCourseModule,
     LearnGuideModule,

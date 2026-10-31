@@ -132,6 +132,7 @@ export class ContentDetailService {
    */
   private async assertNotHidden(viewer: string, owner: string): Promise<void> {
     if (viewer === owner) return;
+    await this.blocked.assertNotSuspended(viewer, owner, NOT_FOUND);
     if (await this.blocked.isBlockedEitherWay(viewer, owner)) {
       throw new NotFoundException(NOT_FOUND);
     }

@@ -72,6 +72,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // A report about this person is somebody else's record and a moderation record: it stays, its reference is scrubbed
   // by WAWU ID's anonymize.
   { model: 'UgcReport', column: 'subjectWawuId', disposition: 'COUNTERPARTY' },
+  // USER-SUSPEND (R-121): a suspension is a moderator's act on a person. Kept deliberately, like the other audit rows:
+  // a record of why someone was suspended must not vanish when they delete their account.
+  { model: 'UserSuspension', column: 'wawuUserId', disposition: 'AUDIT' },
   // The key a reply bubble was sent under (INBOX-18 round 2): one row per
   // bubble, made by the same creator, so it is their sending record. Listed
   // before DmReply, which it points at; it would also go with the bubble

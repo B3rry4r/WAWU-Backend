@@ -288,6 +288,14 @@ export class ContentPieceService {
         content.creatorWawuId,
         'Content not found',
       );
+    } else {
+      // USER-SUSPEND (R-121): a block keeps what a person bought, a moderator's suspension does not; the piece is gone
+      // for everyone but its creator while it is in force.
+      await this.blockedAccounts.assertNotSuspended(
+        requesterWawuId,
+        content.creatorWawuId,
+        'Content not found',
+      );
     }
     return this.toResponse(content, unlockedSet.has(content.id));
   }

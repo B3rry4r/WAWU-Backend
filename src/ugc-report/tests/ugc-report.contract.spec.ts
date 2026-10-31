@@ -342,6 +342,15 @@ describe('REPORT-UGC contract', () => {
         ],
       },
     });
+    await prisma.userSuspension.deleteMany({
+      where: { wawuUserId: { in: [USER, CREATOR_A, CREATOR_B] } },
+    });
+    await prisma.adminOpsAudit.deleteMany({
+      where: {
+        resource: 'user_suspension',
+        subjectWawuId: { in: [USER, CREATOR_A, CREATOR_B] },
+      },
+    });
     await prisma.dmReport.deleteMany({ where: { threadId: dmId } });
     await prisma.directMessage.deleteMany({ where: { id: dmId } });
     await prisma.chatConversation.deleteMany({ where: { id: chatId } });
@@ -758,17 +767,20 @@ describe('REPORT-UGC contract', () => {
       expect(await prisma.chatMessage.count({ where: { id: chatMsgA } })).toBe(
         0,
       );
+      // USER-SUSPEND (R-121) changes this one assertion: `take_down` on a reported PROFILE used to answer 409 ("cannot be
+      // taken down"); it now suspends the person (the profile row stays; nothing is deleted).
       await take('profile', CREATOR_A).then((r) => {
+        expect(r.status).toBe(200);
+        expect(r.body.data.suspended).toBe(true);
+      });
+      await take('direct_message', dmId).then((r) => {
         expect(r.status).toBe(409);
         expect(r.body.message).toContain('cannot be taken down');
       });
-      await take('direct_message', dmId).then((r) =>
-        expect(r.status).toBe(409),
-      );
       expect(
         await prisma.userProfile.count({ where: { wawuUserId: CREATOR_A } }),
       ).toBe(1);
-      // Both stay open until a moderator dismisses them.
+      // The paid question stays open until a moderator dismisses it; the profile report is settled.
       expect(
         await prisma.ugcReport.count({
           where: {
@@ -777,7 +789,11 @@ describe('REPORT-UGC contract', () => {
             status: 'open',
           },
         }),
-      ).toBe(2);
+      ).toBe(1);
+      // Leave the seeded creator as the spec found them.
+      await prisma.userSuspension.deleteMany({
+        where: { wawuUserId: CREATOR_A },
+      });
     });
   });
 });
