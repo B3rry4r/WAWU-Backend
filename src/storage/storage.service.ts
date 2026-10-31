@@ -1331,6 +1331,73 @@ export class StorageService {
   }
 
   /**
+   * Bytes `start` to `endExclusive` of a stored object (a ranged read), for
+   * the preview cut (PREVIEW-AUTO): it reads the part of a long file it needs
+   * and never the whole of it. Fewer come back at the end of the file. Throws
+   * when there is no bucket, no such object, or the range is empty.
+   */
+  async readStoredRange(
+    key: string,
+    start: number,
+    endExclusive: number,
+  ): Promise<Buffer> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    if (!(endExclusive > start) || start < 0)
+      throw new Error('readStoredRange: empty range');
+    const out = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Range: `bytes=${Math.floor(start)}-${Math.floor(endExclusive) - 1}`,
+      }),
+    );
+    const got = await out.Body?.transformToByteArray();
+    if (!got || got.length === 0) throw new Error('readStoredRange: empty');
+    return Buffer.from(got);
+  }
+
+  /**
+   * Stores the preview the Hub cut from a person's full file (PREVIEW-AUTO),
+   * as a confirmed `content/preview` file of theirs: it is counted against
+   * their storage exactly as an uploaded preview is, and it is released by
+   * `POST /uploads/release` exactly as one is. The room is checked first (the
+   * storage 413 when the cut does not fit). The same `name` again replaces the
+   * file in place, so a retry never counts twice. A network call: the caller
+   * holds no transaction and no lock.
+   */
+  async putCutPreview(
+    wawuId: string,
+    name: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<{ key: string; fileUrl: string; bytes: number }> {
+    const ext = EXTENSION_FOR_CONTENT_TYPE[contentType];
+    const key = `content/preview/${wawuId}/${name}.${ext ?? ''}`;
+    const { usage, tickHeld } = await this.usageAndTick(wawuId);
+    // A cut of the same name is replaced in place: only its growth needs room.
+    const had = await this.prisma.storageObject.findUnique({
+      where: { key },
+      select: { bytes: true, status: true },
+    });
+    const replaced =
+      had && (had.status === 'pending' || had.status === 'confirmed')
+        ? Number(had.bytes)
+        : 0;
+    if (body.length - replaced > usage.remainingBytes)
+      throw this.storageFullRefusal(body.length, usage, tickHeld);
+    await this.putGenerated(wawuId, 'content/preview', name, body, contentType);
+    return {
+      key,
+      fileUrl: await this.readUrlFor(key),
+      bytes: body.length,
+    };
+  }
+
+  /**
    * The keys of the confirmed files the Hub made for a person in `folder` whose name starts with `namePrefix`
    * (AITOOLS-13: the chapters of an audiobook in the making). A read of the Hub's own rows; no bucket call.
    */

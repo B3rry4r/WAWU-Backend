@@ -30,6 +30,7 @@ import { UpdateContentDto } from './dto/update-content.dto';
 import { MyContentQueryDto } from './dto/my-content-query.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
 import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
+import { PreviewCutService } from './preview-cut.service';
 
 /**
  * registry.json "ContentPiece". Route order deliberately puts literal
@@ -46,6 +47,7 @@ export class ContentPieceController {
   constructor(
     private readonly contentPieceService: ContentPieceService,
     private readonly saleTerms: ContentSaleTermsService,
+    private readonly previews: PreviewCutService,
   ) {}
 
   /**
@@ -161,13 +163,23 @@ export class ContentPieceController {
     // A file whose upload outlasted the Hub's wait is counted first, outside
     // any lock (SWEEP-APP-5, ME-04 R4-5).
     await this.contentPieceService.settleSlowUploads(user.sub, dto);
-    // The files it names must still be the person's: checked inside the
-    // create transaction, under the storage lock (ME-04 round 4).
-    return this.contentPieceService.create(
-      user.sub,
-      dto,
-      this.contentPieceService.filesUsableIn(user.sub, dto),
-    );
+    // PREVIEW-AUTO: the preview a piece goes out with. A clip sent is used as it is; a free piece with none is its own file; a
+    // paid audio or video piece asking for it has its preview cut from the full file, after that file is stored.
+    const preview = await this.previews.resolve(user.sub, dto);
+    const piece = { ...dto, previewAsset: preview.previewAsset };
+    try {
+      // The files it names must still be the person's: checked inside the
+      // create transaction, under the storage lock (ME-04 round 4).
+      return await this.contentPieceService.create(
+        user.sub,
+        piece,
+        this.contentPieceService.filesUsableIn(user.sub, piece),
+      );
+    } catch (err) {
+      // A cut made for a publish that did not go through is given back, so it never counts.
+      await this.previews.giveBack(user.sub, preview.made);
+      throw err;
+    }
   }
 
   /**

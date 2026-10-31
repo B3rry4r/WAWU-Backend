@@ -27194,8 +27194,8 @@
                     "shop": {
                       "type": "string",
                       "enum": [
-                        "basket",
-                        "beauty"
+                        "beauty",
+                        "basket"
                       ]
                     }
                   },
@@ -47304,7 +47304,12 @@
           },
           "previewAsset": {
             "type": "string",
+            "description": "The public preview file, as `POST /uploads/presign` answered. PREVIEW-AUTO: optional now. A FREE piece may leave it out (its whole\nfile is open to everyone, so the preview is the file itself); a PAID audio or video piece may leave it out and send\n`previewFromFile: true` to have the Hub cut it from `fullAsset`. Any other paid piece still sends one (400 otherwise). A request\nthat carries one is read exactly as it always was.",
             "format": "uri"
+          },
+          "previewFromFile": {
+            "type": "boolean",
+            "description": "PREVIEW-AUTO: \"make my preview from the full file\". Only for a PAID audio or video piece that sends no `previewAsset`: the Hub\ncuts the first 30 seconds (the first third of a file under 45 seconds) after the full file is stored, and stores the cut as the\npiece's preview. Ignored when a `previewAsset` is sent, and for a free piece."
           },
           "fullAsset": {
             "type": "string",
@@ -47328,7 +47333,6 @@
           "category",
           "accessType",
           "price",
-          "previewAsset",
           "fullAsset"
         ]
       },
@@ -47717,7 +47721,12 @@
         "properties": {
           "previewAsset": {
             "type": "string",
+            "description": "Optional since PREVIEW-AUTO, exactly as on `POST /content`: a free piece may leave it out.",
             "format": "uri"
+          },
+          "previewFromFile": {
+            "type": "boolean",
+            "description": "PREVIEW-AUTO: \"make my preview from the full file\", as on `POST /content`."
           },
           "fullAsset": {
             "type": "string",
@@ -47730,7 +47739,6 @@
           }
         },
         "required": [
-          "previewAsset",
           "fullAsset"
         ]
       },
