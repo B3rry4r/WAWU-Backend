@@ -16,7 +16,7 @@ import {
   VIDEO_SAMPLE,
   sourceOf,
   syntheticMp4,
-} from './preview-fixtures';
+} from '../../../test/content-piece/preview-fixtures';
 
 /**
  * PREVIEW-AUTO: the Hub cuts a paid audio or video piece's preview from the full file, in plain JavaScript. Each length below is read

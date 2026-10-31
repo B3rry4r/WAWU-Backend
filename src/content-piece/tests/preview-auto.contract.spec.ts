@@ -30,7 +30,7 @@ import { StorageService, objectKeyFrom } from '../../storage/storage.service';
 import { ContentPieceModule } from '../content-piece.module';
 import { CUT_WORDS } from '../preview-cut/cut-types';
 import { NEEDS_PREVIEW, CANNOT_MAKE } from '../preview-cut.service';
-import { syntheticMp4 } from './preview-fixtures';
+import { syntheticMp4 } from '../../../test/content-piece/preview-fixtures';
 
 /**
  * PREVIEW-AUTO (owner, 31 Oct 2026: "why would audio ask for a 30 60 second preview clip?"). Over HTTP on the real database; the

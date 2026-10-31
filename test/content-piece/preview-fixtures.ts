@@ -1,4 +1,4 @@
-import { box } from '../../../test/ai-tools/media-fixtures';
+import { box } from '../ai-tools/media-fixtures';
 
 /**
  * PREVIEW-AUTO: small media files built in memory for the cutters' specs (no file on disk, no ffmpeg: CI has none). The MP4 has a
