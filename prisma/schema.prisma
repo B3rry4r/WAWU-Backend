@@ -1301,7 +1301,8 @@ model UgcReport {
 /// USER-SUSPEND (R-121; store review: Apple 1.2, Google Play UGC policy). A moderator suspended a person. One row per
 /// suspension; `liftedAt` null means it is in force (a partial unique index allows one in force per person). While it is,
 /// the person's profile, pieces, comments, messages and listings are hidden from everyone else and every write they try
-/// is refused in words, except the ones that get them out (export, delete the account, withdraw what they earned).
+/// is refused in words, except the ones that get them out (export, delete the account, move their own money to a bank
+/// account in their own name: money never goes to anyone else's).
 /// Nothing of theirs is deleted: lifting sets `liftedAt` and everything is back. No foreign key, like every id here. The
 /// admin's email and role are snapshots. `reportId` is the report that led to it, when there was one.
 model UserSuspension {
