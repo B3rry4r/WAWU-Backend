@@ -3,12 +3,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { ProductDraftModel } from '../../generated/prisma/models';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import { PublishingGate } from '../plans/publishing-gate.service';
 import { ContentPieceService } from './content-piece.service';
+import { PreviewCutService } from './preview-cut.service';
 import type { CreateContentDto } from './dto/create-content.dto';
 import type {
   CreateProductDraftDto,
@@ -84,6 +86,9 @@ export class ProductDraftService {
     private readonly prisma: PrismaService,
     private readonly content: ContentPieceService,
     private readonly gate: PublishingGate,
+    // PREVIEW-AUTO: resolves the preview at publish. Optional so a spec that builds this service by hand keeps working;
+    // without it a draft publishes only with the clip it names, as before.
+    @Optional() private readonly previews?: PreviewCutService,
   ) {}
 
   /**
@@ -234,16 +239,34 @@ export class ProductDraftService {
     // A file whose upload outlasted the Hub's wait is counted first, outside
     // any lock (SWEEP-APP-5, ME-04 R4-5).
     await this.content.settleSlowUploads(wawuUserId, piece);
-    const filesUsable = this.content.filesUsableIn(wawuUserId, piece);
-    return this.content.create(wawuUserId, piece, async (tx) => {
-      // The files it names must still be the person's (ME-04 round 4).
-      await filesUsable(tx);
-      const gone = await tx.productDraft.deleteMany({
-        where: { id, wawuUserId },
+    // PREVIEW-AUTO: the preview this piece goes out with (the clip sent, the free file itself, or a cut made from the full file).
+    const preview = this.previews
+      ? await this.previews.resolve(wawuUserId, {
+          contentType: piece.contentType,
+          accessType: piece.accessType,
+          fullAsset: piece.fullAsset,
+          previewAsset: dto.previewAsset,
+          previewFromFile: dto.previewFromFile,
+          coverAsset: piece.coverAsset,
+        })
+      : { previewAsset: dto.previewAsset, made: null };
+    const out = { ...piece, previewAsset: preview.previewAsset };
+    const filesUsable = this.content.filesUsableIn(wawuUserId, out);
+    try {
+      return await this.content.create(wawuUserId, out, async (tx) => {
+        // The files it names must still be the person's (ME-04 round 4).
+        await filesUsable(tx);
+        const gone = await tx.productDraft.deleteMany({
+          where: { id, wawuUserId },
+        });
+        if (gone.count === 0)
+          throw new ConflictException('This draft was published a moment ago.');
       });
-      if (gone.count === 0)
-        throw new ConflictException('This draft was published a moment ago.');
-    });
+    } catch (err) {
+      // A cut made for a publish that did not go through is given back, so it never counts.
+      await this.previews?.giveBack(wawuUserId, preview.made);
+      throw err;
+    }
   }
 
   /**

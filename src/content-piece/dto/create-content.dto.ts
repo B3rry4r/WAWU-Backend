@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -86,8 +87,27 @@ export class CreateContentDto {
   @Max(10_000_000)
   price: number;
 
+  /**
+   * The public preview file, as `POST /uploads/presign` answered. PREVIEW-AUTO: optional now. A FREE piece may leave it out (its whole
+   * file is open to everyone, so the preview is the file itself); a PAID audio or video piece may leave it out and send
+   * `previewFromFile: true` to have the Hub make it from `fullAsset` (R-118: a PDF too; a course from its first lesson, a template or
+   * a course whose first lesson is not a video from `coverAsset`). A picture sends its own smaller copy. A request that carries one is
+   * read exactly as it always was.
+   */
+  @IsOptional()
   @IsUrl({ require_tld: false })
-  previewAsset: string;
+  previewAsset?: string;
+
+  /**
+   * PREVIEW-AUTO: "make my preview from the full file". For a PAID audio, video, PDF, course, or template that sends no
+   * `previewAsset`: the Hub cuts the first 30 seconds of a recording (a third of a file under 45 seconds), the first 3 pages of a PDF
+   * (the first page of a file under 6 pages), the first lesson of a course the same way, or copies the cover (a template, or a course
+   * whose first lesson is not a video), after the full file is stored, and stores the result as the piece's preview. Ignored when a
+   * `previewAsset` is sent, and for a free piece.
+   */
+  @IsOptional()
+  @IsBoolean()
+  previewFromFile?: boolean;
 
   @IsUrl({ require_tld: false })
   fullAsset: string;
