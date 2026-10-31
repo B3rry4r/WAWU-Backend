@@ -192,7 +192,11 @@
 //   POST /v1/convai/agents/create, PATCH and DELETE /v1/convai/agents/<id>; POST /v1/convai/knowledge-base/text|url|file;
 //     DELETE /v1/convai/knowledge-base/<id>; GET /v1/convai/conversation/get-signed-url; the agent socket at
 //     /__standin/agent-socket (user_message -> agent_response; [[fail]] closes it; [[ping]] asks for a pong first);
-//     GET and DELETE /v1/convai/conversations/<id> (length set with setConversation). Markers in an agent's name or
+//     GET and DELETE /v1/convai/conversations/<id> (length set with setConversation). REC-DELETE: as the real provider
+//     does (30 Oct 2026), a DELETE of a conversation that is not yet done or failed answers 204 and is ignored (the
+//     conversation then reads 404 until it finishes, and comes back); a DELETE of a finished one removes it. A text
+//     chat's conversation finishes when its socket closes, as state.chatConversationStatus says ('done' by default;
+//     'processing' keeps it open until setConversation finishes it). Markers in an agent's name or
 //     prompt, a document's name or words and a message: [[fail]] 500, [[reject]] 422. state.agents, state.agentPatches,
 //     state.knowledge, state.chats (text-only or not, whether earlier messages came, never the words), state.signedUrls.
 // Nothing of a real provider beyond these. The Hub never sees a control route.
@@ -293,6 +297,12 @@ function startVoiceStandin({
     deletedConversations: [],
     /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500 (a spec sets it). */
     conversationDeleteRefusals: 0,
+    /** REC-DELETE: the ids of conversations whose delete was answered 204 and ignored (not yet finished). */
+    ignoredConversationDeletes: [],
+    /** REC-DELETE: what a text chat's conversation reads once its socket closes ('processing' keeps it unfinished). */
+    chatConversationStatus: 'done',
+    /** REC-DELETE: whether deleting an agent takes its conversations with it (the real provider does; a spec turns it on). */
+    agentDeleteTakesConversations: false,
   };
   // AITOOLS-13: project id -> { readyAt, marks }.
   const podcastProjects = new Map();
@@ -1535,6 +1545,8 @@ function startVoiceStandin({
     if (!agentsById.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such agent"}');
     agentsById.delete(id);
     state.deletedAgents.push(id);
+    if (state.agentDeleteTakesConversations)
+      for (const [convo, c] of [...conversations]) if (c.agent === id) conversations.delete(convo);
     return reply(res, 200, 'application/json', '{}');
   }
   function knowledgeAdd(kind) {
@@ -1599,11 +1611,12 @@ function startVoiceStandin({
     if (withId) q.set('conversation_id', convo);
     return reply(res, 200, 'application/json', JSON.stringify({ signed_url: `ws://127.0.0.1:${listenPort}/__standin/agent-socket?${q}` }));
   }
+  const FINISHED = ['done', 'failed'];
   function conversationRead(req, res, m) {
     if (!authed(req, res)) return;
     const id = decodeURIComponent(m[1]);
     const c = conversations.get(id);
-    if (!c) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
+    if (!c || c.hidden) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
     return reply(
       res,
       200,
@@ -1618,10 +1631,17 @@ function startVoiceStandin({
       state.conversationDeleteRefusals -= 1;
       return reply(res, 500, 'application/json', '{"detail":"try again"}');
     }
-    if (!conversations.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
+    const c = conversations.get(id);
+    if (!c) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
+    if (!FINISHED.includes(c.status)) {
+      // The real provider accepts the delete (204) and ignores it; the conversation reads 404 for a moment, then returns.
+      c.hidden = true;
+      state.ignoredConversationDeletes.push(id);
+      return reply(res, 204, 'application/json', '');
+    }
     conversations.delete(id);
     state.deletedConversations.push(id);
-    return reply(res, 200, 'application/json', '{}');
+    return reply(res, 204, 'application/json', '');
   }
   // The agent socket: the text-only chat the Hub holds for a message.
   const sockets = new WebSocketServer({ noServer: true });
@@ -1633,6 +1653,16 @@ function startVoiceStandin({
     let needPong = false;
     let pending = null;
     const record = { agent: agentId, textOnly: false, earlier: false, chars: 0, keyLeak: false, pongs: 0 };
+    // REC-DELETE: the conversation this socket carries; it finishes (as chatConversationStatus says) when the chat ends.
+    let chatConvo = url.searchParams.get('conversation_id');
+    const finishChat = () => {
+      const c = chatConvo ? conversations.get(chatConvo) : null;
+      if (c && c.status === 'in-progress') {
+        c.status = state.chatConversationStatus;
+        if (FINISHED.includes(c.status)) c.hidden = false;
+      }
+    };
+    ws.on('close', finishChat);
     record.keyLeak = Boolean(req.headers['xi-api-key']);
     state.chats.push(record);
     const answer = (text) => {
@@ -1646,6 +1676,7 @@ function startVoiceStandin({
             agent_response_event: { agent_response: `I know ${docs.length} things${docs.length ? `: ${docs.join(', ')}` : ''}.` },
           }),
         );
+        finishChat();
       }, slow ? Number(slow[1]) : 0);
     };
     ws.on('message', (data) => {
@@ -1659,6 +1690,7 @@ function startVoiceStandin({
           convo = `convo-${++convoSeq}`;
           conversations.set(convo, { agent: agentId, status: 'in-progress', seconds: null });
         }
+        chatConvo = convo;
         ws.send(JSON.stringify({ type: 'conversation_initiation_metadata', conversation_initiation_metadata_event: { conversation_id: convo ?? 'x' } }));
       } else if (event.type === 'user_message') {
         const text = String(event.text ?? '');
@@ -1854,7 +1886,10 @@ function startVoiceStandin({
         /** Sets how a conversation stands: its status and its length in seconds (a talk that ended). */
         setConversation: (id, patch) => {
           const c = conversations.get(id);
-          if (c) Object.assign(c, patch);
+          if (!c) return;
+          Object.assign(c, patch);
+          // A finished conversation reads again, unless the spec hides it on purpose (REC-DELETE: "not stored yet").
+          if (patch.status && FINISHED.includes(patch.status) && patch.hidden === undefined) c.hidden = false;
         },
         /** The conversation ids made so far. */
         conversationIds: () => [...conversations.keys()],

@@ -892,12 +892,17 @@ export interface AiVoiceProvider {
     opts?: { signal?: AbortSignal },
   ): Promise<VoiceSessionLink>;
 
-  /** Reads a conversation (`GET /v1/convai/conversations/{id}`): whether it is over and how long it lasted. Throws `AiVoiceProviderError`. */
+  /** Reads a conversation (`GET /v1/convai/conversations/{id}`): whether it is over and how long it lasted. Throws `AiVoiceProviderError` (`status` 404 when the provider has none by that id, which for a conversation made a moment ago may only mean "not stored yet"). */
   readConversation(
     conversationId: string,
     opts?: { signal?: AbortSignal },
   ): Promise<ConversationRead>;
 
-  /** One try at deleting a conversation the provider kept (`DELETE /v1/convai/conversations/{id}`), so it holds none of the person's words. Never throws. */
+  /**
+   * One try at deleting a conversation the provider kept (`DELETE /v1/convai/conversations/{id}`), so it holds none of the
+   * person's words. Never throws. REC-DELETE: the real provider answers 204 to a delete sent before the conversation is
+   * `done` and ignores it, so a `deleted` answer proves nothing: the caller sends it only to a conversation a read shows
+   * finished and clears its note only when a read after it says 404 (`ProviderCopyService`).
+   */
   deleteConversation(conversationId: string): Promise<CopyRemoval>;
 }

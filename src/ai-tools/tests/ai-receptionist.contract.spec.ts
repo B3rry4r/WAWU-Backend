@@ -781,6 +781,15 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
         heldPoints: 0,
         keptPoints: 0,
       });
+      // REC-DELETE: the provider never closed it, so a delete now would be accepted and ignored: none is sent. Once the
+      // provider has finished it, the copy sweep deletes it and proves it gone.
+      expect(standin().deletedConversations).not.toContain(
+        stuck[0].conversationId,
+      );
+      h.standin.setConversation(stuck[0].conversationId!, { status: 'failed' });
+      await h
+        .get<ProviderCopyService>(ProviderCopyService)
+        .sweep(new Date(Date.now() + 60_000));
       expect(standin().deletedConversations).toContain(stuck[0].conversationId);
       // A pass again changes nothing: no point is given back or taken twice.
       expect(await h.receptionist.settleSessions(late)).toBe(0);
@@ -915,7 +924,8 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       await h.finish(PLAIN, job.id);
       await h.jobs.drain();
       expect(h.standin.openConversations()).toBe(open + 1);
-      expect(await ref(job.id)).toMatch(/^conversation:convo-\d+$/);
+      // REC-DELETE: the note says a delete was sent once the chat was finished (`@<ms>`); only a read after it clears it.
+      expect(await ref(job.id)).toMatch(/^conversation:convo-\d+@\d+$/);
       expect(await copies().sweep(later())).toEqual({ cleared: 1, pending: 0 });
       expect(h.standin.openConversations()).toBe(open);
       expect(await ref(job.id)).toBeNull();
@@ -944,8 +954,8 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       await end(PLAIN, session.id);
       expect((await readJob(PLAIN, session.id)).state).toBe('done');
       expect(h.standin.openConversations()).toBe(open + 1);
-      expect(await ref(session.id)).toBe(
-        `conversation:${session.conversationId}`,
+      expect(await ref(session.id)).toMatch(
+        new RegExp(`^conversation:${session.conversationId}@\\d+$`),
       );
       expect(await copies().sweep(later())).toEqual({ cleared: 1, pending: 0 });
       expect(h.standin.openConversations()).toBe(open);
@@ -1051,7 +1061,8 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       expect(await ref(session.id)).toBe(
         `convo:${session.conversationId}:ended`,
       );
-      // The sweep, past its minutes, ends the talk as timed out with nothing charged, and only then deletes the conversation.
+      // The sweep, past its minutes, ends the talk as timed out with nothing charged and notes the conversation. The
+      // provider has not closed it, so (REC-DELETE) no delete is sent yet: one now would be accepted and ignored.
       const maxRun = settings.number('points.job_max_run_minutes');
       const late = new Date(Date.now() + (maxRun + 1) * 60_000);
       expect(await h.receptionist.settleSessions(late)).toBe(1);
@@ -1062,13 +1073,19 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
         }),
       ).toEqual({ state: 'failed', failureCode: 'timed_out' });
       expect(await h.balance(PLAIN)).toBe(before);
-      expect(standin().deletedConversations).toEqual([session.conversationId]);
-      expect(await ref(session.id)).toBeNull();
+      expect(standin().deletedConversations).toEqual([]);
+      expect(await ref(session.id)).toBe(
+        `conversation:${session.conversationId}`,
+      );
+      // Once the provider has finished it, clearing again deletes it, reads it back, and only then drops the note.
+      h.standin.setConversation(session.conversationId!, { status: 'done' });
       const again = await h
         .http()
         .delete('/ai-tools/receptionist')
         .set(auth(PLAIN));
       expect(data<ReceptionistRemovedView>(again).atProvider).toBe('gone');
+      expect(standin().deletedConversations).toEqual([session.conversationId]);
+      expect(await ref(session.id)).toBeNull();
       expect(h.standin.openConversations()).toBe(open);
     });
 
