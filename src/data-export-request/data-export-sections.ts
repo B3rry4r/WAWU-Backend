@@ -1904,6 +1904,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'DmReport',
       reason: 'A report about somebody else is a moderation record.',
     },
+    {
+      model: 'UgcReport',
+      reason:
+        "A report about somebody else is a moderation record (REPORT-UGC); the reports made about this person are other people's.",
+    },
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
     {

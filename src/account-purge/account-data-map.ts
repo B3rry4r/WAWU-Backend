@@ -67,6 +67,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUTHORED',
   },
   { model: 'DmReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
+  // REPORT-UGC: a report this person made is their contribution; it goes with them.
+  { model: 'UgcReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
+  // A report about this person is somebody else's record and a moderation record: it stays, its reference is scrubbed
+  // by WAWU ID's anonymize.
+  { model: 'UgcReport', column: 'subjectWawuId', disposition: 'COUNTERPARTY' },
   // The key a reply bubble was sent under (INBOX-18 round 2): one row per
   // bubble, made by the same creator, so it is their sending record. Listed
   // before DmReply, which it points at; it would also go with the bubble

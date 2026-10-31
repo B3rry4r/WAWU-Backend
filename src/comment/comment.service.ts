@@ -140,7 +140,16 @@ export class CommentService {
       'Content not found',
     );
     const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
-    const where = { contentId, authorWawuId: { notIn: hidden } };
+    // REPORT-UGC: a comment the caller reported is left out for them, and not counted.
+    const reported = await this.blockedAccounts.reportedIds(
+      requesterWawuId,
+      'comment',
+    );
+    const where = {
+      contentId,
+      authorWawuId: { notIn: hidden },
+      id: { notIn: reported },
+    };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.comment.findMany({
