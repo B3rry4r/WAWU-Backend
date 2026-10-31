@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { isSuspended } from '../common/suspension/user-suspension';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { WalletService } from './wallet.service';
@@ -16,7 +18,10 @@ import { readHistoryTake } from './wallet-history-take';
 @UseGuards(WawuAuthGuard)
 @Controller('wallet')
 export class WalletController {
-  constructor(private readonly wallet: WalletService) {}
+  constructor(
+    private readonly wallet: WalletService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   /** Balance, account number and status. */
   @Get()
@@ -50,12 +55,19 @@ export class WalletController {
 
   /** Send money from this wallet to a bank account. */
   @Post('withdraw')
-  withdraw(@CurrentUser() user: WawuJwtClaims, @Body() dto: WithdrawDto) {
+  async withdraw(@CurrentUser() user: WawuJwtClaims, @Body() dto: WithdrawDto) {
+    // USER-SUSPEND (R-121 tightened, round 2 H1): a suspended person's money goes only to an account in their own name.
+    const ownNameOnly = (await isSuspended(this.prisma, user.sub))
+      ? [user.firstName, user.middleName, user.lastName]
+          .filter((part): part is string => !!part)
+          .join(' ')
+      : undefined;
     return this.wallet.withdraw({
       wawuUserId: user.sub,
       amount: dto.amount,
       bankCode: dto.bankCode,
       accountNumber: dto.accountNumber,
+      ...(ownNameOnly === undefined ? {} : { ownNameOnly }),
     });
   }
 }

@@ -257,7 +257,16 @@ export class ContentDetailService {
     if (keptForBuyers && !purchase) throw new NotFoundException(NOT_FOUND);
     // Same rule as GET /content/:id: somebody who already paid keeps their
     // copy after a block, so the detail of what they bought stays readable.
+    // USER-SUSPEND (R-121, round 2 M1): not after a moderator's suspension. A buyer is told 404 like everyone else while
+    // it is in force, and the detail comes back when it is lifted. (`assertNotHidden` already checks it for the rest.)
     if (!purchase) await this.assertNotHidden(viewer, piece.creatorWawuId);
+    else {
+      await this.blocked.assertNotSuspended(
+        viewer,
+        piece.creatorWawuId,
+        NOT_FOUND,
+      );
+    }
 
     const [extra, lessons, buyers, creators, maker, followerCount] =
       await Promise.all([

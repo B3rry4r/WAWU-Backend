@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { suspendedRefusal } from '../common/suspension/user-suspension';
+import { accountNameIsWalletName } from '../money/identity/bvn-name';
 import { toAlpha2 } from './country-code';
 import {
   FLUTTERWAVE_WALLET_GATEWAY,
@@ -357,6 +359,12 @@ export class WalletService {
     amount: number;
     bankCode: string;
     accountNumber: string;
+    /**
+     * USER-SUSPEND (R-121 tightened, round 2 H1). Set by the controller only while the person is suspended: the name on
+     * their sign-up. Money then leaves only to an account the bank names as theirs; any other is `403 account_suspended`,
+     * before the ledger is touched. Left out for everybody else, so nothing changes for them.
+     */
+    ownNameOnly?: string;
   }) {
     if (!Number.isInteger(input.amount) || input.amount < MIN_WITHDRAWAL_NGN) {
       throw new BadRequestException(
@@ -392,6 +400,12 @@ export class WalletService {
       input.bankCode,
       input.accountNumber,
     );
+    if (
+      input.ownNameOnly !== undefined &&
+      !accountNameIsWalletName(input.ownNameOnly, resolved.accountName)
+    ) {
+      throw suspendedRefusal();
+    }
 
     const reference = `wawu-wd-${randomUUID()}`;
     const entry = await this.prisma.walletLedgerEntry.create({

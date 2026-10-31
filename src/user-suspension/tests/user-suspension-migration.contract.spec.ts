@@ -30,6 +30,9 @@ const MIGRATE_AGAIN = script(
   'migration.sql',
   (line) => !line.startsWith('ALTER TYPE'),
 );
+// Round 2 (M3): the whole file, enum lines included. Its ADD VALUE lines say IF NOT EXISTS, so it applies after a
+// rollback left the values behind (it used to stop on `enum label already exists`).
+const MIGRATE_WHOLE = script('migration.sql');
 const COLUMNS = [
   'id',
   'liftNote',
@@ -197,5 +200,29 @@ describe('USER-SUSPEND: the UserSuspension migration, its rollback and the migra
     expect(result.gone).toEqual([]);
     expect(result.after).toBe(result.before);
     expect(result.again).toEqual(COLUMNS);
+  });
+
+  it('the WHOLE migration file, its enum lines too, applies again after a rollback, and again after that (M3)', async () => {
+    const result = await inRolledBackTx(async (tx) => {
+      await tx.$executeRawUnsafe(`DELETE FROM "UserSuspension"`);
+      await tx.$executeRawUnsafe(ROLLBACK);
+      const gone = await columnsOf(tx);
+      // The enum values are still there after the rollback, which is what made a plain ADD VALUE fail.
+      const left = await tx.$queryRawUnsafe<{ n: bigint }[]>(
+        `SELECT count(*) AS n FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+         WHERE (t.typname = 'AdminOpsResource' AND e.enumlabel = 'user_suspension')
+            OR (t.typname = 'AdminOpsAction' AND e.enumlabel IN ('user_suspended', 'user_suspension_lifted'))`,
+      );
+      await tx.$executeRawUnsafe(MIGRATE_WHOLE);
+      const again = await columnsOf(tx);
+      await tx.$executeRawUnsafe(ROLLBACK);
+      await tx.$executeRawUnsafe(MIGRATE_WHOLE);
+      const thrice = await columnsOf(tx);
+      return { gone, again, thrice, enumLeft: Number(left[0].n) };
+    });
+    expect(result.gone).toEqual([]);
+    expect(result.enumLeft).toBe(3);
+    expect(result.again).toEqual(COLUMNS);
+    expect(result.thrice).toEqual(COLUMNS);
   });
 });

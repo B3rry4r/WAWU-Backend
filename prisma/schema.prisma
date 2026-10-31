@@ -2801,6 +2801,8 @@ enum AdminOpsResource {
   wallet_card
   /// A moderator suspended a person, or lifted it (USER-SUSPEND, R-121).
   user_suspension
+  /// A moderator dismissed a report, or took a comment or message down (REPORT-UGC, USER-SUSPEND round 2).
+  ugc_report
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2842,6 +2844,11 @@ enum AdminOpsAction {
   /// USER-SUSPEND (R-121): a moderator suspended a person, or lifted it. `detail` carries the reason and note.
   user_suspended
   user_suspension_lifted
+  /// USER-SUSPEND round 2 (L1): a moderator dismissed a report, or deleted a comment, a community message or a chat
+  /// message a report was about. `detail` carries the report, the kind and the note. (A piece taken down is audited by
+  /// the content review, as it was.)
+  ugc_report_dismissed
+  ugc_item_removed
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto

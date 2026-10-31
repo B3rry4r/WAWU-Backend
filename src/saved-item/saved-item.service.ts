@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { suspendedIds } from '../common/suspension/user-suspension';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { SavedItem } from '../common/types';
 
@@ -21,14 +23,21 @@ export class SavedItemService {
       return { items: [], currentPage: page, perPage, total: 0 };
     }
 
+    // USER-SUSPEND (R-121, round 2 M1): a piece by a suspended creator is left off the list while the suspension is in
+    // force (the save is kept; lifting brings it back). Nobody suspended: the query is the one it always was.
+    const suspended = await suspendedIds(this.prisma, userWawuId);
+    const where: Prisma.SavedItemWhereInput =
+      suspended.length === 0
+        ? { userWawuId }
+        : { userWawuId, content: { creatorWawuId: { notIn: suspended } } };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.savedItem.findMany({
-        where: { userWawuId },
+        where,
         orderBy: { savedAt: 'desc' },
         skip: (page - 1) * perPage,
         take: perPage,
       }),
-      this.prisma.savedItem.count({ where: { userWawuId } }),
+      this.prisma.savedItem.count({ where }),
     ]);
 
     return { items, currentPage: page, perPage, total };

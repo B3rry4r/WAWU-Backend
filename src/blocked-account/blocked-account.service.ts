@@ -287,6 +287,11 @@ export class BlockedAccountService {
     }
   }
 
+  /** USER-SUSPEND (R-121). Everybody suspended right now, except `except` (the person asking, who sees their own things). */
+  suspendedPeople(except?: string | null): Promise<string[]> {
+    return suspendedIds(this.prisma, except);
+  }
+
   /** USER-SUSPEND (R-121). True while a moderator's suspension of this person is in force. */
   isSuspended(wawuId: string | null | undefined): Promise<boolean> {
     return isSuspended(this.prisma, wawuId);

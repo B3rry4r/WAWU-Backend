@@ -80,16 +80,99 @@ export class UserSuspensionService {
     private readonly audit: AdminOpsAuditService,
   ) {}
 
+  /**
+   * Which of these people the Hub knows (round 2, L1). A person has a `UserProfile` row only once they have made one; a
+   * person who has only commented, messaged, bought, reported or been reported has none, and can still be suspended. So
+   * "known" is a profile OR anything of theirs the Hub holds: a creator state, a wallet, a report about or by them, a
+   * comment, a community or chat message, a piece, a purchase. Somebody the Hub has never heard of is still a 404.
+   */
+  async known(ids: string[]): Promise<Set<string>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Set();
+    const idOf = (rows: Array<Record<string, string>>, key: string) =>
+      rows.map((r) => r[key]);
+    const [
+      profiles,
+      states,
+      wallets,
+      reportsAbout,
+      reportsBy,
+      comments,
+      roomMessages,
+      chatMessages,
+      pieces,
+      bought,
+    ] = await Promise.all([
+      this.prisma.userProfile.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true },
+      }),
+      this.prisma.creatorState.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true },
+      }),
+      this.prisma.fintavaWallet.findMany({
+        where: { wawuUserId: { in: unique } },
+        select: { wawuUserId: true },
+      }),
+      this.prisma.ugcReport.findMany({
+        where: { subjectWawuId: { in: unique } },
+        select: { subjectWawuId: true },
+        distinct: ['subjectWawuId'],
+      }),
+      this.prisma.ugcReport.findMany({
+        where: { reporterWawuId: { in: unique } },
+        select: { reporterWawuId: true },
+        distinct: ['reporterWawuId'],
+      }),
+      this.prisma.comment.findMany({
+        where: { authorWawuId: { in: unique } },
+        select: { authorWawuId: true },
+        distinct: ['authorWawuId'],
+      }),
+      this.prisma.communityMessage.findMany({
+        where: { senderWawuId: { in: unique } },
+        select: { senderWawuId: true },
+        distinct: ['senderWawuId'],
+      }),
+      this.prisma.chatMessage.findMany({
+        where: { senderWawuId: { in: unique } },
+        select: { senderWawuId: true },
+        distinct: ['senderWawuId'],
+      }),
+      this.prisma.contentPiece.findMany({
+        where: { creatorWawuId: { in: unique } },
+        select: { creatorWawuId: true },
+        distinct: ['creatorWawuId'],
+      }),
+      this.prisma.purchase.findMany({
+        where: { buyerWawuId: { in: unique } },
+        select: { buyerWawuId: true },
+        distinct: ['buyerWawuId'],
+      }),
+    ]);
+    return new Set([
+      ...idOf(profiles, 'wawuUserId'),
+      ...idOf(states, 'wawuUserId'),
+      ...idOf(wallets, 'wawuUserId'),
+      ...idOf(reportsAbout, 'subjectWawuId'),
+      ...idOf(reportsBy, 'reporterWawuId'),
+      ...idOf(comments, 'authorWawuId'),
+      ...idOf(roomMessages, 'senderWawuId'),
+      ...idOf(chatMessages, 'senderWawuId'),
+      ...idOf(pieces, 'creatorWawuId'),
+      ...idOf(bought, 'buyerWawuId'),
+    ]);
+  }
+
   async suspend(
     wawuId: string,
     dto: Pick<SuspendUserDto, 'reason' | 'note' | 'reportId'>,
     admin: AdminUserView,
   ): Promise<AdminSuspensionView> {
-    const profile = await this.prisma.userProfile.findUnique({
-      where: { wawuUserId: wawuId },
-      select: { wawuUserId: true },
-    });
-    if (!profile) throw new NotFoundException('Person not found.');
+    if (!(await this.known([wawuId])).has(wawuId)) {
+      throw new NotFoundException('Person not found.');
+    }
 
     const inForce = await this.prisma.userSuspension.findFirst({
       where: { wawuUserId: wawuId, liftedAt: null },
@@ -173,7 +256,11 @@ export class UserSuspensionService {
         orderBy: { suspendedAt: 'desc' },
       }),
     ]);
-    if (!profile && rows.length === 0) {
+    if (
+      !profile &&
+      rows.length === 0 &&
+      !(await this.known([wawuId])).has(wawuId)
+    ) {
       throw new NotFoundException('Person not found.');
     }
     const history = rows.map(entry);

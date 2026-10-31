@@ -1,6 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  isSuspended,
+  suspendedRefusal,
+} from '../../common/suspension/user-suspension';
 import type { CreateBeneficiaryDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
 import { loadMoneyParties } from '../money-party';
@@ -10,6 +14,7 @@ import type {
   MoneyPartyView,
 } from '../money-view.type';
 import { BankAccountCheckService } from './bank-account-check.service';
+import { PayoutAccountService } from './payout-account.service';
 import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 
 /**
@@ -77,6 +82,7 @@ export class BeneficiaryService {
     private readonly banks: BankAccountCheckService,
     private readonly wawuId: WawuIdClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly payout: PayoutAccountService,
   ) {}
 
   async list(owner: string): Promise<BeneficiaryView[]> {
@@ -110,6 +116,9 @@ export class BeneficiaryService {
         : dto.wawuUserId !== undefined;
     if (mixed) throw new BadRequestException(BENEFICIARY_MIXED_MESSAGE);
     if (dto.kind === 'wawu_user') {
+      // USER-SUSPEND (R-121 tightened, round 2 H1): a suspended person sends money to nobody else, so a person is not
+      // saved to send to. Only their own bank account is (below).
+      if (await isSuspended(this.prisma, owner)) throw suspendedRefusal();
       return this.addWawuUser(owner, dto.wawuUserId!);
     }
     return this.addBankAccount(
@@ -207,11 +216,27 @@ export class BeneficiaryService {
       bankCode,
       accountNumber,
     );
+    await this.suspendedMayKeep(owner, account);
     return this.insert(owner, {
       kind: 'bank_account',
       ...account,
       ...this.banks.checkedStamp(account.bankCode),
     });
+  }
+
+  /**
+   * USER-SUSPEND (R-121 tightened, round 2 H1). While the owner is suspended a bank account is saved only if the bank
+   * names its holder as the owner's own verified name (the check the payout account and a withdrawal use); any other is
+   * `403 account_suspended`. Nobody else is asked anything more than before.
+   */
+  private async suspendedMayKeep(
+    owner: string,
+    account: { accountName: string; bankName: string },
+  ): Promise<void> {
+    if (!(await isSuspended(this.prisma, owner))) return;
+    if (await this.payout.notYourNameRefusal(owner, account)) {
+      throw suspendedRefusal();
+    }
   }
 
   /**
@@ -232,6 +257,7 @@ export class BeneficiaryService {
       row.nuvionBankCode ?? row.bankCode,
       row.accountNumber,
     );
+    await this.suspendedMayKeep(owner, account);
     const stamp = this.banks.checkedStamp(account.bankCode);
     await this.prisma.moneyBeneficiary.updateMany({
       where: {

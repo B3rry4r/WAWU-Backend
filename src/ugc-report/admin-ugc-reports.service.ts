@@ -7,6 +7,7 @@ import { suspendedIds } from '../common/suspension/user-suspension';
 import { UserSuspensionService } from '../user-suspension/user-suspension.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { AdminOpsAuditService } from '../common/audit/admin-ops-audit.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { AdminUserView } from '../admin/auth/admin-user-view.type';
 import { AdminContentReviewService } from '../admin/content-review/admin-content-review.service';
@@ -104,6 +105,7 @@ export class AdminUgcReportsService {
     private readonly wawuId: WawuIdClient,
     private readonly content: AdminContentReviewService,
     private readonly suspensions: UserSuspensionService,
+    private readonly audit: AdminOpsAuditService,
   ) {}
 
   async list(
@@ -153,17 +155,9 @@ export class AdminUgcReportsService {
       [...firstOf.values()].flatMap((r) => [r.reporterWawuId, r.subjectWawuId]),
     );
     const suspended = new Set(await suspendedIds(this.prisma));
-    const kept = new Set(
-      (
-        await this.prisma.userProfile.findMany({
-          where: {
-            wawuUserId: {
-              in: [...firstOf.values()].map((r) => r.subjectWawuId),
-            },
-          },
-          select: { wawuUserId: true },
-        })
-      ).map((p) => p.wawuUserId),
+    // L1 (round 2): a person with no profile row can be suspended too, so "the Hub still has them" is anything of theirs.
+    const kept = await this.suspensions.known(
+      [...firstOf.values()].map((r) => r.subjectWawuId),
     );
     const items: AdminUgcReportView[] = [];
     for (const g of groups) {
@@ -251,7 +245,16 @@ export class AdminUgcReportsService {
           : 'A take-down needs a note. It is the only record of why the item came down.',
       );
     }
-    if (removes) await this.takeDown(kind, report.targetId, note!, admin);
+    if (removes) {
+      await this.takeDown(
+        kind,
+        report.targetId,
+        note!,
+        admin,
+        report.id,
+        report.subjectWawuId,
+      );
+    }
 
     if (suspends) {
       try {
@@ -282,6 +285,22 @@ export class AdminUgcReportsService {
         resolvedByAdminRole: admin.role,
       },
     });
+    // L1 (round 2): a dismissal is in the audit trail too (a take-down and a suspension write their own rows).
+    if (status === 'dismissed' && done.count > 0) {
+      await this.audit.record(admin, {
+        resource: 'ugc_report',
+        resourceId: report.id,
+        subjectWawuId: report.subjectWawuId,
+        action: 'ugc_report_dismissed',
+        detail: {
+          kind,
+          targetId: report.targetId,
+          reason: report.reason,
+          resolved: done.count,
+          note,
+        },
+      });
+    }
     return {
       id: report.id,
       kind,
@@ -292,11 +311,31 @@ export class AdminUgcReportsService {
     };
   }
 
+  /** One audit row for a comment or message a report took down. (A piece is audited by the content review.) */
+  private async recordRemoved(
+    admin: AdminUserView,
+    kind: UgcKind,
+    targetId: string,
+    note: string,
+    reportId: string,
+    subjectWawuId: string,
+  ): Promise<void> {
+    await this.audit.record(admin, {
+      resource: 'ugc_report',
+      resourceId: targetId,
+      subjectWawuId,
+      action: 'ugc_item_removed',
+      detail: { kind, reportId, note },
+    });
+  }
+
   private async takeDown(
     kind: UgcKind,
     targetId: string,
     note: string,
     admin: AdminUserView,
+    reportId: string,
+    subjectWawuId: string,
   ): Promise<void> {
     switch (kind) {
       case 'piece': {
@@ -322,13 +361,32 @@ export class AdminUgcReportsService {
             data: { commentCount: { decrement: 1 } },
           }),
         ]);
+        await this.recordRemoved(
+          admin,
+          kind,
+          targetId,
+          note,
+          reportId,
+          subjectWawuId,
+        );
         return;
       }
-      case 'community_message':
-        await this.prisma.communityMessage.deleteMany({
+      case 'community_message': {
+        const gone = await this.prisma.communityMessage.deleteMany({
           where: { id: targetId },
         });
+        if (gone.count > 0) {
+          await this.recordRemoved(
+            admin,
+            kind,
+            targetId,
+            note,
+            reportId,
+            subjectWawuId,
+          );
+        }
         return;
+      }
       case 'chat_message': {
         const m = await this.prisma.chatMessage.findUnique({
           where: { id: targetId },
@@ -340,7 +398,19 @@ export class AdminUgcReportsService {
             'A money request cannot be taken down. Dismiss the report.',
           );
         }
-        await this.prisma.chatMessage.deleteMany({ where: { id: targetId } });
+        const gone = await this.prisma.chatMessage.deleteMany({
+          where: { id: targetId },
+        });
+        if (gone.count > 0) {
+          await this.recordRemoved(
+            admin,
+            kind,
+            targetId,
+            note,
+            reportId,
+            subjectWawuId,
+          );
+        }
         return;
       }
       default:

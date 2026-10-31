@@ -29,8 +29,13 @@ export interface Harness {
   prisma: PrismaService;
   http: () => request.Agent;
   stop: () => Promise<void>;
-  /** A new person in the mock WAWU ID, with a Hub profile row. */
-  person: (label: string, accountType?: 'user' | 'creator') => Promise<Who>;
+  /** A new person in the mock WAWU ID, with a Hub profile row. `fullName` is the name on their sign-up. */
+  person: (
+    label: string,
+    accountType?: 'user' | 'creator',
+    fullName?: string,
+    withProfile?: boolean,
+  ) => Promise<Who>;
   /** Admin tokens by role. */
   admin: (role: 'superadmin' | 'reviewer' | 'support' | 'finance') => string;
   /** Everything this harness created, removed. */
@@ -88,6 +93,8 @@ export async function boot(tag: string): Promise<Harness> {
   const person = async (
     label: string,
     accountType: 'user' | 'creator' = 'user',
+    fullName?: string,
+    withProfile = true,
   ) => {
     n += 1;
     const t = `${Date.now().toString().slice(-8)}${n}`;
@@ -95,7 +102,7 @@ export async function boot(tag: string): Promise<Harness> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        fullName: `Suspend ${label}`,
+        fullName: fullName ?? `Suspend ${label}`,
         email: `suspend-${tag}-${label}-${t}@test.wawu.dev`,
         phone: `+2347${t}`,
         country: 'NG',
@@ -107,14 +114,17 @@ export async function boot(tag: string): Promise<Harness> {
       accessToken: string;
       user: { id: string };
     };
-    await prisma.userProfile.create({
-      data: {
-        wawuUserId: b.user.id,
-        accountType,
-        handle: `${tag}${label}${t}`.toLowerCase(),
-      },
-    });
-    if (accountType === 'creator') {
+    // Round 2 (L1): a person who has signed up but never made a Hub profile has no UserProfile row.
+    if (withProfile) {
+      await prisma.userProfile.create({
+        data: {
+          wawuUserId: b.user.id,
+          accountType,
+          handle: `${tag}${label}${t}`.toLowerCase(),
+        },
+      });
+    }
+    if (accountType === 'creator' && withProfile) {
       await prisma.creatorState
         .create({ data: { wawuUserId: b.user.id } })
         .catch(() => undefined);
@@ -175,7 +185,10 @@ export async function boot(tag: string): Promise<Harness> {
         where: { wawuUserId: { in: people } },
       });
       await prisma.adminOpsAudit.deleteMany({
-        where: { resource: 'user_suspension', subjectWawuId: { in: people } },
+        where: {
+          resource: { in: ['user_suspension', 'ugc_report'] },
+          subjectWawuId: { in: people },
+        },
       });
       await prisma.ugcReport.deleteMany({
         where: {

@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { suspendedIds } from '../../common/suspension/user-suspension';
 import { NotificationService } from '../../notification/notification.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import { CommunityMessageService } from '../../community-message/community-message.service';
@@ -266,8 +267,19 @@ export class CommunityRoomsService {
       return { items: [], currentPage: page, perPage, total: 0 };
     }
 
+    // USER-SUSPEND (R-121, round 2 M2): a room hosted by a suspended person is gone for its members too, like the room's
+    // other routes (assertRoomVisible). A block does not do this (a member keeps the room); a suspension does. The
+    // person's own rooms (they are the host) stay in their list. Nobody suspended: the query is the one it was.
+    const suspendedHosts = await suspendedIds(this.prisma, userWawuId);
     const [communities, markers] = await Promise.all([
-      this.prisma.community.findMany({ where: { id: { in: ids } } }),
+      this.prisma.community.findMany({
+        where: {
+          id: { in: ids },
+          ...(suspendedHosts.length === 0
+            ? {}
+            : { hostWawuId: { notIn: suspendedHosts } }),
+        },
+      }),
       this.prisma.communityReadMarker.findMany({
         where: { userWawuId, communityId: { in: ids } },
         select: { communityId: true, lastReadAt: true },
