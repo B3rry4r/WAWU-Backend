@@ -13,6 +13,7 @@ import { CourseLessonsService } from './course-lessons.service';
 import { ContentMediaController } from './content-media.controller';
 import { ContentMediaService } from './content-media.service';
 import { ProductDraftController } from './product-draft.controller';
+import { PreviewCutService } from './preview-cut.service';
 import { ProductDraftService } from './product-draft.service';
 import { FeedCardsService } from './feed-cards.service';
 import { FeedEntriesService } from './feed-entries.service';
@@ -71,6 +72,8 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
   providers: [
     ContentPieceService,
     ContentSaleTermsService,
+    // PREVIEW-AUTO: the preview a piece is published with (a clip, the free file, or a cut made from the full file).
+    PreviewCutService,
     ProductDraftService,
     ContentEngagementService,
     ContentDetailService,

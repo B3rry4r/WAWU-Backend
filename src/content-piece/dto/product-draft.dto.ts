@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -153,8 +154,15 @@ export class UpdateProductDraftDto {
  * needs a running tier and a free place.
  */
 export class PublishProductDraftDto {
+  /** Optional since PREVIEW-AUTO, exactly as on `POST /content`: a free piece may leave it out. */
+  @IsOptional()
   @IsUrl({ require_tld: false })
-  previewAsset: string;
+  previewAsset?: string;
+
+  /** PREVIEW-AUTO: "make my preview from the full file", as on `POST /content`. */
+  @IsOptional()
+  @IsBoolean()
+  previewFromFile?: boolean;
 
   @IsUrl({ require_tld: false })
   fullAsset: string;

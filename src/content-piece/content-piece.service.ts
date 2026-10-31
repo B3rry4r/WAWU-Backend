@@ -875,6 +875,13 @@ export class ContentPieceService {
     // first upload or any other, and takes a place exactly like a paid one
     // (R-8).
     const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
+    // PREVIEW-AUTO: the routes that publish resolve the preview (a cut file, or the full file of a free piece) before they call
+    // `create`, so it is set by here; a caller that did not is refused rather than stored with no preview.
+    const previewAsset = dto.previewAsset;
+    if (!previewAsset)
+      throw new BadRequestException(
+        'Paid content needs a preview. Add a clip, or ask us to make it from your file.',
+      );
 
     // `previewAsset` is public by design — it is returned to every caller,
     // including anonymous ones on /content/public/featured. If it points at
@@ -986,7 +993,7 @@ export class ContentPieceService {
               tags: dto.tags ?? [],
               accessType: dto.accessType as never,
               price: dto.price,
-              previewAssetUrl: dto.previewAsset,
+              previewAssetUrl: previewAsset,
               fullAssetUrl: dto.fullAsset,
               coverKey,
               creatorFirstUploadFree: isFirstUpload,
