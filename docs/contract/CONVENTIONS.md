@@ -375,6 +375,13 @@ any value but `app` (compared without case), behaviour is exactly as before.
   `POST /communities/rooms` are the app's alone and always apply it.
 - Routes that gain a field **only with the header**: the piece's `coverUrl` on the
   routes the website also calls (CONTENT-COVER, R-114; `COVERS.md`).
+- Values that are **served signed only with the header** (HUB-SWEEP-1): on `GET /search`,
+  `GET /search/closest` and `GET /search/suggestions` the pictures and files are stored as a
+  key, or as a link that dies a week after upload, so the app's request gets a fresh link on
+  each: a piece's `previewAssetUrl` and, when the piece is unlocked, `fullAssetUrl`; a creator's
+  `avatarUrl` and `coverUrl`; a community's `imageUrl`. Without the header the answer carries the
+  stored values exactly as before (the website's answer does not change by a byte). A locked
+  piece's `fullAssetUrl` stays `null` either way.
 - CORS: `app.enableCors({ origin, credentials })` sets no `allowedHeaders`, so
   the preflight reflects the headers the browser asks for and `X-Wawu-Client`
   is allowed with no change (`price-list-app-client.spec.ts` pins it; an explicit

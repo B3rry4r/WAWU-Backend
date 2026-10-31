@@ -42,6 +42,9 @@ import {
 /** The marker the board's figures carry (R-65: "any other figure drawn on a board"). */
 const BOARD = 'DV2-BOARD-FIGURE';
 
+/** The marker on the products each tier allows: the owner named them (R-112), so they are no longer a board figure. */
+const TIER_PRODUCTS = 'TIER-PRODUCTS';
+
 /** Checking limits (what an admin can type), not product figures. */
 const LIMIT = {
   /** Most lines under a pass. */
@@ -477,7 +480,7 @@ export function buildRegistry(
       label: `${t.name}: products it allows`,
       unit: 'count',
       usedBy: TIER_USED.products,
-      provisional: BOARD,
+      provisional: TIER_PRODUCTS,
       default: t.products,
       parse: count,
       apply: (d, v) => {
