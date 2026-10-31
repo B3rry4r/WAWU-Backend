@@ -137,6 +137,26 @@ function digits(n: number): string {
 }
 
 /**
+ * A phone for a row of `FintavaWalletOpening`, whose `phone` is unique. Two
+ * `digits(8)` draws met in about 1 run in 700 once 520 planted openings were
+ * live at once (about 1 in 3,700 for the people the tests open), and a clash
+ * failed the insert ("Unique constraint failed on the fields: (`phone`)"). Here
+ * the 8 digits are a counter that starts at a random place in the run, so no
+ * two phones of one prefix in a run are equal by construction. The shape is the
+ * one `digits(8)` drew: `+234`, the prefix, then 8 digits, the first nonzero.
+ * Nothing is retried.
+ */
+const phoneNext = new Map<string, number>();
+function uniquePhone(prefix: '80' | '81'): string {
+  // A million draws of headroom below 99,999,999; a run uses a few thousand.
+  const next =
+    phoneNext.get(prefix) ?? randomInt(10_000_000, 99_999_999 - 1_000_000);
+  if (next > 99_999_999) throw new Error('no unused test phone left');
+  phoneNext.set(prefix, next + 1);
+  return `+234${prefix}${next}`;
+}
+
+/**
  * Every client address this file draws differs from every other it has drawn
  * in the run. The opening routes count tries per address per hour in the
  * database, so two equal draws (any two of the five old draws met in about 1
@@ -541,7 +561,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   ): Person {
     const id = randomUUID();
     users.push(id);
-    const phone = opts.phone ?? `+23480${digits(8)}`;
+    const phone = opts.phone ?? uniquePhone('80');
     const email =
       opts.email === undefined ? `nuv02-${id}@example.com` : opts.email;
     const bvn = opts.bvn ?? digits(11);
@@ -2661,7 +2681,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           bvnVerifiedAt: new Date(
             Date.now() - claimedDaysAgo * 24 * 60 * 60_000,
           ),
-          phone: `+23481${digits(8)}`,
+          phone: uniquePhone('81'),
           attemptStartedAt: then,
           provider: 'nuvion',
         },
