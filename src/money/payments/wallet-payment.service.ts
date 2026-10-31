@@ -1,3 +1,4 @@
+import { assertContentAllowed } from '../../moderation/content-filter';
 import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
@@ -541,6 +542,9 @@ export class WalletPaymentService implements OnModuleInit {
     ) {
       throw new BadRequestException(['note is only sent with a tip.']);
     }
+    // MOD-ROOMS r2 (L1, R-122): the creator reads a tip's note. Refused here, before any quote check, claim, hold or ledger
+    // row, for the naira wallet and the foreign-currency path below alike.
+    assertContentAllowed(dto.note);
     const code = foreignCode(dto.sourceCurrency ?? currentPaySource());
     if (code) return this.payForeign(wallet, dto, scope, code);
     requireNairaWallet(wallet);

@@ -66,6 +66,21 @@ export interface LiveCommunityMessageRemovedEvent extends LiveEventBase {
 }
 
 /**
+ * MOD-ROOMS r2 (R-122, M3). The host of a room muted or unmuted the person this event goes to: their open room swaps the
+ * composer for the calm line, or brings the composer back, without being reopened. It goes to that member only (every phone
+ * they have open), never to the host or the other members, and carries no name and no words. It is in `GET /live/catch-up`
+ * (from the host's log), so a phone that was away when the host did it learns it when it comes back; the events come in the
+ * order the host did them, so the last one is the state. Applying it twice changes nothing. `cursor` is the time the host
+ * did it.
+ */
+export interface LiveCommunityMuteEvent extends LiveEventBase {
+  type: 'community.mute.changed';
+  communityId: string;
+  /** True when the host muted this person, false when the host lifted it. */
+  muted: boolean;
+}
+
+/**
  * A legal conversation changed (LEGAL-02): a consultant wrote in it. Socket only,
  * and not part of `GET /live/catch-up` (a phone reads the conversation itself,
  * `GET /legal/assistant/{id}`, when it reconnects). It carries no words and no
@@ -82,7 +97,8 @@ export type LiveEvent =
   | LiveChatReadEvent
   | LiveMoneyRequestEvent
   | LiveCommunityMessageEvent
-  | LiveCommunityMessageRemovedEvent;
+  | LiveCommunityMessageRemovedEvent
+  | LiveCommunityMuteEvent;
 
 /** First frame the server sends once a token is accepted. */
 export interface LiveReadyFrame {

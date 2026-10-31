@@ -366,6 +366,8 @@ export class EventService {
       dto.hostOrg,
       dto.hostOrgBio,
       dto.ticketTypes?.map((t) => t.name),
+      // L1 (r2): a speaker's name and role are read by everyone who opens the event.
+      dto.speakers?.flatMap((sp) => [sp.name, sp.title]),
     );
     const listCheck = this.priceList.forThisRequest();
     await this.assertMayHost(userWawuId);
@@ -439,6 +441,7 @@ export class EventService {
       dto.description,
       dto.hostOrg,
       dto.hostOrgBio,
+      dto.speakers?.flatMap((sp) => [sp.name, sp.title]),
     );
     // Checked on the edit as well as the create. A tick or tier that lapses
     // after an event was approved must not leave its host with a write path

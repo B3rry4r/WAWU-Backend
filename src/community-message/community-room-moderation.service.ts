@@ -27,6 +27,9 @@ const ONLY_THE_HOST = 'Only the host of this room can do that.';
  * still read; sending is refused) and unmute them. Removing a member is NOT here: it exists already (INBOX-25, R-71) and
  * carries the refund of an unused pass.
  *
+ * A mute or an unmute reaches that member's open room at once (`community.mute.changed` on the live channel, M3), and a
+ * phone that was away reads it from the catch-up; a repeat of either changes nothing and sends nothing.
+ *
  * Muting never touches money: nothing here reads or writes a pass, a credit, a refund or a wallet. Every act is written
  * to `CommunityModerationLog` (who, what, when) in the same transaction as the act, so there is never an act without its
  * record or a record without its act.
@@ -171,14 +174,14 @@ export class CommunityRoomModerationService {
     if (!member || member.status !== 'joined') {
       throw new NotFoundException('That person is not a member of this room.');
     }
-    await this.prisma.$transaction(async (tx) => {
+    const changed = await this.prisma.$transaction(async (tx) => {
       const had = await tx.communityMute.findUnique({
         where: {
           communityId_userWawuId: { communityId, userWawuId: targetWawuId },
         },
         select: { id: true },
       });
-      if (had) return;
+      if (had) return false;
       await tx.communityMute.create({
         data: {
           communityId,
@@ -194,7 +197,18 @@ export class CommunityRoomModerationService {
           targetWawuId,
         },
       });
+      return true;
     });
+    // After the commit (M3): the muted member's open room swaps the composer for the calm line at once. A repeat of a mute
+    // changes nothing and tells nobody. Never throws; a lost signal is the catch-up's job.
+    if (changed) {
+      await this.live.publish({
+        kind: 'community.mute.changed',
+        communityId,
+        userWawuId: targetWawuId,
+        muted: true,
+      });
+    }
     return { muted: true };
   }
 
@@ -205,11 +219,11 @@ export class CommunityRoomModerationService {
     targetWawuId: string,
   ): Promise<{ muted: false }> {
     await this.hostedBy(communityId, actorWawuId);
-    await this.prisma.$transaction(async (tx) => {
+    const changed = await this.prisma.$transaction(async (tx) => {
       const gone = await tx.communityMute.deleteMany({
         where: { communityId, userWawuId: targetWawuId },
       });
-      if (gone.count === 0) return;
+      if (gone.count === 0) return false;
       await tx.communityModerationLog.create({
         data: {
           communityId,
@@ -218,7 +232,17 @@ export class CommunityRoomModerationService {
           targetWawuId,
         },
       });
+      return true;
     });
+    // After the commit (M3): the composer comes back in the member's open room at once.
+    if (changed) {
+      await this.live.publish({
+        kind: 'community.mute.changed',
+        communityId,
+        userWawuId: targetWawuId,
+        muted: false,
+      });
+    }
     return { muted: false };
   }
 }

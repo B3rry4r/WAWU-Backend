@@ -222,6 +222,19 @@ function parseSignal(payload: string): LiveSignal | LiveProbe | null {
         messageId: s('messageId'),
       };
     }
+    if (
+      v.kind === 'community.mute.changed' &&
+      s('communityId') &&
+      s('userWawuId') &&
+      typeof v.muted === 'boolean'
+    ) {
+      return {
+        kind: 'community.mute.changed',
+        communityId: s('communityId'),
+        userWawuId: s('userWawuId'),
+        muted: v.muted,
+      };
+    }
     if (v.kind === 'legal.thread' && s('legalRequestId') && s('messageId')) {
       return {
         kind: 'legal.thread',

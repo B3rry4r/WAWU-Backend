@@ -18,6 +18,13 @@ export type LiveSignal =
       communityId: string;
       messageId: string;
     }
+  // MOD-ROOMS r2 (R-122, M3): the host muted or unmuted a member; only that member's open room is told.
+  | {
+      kind: 'community.mute.changed';
+      communityId: string;
+      userWawuId: string;
+      muted: boolean;
+    }
   | { kind: 'legal.thread'; legalRequestId: string; messageId: string };
 
 /**

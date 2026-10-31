@@ -76442,6 +76442,32 @@
           "cursor"
         ]
       },
+      "LiveCommunityMuteEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "community.mute.changed"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "communityId",
+          "muted",
+          "cursor"
+        ]
+      },
       "LiveCatchUp": {
         "type": "object",
         "properties": {
@@ -76463,6 +76489,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LiveCommunityMessageRemovedEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveCommunityMuteEvent"
                 }
               ]
             }

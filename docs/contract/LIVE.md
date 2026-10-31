@@ -63,6 +63,7 @@ are already open:
 | `chat.read` | the other person (not when blocked) and the reader's own other phones |
 | `community.message` | the host and members whose status is `joined`; not anyone who has blocked the sender or been blocked by them |
 | `community.message.removed` | the same people as `community.message`, with no block filter: it names the message by id and carries no words (MOD-ROOMS, R-122) |
+| `community.mute.changed` | the member the host muted or unmuted, on every phone they have open, while they are a joined member; nobody else, not even the host. It names the room and whether they are muted, no name and no words (MOD-ROOMS r2, M3, R-122) |
 | `legal.thread` | the client who owns the legal matter a consultant just wrote on, and nobody else (LEGAL-02) |
 
 A person may hold 8 sockets; the 9th closes the oldest with `4409`.
@@ -74,6 +75,7 @@ A person may hold 8 sockets; the 9th closes the oldest with `4409`.
 { type: 'chat.read',         cursor, chatId, readerWawuId, mine, lastReadAt, lastReadMessageId }
 { type: 'community.message', cursor, communityId, message: CommunityMessage }
 { type: 'community.message.removed', cursor, communityId, messageId }   // the host deleted it (MOD-ROOMS, R-122)
+{ type: 'community.mute.changed', cursor, communityId, muted }   // the host muted (true) or unmuted (false) you (MOD-ROOMS r2, R-122)
 { type: 'legal.thread',      cursor, legalRequestId }   // socket only (LEGAL-02)
 ```
 
@@ -140,7 +142,8 @@ removes the repeats. A cursor that is not one the server gave out is a 400.
 What it returns: new messages in the caller's chats and in the communities
 they are in, the room messages a host deleted (`community.message.removed`, from
 the host's log, because the row is gone; applying one twice, or for a message
-the phone never held, is harmless), and the read marks the other person moved (one event per chat,
+the phone never held, is harmless), the caller's own mutes and unmutes by a host
+(`community.mute.changed`, from the same log, in the order the host did them, so the last is the state), and the read marks the other person moved (one event per chat,
 the latest mark; this includes the other person's mark when their own sending moved
 it, which the socket does not push, and applying it twice is harmless). It
 leaves out chats where either person has blocked the

@@ -27,6 +27,10 @@ import type { LiveSignal } from './live-signal.type';
  *    members whose pass has not ended, with no block filter: it names a message by id and carries no words, so telling
  *    someone who blocked its writer to drop it leaks nothing;
  *
+ *  - a mute or an unmute by the host (`community.mute.changed`, MOD-ROOMS r2, R-122) goes to the muted member only, on
+ *    every phone they have open, and only while they are still a joined member; it carries the room's id and whether they
+ *    are muted, no name and no words;
+ *
  *  - a consultant's message on a legal matter goes to the client who owns the
  *    matter, and to nobody else (`legal.thread`, LEGAL-02); it names the
  *    matter, never the words.
@@ -53,7 +57,8 @@ export class LiveDispatcher {
     if (this.connections.size === 0) return Promise.resolve();
     const room =
       signal.kind === 'community.message' ||
-      signal.kind === 'community.message.removed'
+      signal.kind === 'community.message.removed' ||
+      signal.kind === 'community.mute.changed'
         ? signal.communityId
         : signal.kind === 'legal.thread'
           ? signal.legalRequestId
@@ -85,6 +90,12 @@ export class LiveDispatcher {
         return this.communityMessageRemoved(
           signal.communityId,
           signal.messageId,
+        );
+      case 'community.mute.changed':
+        return this.communityMuteChanged(
+          signal.communityId,
+          signal.userWawuId,
+          signal.muted,
         );
       case 'legal.thread':
         return this.legalThread(signal.legalRequestId, signal.messageId);
@@ -268,6 +279,42 @@ export class LiveDispatcher {
       messageId,
     };
     for (const wawuId of allowed) this.connections.send(wawuId, event);
+  }
+
+  /**
+   * The host muted or unmuted a member (MOD-ROOMS r2, R-122): that member's open room swaps the composer for the calm line,
+   * or brings it back, at once. The cursor is the time the host did it, read from the log the act wrote in the same
+   * transaction (the catch-up carries the same row).
+   */
+  private async communityMuteChanged(
+    communityId: string,
+    userWawuId: string,
+    muted: boolean,
+  ): Promise<void> {
+    if (!this.connections.has(userWawuId)) return;
+    const [log, member] = await Promise.all([
+      this.prisma.communityModerationLog.findFirst({
+        where: {
+          communityId,
+          targetWawuId: userWawuId,
+          action: muted ? 'member_muted' : 'member_unmuted',
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.communityMembership.findUnique({
+        where: { userWawuId_communityId: { userWawuId, communityId } },
+        select: { status: true },
+      }),
+    ]);
+    if (!log || member?.status !== 'joined') return;
+    const event: LiveEvent = {
+      type: 'community.mute.changed',
+      cursor: encodeLiveCursor(log.createdAt),
+      communityId,
+      muted,
+    };
+    this.connections.send(userWawuId, event);
   }
 
   private async communityMessage(

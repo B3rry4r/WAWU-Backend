@@ -8,7 +8,8 @@
  * HOW AN ENTRY IS WRITTEN. Lower-case letters and single spaces only: no accents, digits or punctuation. The matcher folds
  * what a person types to this form first (accents off, `0 1 3 4 5 7 @ $ !` back to letters, a `*` as any one letter), so
  * "F.u.c.k", "f*ck", "sh1t" and "fuuuuck" all meet "fuck". A word is whole-word only: "Scunthorpe", "class" and "assess"
- * are never hit. A trailing `~` means the word also takes the common endings (s, es, ed, er, ers, ing, in, y), so
+ * are never hit. Two short lists beside the groups (below) are the exceptions: STRONG_WORDS are caught inside longer words
+ * too, and ALLOWED_PHRASES and ALLOWED_WORDS are never refused. A trailing `~` means the word also takes the common endings (s, es, ed, er, ers, ing, in, y), so
  * `fuck~` covers fucks, fucked, fucker and fucking. A doubled letter in an entry must be doubled (or more) in the text,
  * so "ass" words do not hit the plain word "as".
  *
@@ -65,18 +66,30 @@ export const BLOCKED_WORD_GROUPS: readonly WordGroup[] = [
       'tranny~',
       'trannies',
       'shemale~',
-      'retard~',
-      'kike~',
-      'spic~',
-      'spick~',
+      // "retarding" is a plain English verb, so only the three forms of the slur are listed.
+      'retard',
+      'retards',
+      'retarded',
+      // MOD-ROOMS r2 (M1, 31 Oct 2026): "kike" is gone from the list (it is a common Yoruba name, short for Kikelomo, far
+      // more often than the slur), and spic, coon, kaffir, gook and beaner take NO endings: "spicy jollof", "spices",
+      // "Spicer", "Gookin" and "Beanery" are food and names. Each is whole-word only, with its plural written out.
+      'spic',
+      'spics',
+      'spick',
+      'spicks',
       'chink~',
-      'gook~',
+      'gook',
+      'gooks',
       'wetback~',
-      'coon~',
-      'paki~',
-      'kaffir~',
+      'coon',
+      'coons',
+      'paki',
+      'pakis',
+      'kaffir',
+      'kaffirs',
       'towelhead~',
-      'beaner~',
+      'beaner',
+      'beaners',
       'darkie~',
       'darky',
       'golliwog~',
@@ -91,9 +104,17 @@ export const BLOCKED_WORD_GROUPS: readonly WordGroup[] = [
     words: [
       'fuck~',
       'fuk~',
+      'fuq~',
       'fck~',
       'fvck~',
       'phuck~',
+      // The short spellings with the word after them, written as one word ("fukyou"). "fuckyou" and the rest of the fuck
+      // family are caught inside longer words by STRONG_WORDS below; these shorter spellings are not safe to catch that way.
+      ...['fuk', 'fuq', 'fck'].flatMap((w) =>
+        ['you', 'off', 'up', 'face', 'head', 'wit'].map(
+          (tail) => `${w}${tail}`,
+        ),
+      ),
       'motherfuck~',
       'muthafuck~',
       'mutherfuck~',
@@ -143,6 +164,12 @@ export const BLOCKED_WORD_GROUPS: readonly WordGroup[] = [
       'arsehole~',
       'dumbass',
       'fatass',
+      // The same words split by a space or a hyphen ("fat ass", "fat-ass", "dum bass"); the hyphen is a space to the matcher.
+      'fat ass',
+      'dumb ass',
+      'dum ass',
+      'dum bass',
+      'bitchass~',
       'kiss my ass',
       'whore~',
       'slut~',
@@ -196,6 +223,7 @@ export const BLOCKED_WORD_GROUPS: readonly WordGroup[] = [
       'kill urself',
       'kill ur self',
       'kys',
+      'k y s',
       'hang yourself',
       'go and die',
       'go die',
@@ -245,15 +273,69 @@ export const BLOCKED_WORD_GROUPS: readonly WordGroup[] = [
 ];
 
 /**
- * Phrases that contain a listed word and are plainly innocent. They are taken out of the text before it is checked.
- * Kept to the ones found so far; each is a real use of a listed word.
+ * Phrases that contain a listed word and are plainly innocent. They are taken out of the text before it is checked, as
+ * whole words (a space in an entry matches any run of spaces and marks, so "kaffir-lime" is "kaffir lime"). Each is a real
+ * use of a listed word; "chink in the armour" and "spick and span" are idioms, "kaffir lime" is a leaf in Nigerian and
+ * Thai cooking, and a Maine Coon is a cat.
  */
 export const ALLOWED_PHRASES: readonly string[] = [
   'chink in the armour',
   'chink in the armor',
   'chinks in the armour',
   'chinks in the armor',
+  'spick and span',
+  'spic and span',
+  'kaffir lime',
+  'kaffir limes',
+  'maine coon',
+  'maine coons',
+  'coon hound',
+  'coon hounds',
 ];
+
+/**
+ * Whole words that are never refused, whatever they hold (read after folding: accents off, lower case). Names and plain
+ * English that the word list or STRONG_WORDS would otherwise meet: "snigger" holds the n-word's letters, "Twatt" is a
+ * surname and an Orkney place, and the list's doubled-letter rule would take it for "twat".
+ */
+export const ALLOWED_WORDS: readonly string[] = [
+  'snigger',
+  'sniggers',
+  'sniggered',
+  'sniggering',
+  'niggard',
+  'niggards',
+  'niggardly',
+  'niggardliness',
+  'twatt',
+];
+
+/**
+ * Words that are caught INSIDE a longer word as well ("fuckyou", "fuckoff", "bitchass", "muthafucka", "motherfuckers"),
+ * because people write them run together. Kept short on purpose: a word only goes here when no clean word or name
+ * holds it. Everything else on the list is whole-word only ("Scunthorpe", "Shitta", "Assa" and "Cockcroft" are never hit).
+ * "Niger", "Nigeria" and "Nigerian" hold only one g and are not hit; the real English words that hold the n-word's letters
+ * are in ALLOWED_WORDS.
+ */
+export const STRONG_WORDS: readonly string[] = [
+  'fuck',
+  'fvck',
+  'phuck',
+  'motherfuck',
+  'muthafuck',
+  'mutherfuck',
+  'mothafuck',
+  'nigger',
+  'nigga',
+  'bitchass',
+];
+
+/**
+ * Words people split with a space or a dot ("fu ck", "fuc k", "f uck", "fu.ck"). When two to four short pieces (four
+ * letters or fewer each) joined make one of these, it is caught. Only the longer spellings are here: "fu k" or "fc k" can
+ * be a name and an initial, and a split of a short word is left to Report.
+ */
+export const SPLIT_WORDS: readonly string[] = ['fuck~', 'fvck~', 'phuck~'];
 
 /** Every built-in entry, flat. */
 export function builtInWords(): string[] {
