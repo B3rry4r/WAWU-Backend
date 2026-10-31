@@ -133,8 +133,12 @@ export class SearchResponseService {
     requesterWawuId: string | undefined,
     hidden: string[],
   ): Promise<ContentPieceResponse[]> {
+    const reported = await this.blockedAccounts.reportedIds(
+      requesterWawuId,
+      'piece',
+    );
     const items = await this.prisma.contentPiece.findMany({
-      where: contentMatch(q, hidden),
+      where: contentMatch(q, hidden, reported),
       orderBy: { views: 'desc' },
       take: RESULT_LIMIT,
     });
@@ -309,10 +313,15 @@ export class SearchResponseService {
     }
 
     const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
+    const reportedPieces = await this.blockedAccounts.reportedIds(
+      requesterWawuId,
+      'piece',
+    );
     const items = await this.prisma.contentPiece.findMany({
       where: {
         status: ContentStatus.live,
         creatorWawuId: { notIn: hidden },
+        id: { notIn: reportedPieces },
         OR: tokens.flatMap((token) => [
           { title: { contains: token, mode: 'insensitive' as const } },
           { description: { contains: token, mode: 'insensitive' as const } },

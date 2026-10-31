@@ -230,15 +230,37 @@ export class BlockedAccountService {
    */
   async hiddenFrom(viewer: string | null | undefined): Promise<string[]> {
     if (!viewer) return [];
-    const rows = await this.prisma.blockedAccount.findMany({
-      where: { OR: [{ userWawuId: viewer }, { blockedWawuId: viewer }] },
-      select: { userWawuId: true, blockedWawuId: true },
-    });
-    const ids = new Set<string>();
+    const [rows, reportedPeople] = await Promise.all([
+      this.prisma.blockedAccount.findMany({
+        where: { OR: [{ userWawuId: viewer }, { blockedWawuId: viewer }] },
+        select: { userWawuId: true, blockedWawuId: true },
+      }),
+      // REPORT-UGC: a person the viewer reported is hidden from the viewer only, like a block that only they feel.
+      this.reportedIds(viewer, 'profile'),
+    ]);
+    const ids = new Set<string>(reportedPeople);
     for (const r of rows) {
       ids.add(r.userWawuId === viewer ? r.blockedWawuId : r.userWawuId);
     }
     return [...ids];
+  }
+
+  /**
+   * REPORT-UGC. The ids of one kind of thing (`piece`, `comment`, `community_message`, `chat_message`, `profile`) that
+   * `viewer` reported. The read surfaces leave them out for the viewer and for nobody else, so a reported thing never
+   * comes back in their feed, search, comments, room or chat. Empty for a signed-out reader.
+   */
+  async reportedIds(
+    viewer: string | null | undefined,
+    kind:
+      'piece' | 'comment' | 'profile' | 'community_message' | 'chat_message',
+  ): Promise<string[]> {
+    if (!viewer) return [];
+    const rows = await this.prisma.ugcReport.findMany({
+      where: { reporterWawuId: viewer, kind },
+      select: { targetId: true },
+    });
+    return rows.map((r) => r.targetId);
   }
 
   /**

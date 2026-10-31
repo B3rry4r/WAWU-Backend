@@ -318,9 +318,12 @@ export class ChatService {
   ): Promise<ChatMessagePage> {
     await this.conversationFor(me, chatId);
     const before = decodeCursor(cursor);
+    // REPORT-UGC: a message the caller reported is left out for them.
+    const reported = await this.blocks.reportedIds(me, 'chat_message');
     const rows = await this.prisma.chatMessage.findMany({
       where: {
         conversationId: chatId,
+        id: { notIn: reported },
         ...(before
           ? {
               OR: [

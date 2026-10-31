@@ -18,10 +18,13 @@ import type {
 export function contentMatch(
   q: string,
   hidden: string[],
+  /** REPORT-UGC: pieces the searcher reported (theirs only). */
+  reported: string[] = [],
 ): ContentPieceWhereInput {
   return {
     status: ContentStatus.live,
     creatorWawuId: { notIn: hidden },
+    id: { notIn: reported },
     OR: [
       { title: { contains: q, mode: 'insensitive' } },
       { description: { contains: q, mode: 'insensitive' } },

@@ -429,7 +429,16 @@ export class CommunityMessageService {
     // the reader wrote) is not shown to the reader in a shared room, and is
     // not counted.
     const hidden = await this.blockedAccounts.hiddenFrom(readerWawuId);
-    const where = { communityId, senderWawuId: { notIn: hidden } };
+    // REPORT-UGC: a message the reader reported is left out for them, and not counted.
+    const reported = await this.blockedAccounts.reportedIds(
+      readerWawuId,
+      'community_message',
+    );
+    const where = {
+      communityId,
+      senderWawuId: { notIn: hidden },
+      id: { notIn: reported },
+    };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.communityMessage.findMany({
         where,

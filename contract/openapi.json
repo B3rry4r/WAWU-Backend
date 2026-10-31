@@ -26311,6 +26311,143 @@
         ]
       }
     },
+    "/api/hub/reports": {
+      "post": {
+        "operationId": "UgcReportController_report",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUgcReportDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UgcReportView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UgcReport"
+        ]
+      }
+    },
+    "/api/hub/admin/reports": {
+      "get": {
+        "operationId": "AdminUgcReportsController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "description": "Only this kind of item.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "piece",
+                "comment",
+                "profile",
+                "community_message",
+                "chat_message",
+                "direct_message"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUgcReportView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open reports, one row per reported item, oldest first, with the item, the first reporter and the count.",
+        "tags": [
+          "AdminUgcReports"
+        ]
+      }
+    },
+    "/api/hub/admin/reports/{id}/resolve": {
+      "post": {
+        "operationId": "AdminUgcReportsController_resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveUgcReportDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUgcResolveView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Dismiss the report, or take the item down. Settles every open report on the same item.",
+        "tags": [
+          "AdminUgcReports"
+        ]
+      }
+    },
     "/api/hub/creators/{wawuId}/evg": {
       "get": {
         "operationId": "EvgScoreController_getEvgScore",
@@ -50145,6 +50282,72 @@
         "type": "object",
         "properties": {}
       },
+      "CreateUgcReportDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "What is being reported.",
+            "enum": [
+              "piece",
+              "comment",
+              "profile",
+              "community_message",
+              "chat_message",
+              "direct_message"
+            ]
+          },
+          "targetId": {
+            "type": "string",
+            "description": "The id of that thing (a piece, comment, community message, chat message or paid question), or the person's wawuId for a profile.",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why, from the short fixed list.",
+            "enum": [
+              "spam",
+              "harassment",
+              "hate",
+              "sexual",
+              "illegal",
+              "impersonation",
+              "other"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "Anything the reporter wants a moderator to know. Optional.",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "reason"
+        ]
+      },
+      "ResolveUgcReportDto": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`dismiss`: nothing wrong. `take_down`: the item comes down (a piece through content take-down; a comment, community message or chat message is deleted).",
+            "enum": [
+              "dismiss",
+              "take_down"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "Why. Required for a take-down (it is the only record of why it came down); optional for a dismissal.",
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
       "UpsertLearnGuideDto": {
         "type": "object",
         "properties": {
@@ -71377,6 +71580,233 @@
           "slotsTotal"
         ]
       },
+      "AdminUgcPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle"
+        ]
+      },
+      "AdminUgcReportView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "piece",
+              "profile",
+              "community_message",
+              "chat_message",
+              "direct_message"
+            ]
+          },
+          "kindLabel": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "other",
+              "spam",
+              "harassment",
+              "hate",
+              "sexual",
+              "illegal",
+              "impersonation"
+            ]
+          },
+          "reasonLabel": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reportedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastReportedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reporter": {
+            "$ref": "#/components/schemas/AdminUgcPerson"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/AdminUgcPerson"
+          },
+          "item": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string",
+                "nullable": true
+              },
+              "excerpt": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "exists",
+              "title",
+              "excerpt",
+              "status"
+            ]
+          },
+          "emailed": {
+            "type": "boolean"
+          },
+          "canTakeDown": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "kindLabel",
+          "targetId",
+          "count",
+          "reason",
+          "reasonLabel",
+          "note",
+          "reportedAt",
+          "lastReportedAt",
+          "reporter",
+          "subject",
+          "item",
+          "emailed",
+          "canTakeDown"
+        ]
+      },
+      "AdminUgcResolveView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "piece",
+              "profile",
+              "community_message",
+              "chat_message",
+              "direct_message"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "dismissed",
+              "actioned"
+            ]
+          },
+          "resolved": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "targetId",
+          "status",
+          "resolved"
+        ]
+      },
+      "UgcReportView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "piece",
+              "profile",
+              "community_message",
+              "chat_message",
+              "direct_message"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "other",
+              "spam",
+              "harassment",
+              "hate",
+              "sexual",
+              "illegal",
+              "impersonation"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "dismissed",
+              "actioned"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "alreadyReported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "targetId",
+          "reason",
+          "status",
+          "createdAt",
+          "alreadyReported"
+        ]
+      },
       "LearnGuideSection": {
         "type": "object",
         "properties": {
@@ -76576,8 +77006,8 @@
             "enum": [
               "community",
               "content",
-              "transaction",
               "profile",
+              "transaction",
               "paid_question",
               "ai_job"
             ]
