@@ -33,6 +33,7 @@ import {
 } from '../tools/receptionist.tool';
 import { podcastLinkOk } from '../tools/podcast.tool';
 import {
+  CONVERSATION_GIVE_UP_MS,
   copyOfMarker,
   markerOf,
   ProviderCopyService,
@@ -507,15 +508,17 @@ export class ReceptionistService {
         agentDeleted = false;
       }
     }
-    // REC-DELETE: a delete the provider answers 204 may be ignored (a conversation not yet finished), so no note is
-    // cleared on that answer. The agent's delete takes its conversations with it (proven on the real provider): a read
-    // after it that says 404 proves each one gone and clears its note; one still there is tried the ordinary way (a
-    // finished one is deleted and read again), stays noted until it is proven gone, and answers `pending`.
-    if (agentDeleted)
-      for (const c of kept.noted) {
-        if ((await this.copies.afterAgentDeleted(c.jobId, c.copy)) === 'kept')
-          pending = true;
-      }
+    // REC-DELETE: a delete the provider answers 204 may be ignored (a conversation not yet finished), and after the
+    // agent is deleted a 404 by id proves nothing: a conversation still being finished is kept, listed, and 404 by id
+    // (proven on the real provider, round 1). So no note is cleared on those answers. Each is tried the ordinary way
+    // (read, the provider's list, a delete once finished, a read of both after it) for a moment, stays noted until it
+    // is proven gone, and the answer is `pending` while one is left: the sweep carries on.
+    if (agentDeleted) {
+      const tried = await Promise.all(
+        kept.noted.map((c) => this.copies.afterAgentDeleted(c.jobId, c.copy)),
+      );
+      if (tried.includes('kept')) pending = true;
+    }
     if (!pending) {
       await this.prisma.receptionistAgent.deleteMany({ where: { wawuUserId } });
       await this.prisma.receptionistTurn.deleteMany({ where: { wawuUserId } });
@@ -541,6 +544,8 @@ export class ReceptionistService {
     const rows = await this.prisma.aiToolJob.findMany({
       where: {
         wawuUserId,
+        // A note older than the sweep's give-up age is ignored here as there (the provider's own limit has passed).
+        createdAt: { gte: new Date(Date.now() - CONVERSATION_GIVE_UP_MS) },
         OR: [
           { providerRef: { startsWith: 'conversation:' } },
           {
@@ -914,7 +919,9 @@ export class ReceptionistService {
         select: { state: true },
       });
       if (!row || row.state === 'working') return;
-      await this.copies.discard(jobId, copy);
+      // Off the request: the provider's delete of a finished conversation takes 7 to 8 seconds (round 1), so POST /end
+      // waits for it only a moment and the rest carries on in the background (then the retries and the sweep).
+      await this.copies.discardWithin(jobId, copy);
     } catch {
       this.logger.warn(
         `receptionist session ${jobId}: its conversation was not noted for deletion yet`,

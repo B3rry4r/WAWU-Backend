@@ -5,6 +5,7 @@ import { copyOfFlow, parseFlowRef, type FlowRef } from './flow/flow-support';
 import { AiCloneService } from './own-voice/ai-clone.service';
 import { ReceptionistService } from './receptionist/receptionist.service';
 import {
+  CONVERSATION_GIVE_UP_MS,
   copyOfMarker,
   ProviderCopyService,
 } from './voice/provider-copy.service';
@@ -62,8 +63,12 @@ export class AiToolsPurgeService implements OnModuleInit {
       OR: [
         { providerRef: { startsWith: 'voice:' } },
         { providerRef: { startsWith: 'asset:' } },
-        // REC-PRIVACY: a Receptionist conversation the provider still keeps.
-        { providerRef: { startsWith: 'conversation:' } },
+        // REC-PRIVACY: a Receptionist conversation the provider still keeps. A note older than the sweep's give-up age
+        // is ignored (the provider's own one-day limit has passed and the sweep drops it), so it cannot hold the purge.
+        {
+          providerRef: { startsWith: 'conversation:' },
+          createdAt: { gte: new Date(Date.now() - CONVERSATION_GIVE_UP_MS) },
+        },
       ],
     };
     // A picture or video still being made holds its assets under a `genrun:`

@@ -17,7 +17,6 @@ import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { loadPlansConfig } from '../../plans/plans-config';
 import { AiToolsPurgeService } from '../ai-tools-purge.service';
 import {
-  CONVERSATION_GIVE_UP_MS,
   conversationDue,
   ProviderCopyService,
 } from '../voice/provider-copy.service';
@@ -137,37 +136,51 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
       },
     });
   };
-  /** A provider that answers what a script says; nothing else of it is used by the copy service for a conversation. */
-  const scripted = (reads: string[]) => {
+  /**
+   * A provider that answers what a script says; nothing else of it is used by the copy service for a conversation.
+   * `reads` are the answers of GET by id (`absent` is a 404, `unknown` a fault), `lists` those of the provider's list
+   * (`absent` is a complete list without the conversation, `unknown` a list that cannot be read, a status is a list that
+   * holds it). An empty script answers `absent`.
+   */
+  const scripted = (
+    id: string,
+    reads: string[],
+    lists: string[] = [],
+    deleteMs = 0,
+  ) => {
     const calls: string[] = [];
-    const queue = [...reads];
+    const readQueue = [...reads];
+    const listQueue = [...lists];
     const deletes: ('deleted' | 'failed' | 'not_found')[] = [];
-    const service = () => {
-      const made = new ProviderCopyService(h.prisma, voice, settings);
-      // Only the sweep tries again: no timers left running.
-      made.delaysMs = [];
-      return made;
-    };
     const voice = {
       readConversation: () => {
         calls.push('read');
-        const next = queue.shift() ?? 'absent';
+        const next = readQueue.shift() ?? 'absent';
         if (next === 'absent')
           return Promise.reject(new AiVoiceProviderError('rejected', 'x', 404));
         if (next === 'unknown')
           return Promise.reject(new AiVoiceProviderError('unavailable', 'x'));
         return Promise.resolve({ status: next, seconds: 5 });
       },
-      deleteConversation: () => {
+      listConversations: () => {
+        calls.push('list');
+        const next = listQueue.shift() ?? 'absent';
+        if (next === 'unknown')
+          return Promise.reject(new AiVoiceProviderError('unavailable', 'x'));
+        return Promise.resolve(
+          next === 'absent' ? [] : [{ conversationId: id, status: next }],
+        );
+      },
+      deleteConversation: async () => {
         calls.push('delete');
-        return Promise.resolve(deletes.shift() ?? 'deleted');
+        if (deleteMs > 0) await new Promise((r) => setTimeout(r, deleteMs));
+        return deletes.shift() ?? 'deleted';
       },
     } as unknown as AiVoiceProvider;
-    return {
-      calls,
-      deletes,
-      service: service(),
-    };
+    const service = new ProviderCopyService(h.prisma, voice, settings);
+    // Only the sweep tries again: no timers left running.
+    service.delaysMs = [];
+    return { calls, deletes, service };
   };
 
   beforeAll(async () => {
@@ -277,14 +290,18 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
       const open = h.standin.openConversations();
       standin().chatConversationStatus = 'processing';
       const { job, convo } = await chat();
-      h.standin.setConversation(convo, { hidden: true });
-      // 404 and no delete was ever sent: a note this young stays, and so does an old one (nothing to prove it gone).
+      h.standin.setConversation(convo, { hidden: true, unlisted: true });
+      // 404 by id, not in the list, and no delete was ever sent: the note stays (nothing proves it gone).
       expect(await copies().sweep(later())).toEqual({ cleared: 0, pending: 1 });
       expect(await ref(job.id)).toBe(`conversation:${convo}`);
       expect(standin().deletedConversations).toEqual([]);
       expect(standin().ignoredConversationDeletes).toEqual([]);
       // It appears finished: deleted and proven gone.
-      h.standin.setConversation(convo, { status: 'done', hidden: false });
+      h.standin.setConversation(convo, {
+        status: 'done',
+        hidden: false,
+        unlisted: false,
+      });
       expect(await copies().sweep(later())).toEqual({ cleared: 1, pending: 0 });
       expect(await ref(job.id)).toBeNull();
       expect(h.standin.openConversations()).toBe(open);
@@ -341,7 +358,7 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
   });
 
   describe('clearing the Receptionist and deleting the account', () => {
-    it('takes a conversation the provider has not finished with the agent: the note goes on the read that says 404', async () => {
+    it('is not cleared by a 404 after the agent delete when no delete was sent: pending, the note stays, and the 25 hour drop ends it', async () => {
       await setUp(PLAIN);
       const open = h.standin.openConversations();
       standin().chatConversationStatus = 'processing';
@@ -352,15 +369,34 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
         .http()
         .delete('/ai-tools/receptionist')
         .set(auth(PLAIN));
-      expect(data<ReceptionistRemovedView>(res).atProvider).toBe('gone');
+      // The provider took the conversation with the agent, but a 404 by id is not proof and nothing was sent.
+      expect(data<ReceptionistRemovedView>(res).atProvider).toBe('pending');
       expect(standin().deletedAgents).toHaveLength(1);
       expect(h.standin.openConversations()).toBe(open);
+      expect(await ref(job.id)).toMatch(/^conversation:convo-\d+$/);
+      expect(standin().conversationListReads).toBeGreaterThan(0);
+      // The account purge waits for it as well.
+      await expect(
+        h.get<AiToolsPurgeService>(AiToolsPurgeService).beforeErase(PLAIN),
+      ).rejects.toThrow();
+      // Past the provider's own limit the note is dropped (one warning), and clearing again finishes.
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      expect(
+        await copies().sweep(new Date(Date.now() + 25 * 3_600_000 + 60_000)),
+      ).toEqual({ cleared: 1, pending: 0 });
+      expect(
+        warn.mock.calls.filter((c) => String(c[0]).includes('25 hours')),
+      ).toHaveLength(1);
       expect(await ref(job.id)).toBeNull();
+      const again = await h
+        .http()
+        .delete('/ai-tools/receptionist')
+        .set(auth(PLAIN));
+      expect(data<ReceptionistRemovedView>(again).atProvider).toBe('gone');
     });
 
     it('answers pending while a conversation is still there and unfinished, and clears it once it is done and read gone', async () => {
       await setUp(PLAIN);
-      const open = h.standin.openConversations();
       standin().chatConversationStatus = 'processing';
       const { job, convo } = await chat();
       const first = await h
@@ -378,53 +414,174 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
       expect(data<ReceptionistRemovedView>(again).atProvider).toBe('gone');
       expect(standin().deletedConversations).toEqual([convo]);
       expect(await ref(job.id)).toBeNull();
-      expect(h.standin.openConversations()).toBe(open);
+      expect(h.standin.openConversations()).toBe(0);
     });
 
-    it('lets the account purge go once the agent has taken an unfinished conversation with it', async () => {
+    describe('a conversation still being finished when its agent is deleted (race B on the real provider)', () => {
+      it('is kept by the provider, 404 by id and still listed: the note stays pending, the sweep finds it in the list, deletes it by id once done, and clears it when the list no longer holds it', async () => {
+        await setUp(PLAIN);
+        const open = h.standin.openConversations();
+        standin().chatConversationStatus = 'processing';
+        standin().agentDeleteOrphansConversations = true;
+        const { job, convo } = await chat();
+        const res = await h
+          .http()
+          .delete('/ai-tools/receptionist')
+          .set(auth(PLAIN));
+        expect(data<ReceptionistRemovedView>(res).atProvider).toBe('pending');
+        expect(standin().deletedAgents).toHaveLength(1);
+        // The provider still holds it: 404 by id, listed, and no delete was sent (it is not finished).
+        expect(h.standin.openConversations()).toBe(open + 1);
+        expect(standin().deletedConversations).toEqual([]);
+        expect(standin().ignoredConversationDeletes).toEqual([]);
+        expect(await ref(job.id)).toBe(`conversation:${convo}`);
+        // A minute on, still not finished: the sweep reads the list, sees it unfinished, and sends nothing.
+        expect(await copies().sweep(later())).toEqual({
+          cleared: 0,
+          pending: 1,
+        });
+        expect(standin().ignoredConversationDeletes).toEqual([]);
+        expect(await ref(job.id)).toBe(`conversation:${convo}`);
+        // The provider finishes it: the sweep deletes it by id and clears the note only after the list lacks it.
+        h.standin.setConversation(convo, { status: 'done' });
+        expect(await copies().sweep(later())).toEqual({
+          cleared: 1,
+          pending: 0,
+        });
+        expect(standin().deletedConversations).toEqual([convo]);
+        expect(h.standin.openConversations()).toBe(open);
+        expect(await ref(job.id)).toBeNull();
+        const again = await h
+          .http()
+          .delete('/ai-tools/receptionist')
+          .set(auth(PLAIN));
+        expect(data<ReceptionistRemovedView>(again).atProvider).toBe('gone');
+      });
+
+      it('is deleted by id at once when it is already done, and the answer is gone', async () => {
+        await setUp(PLAIN);
+        const open = h.standin.openConversations();
+        standin().chatConversationStatus = 'processing';
+        standin().agentDeleteOrphansConversations = true;
+        const { job, convo } = await chat();
+        h.standin.setConversation(convo, { status: 'done' });
+        const res = await h
+          .http()
+          .delete('/ai-tools/receptionist')
+          .set(auth(PLAIN));
+        expect(data<ReceptionistRemovedView>(res).atProvider).toBe('gone');
+        expect(standin().deletedConversations).toEqual([convo]);
+        expect(h.standin.openConversations()).toBe(open);
+        expect(await ref(job.id)).toBeNull();
+      });
+
+      it('holds the account purge until it is finished, deleted and gone from the list', async () => {
+        await setUp(PLAIN);
+        const open = h.standin.openConversations();
+        standin().chatConversationStatus = 'processing';
+        standin().agentDeleteOrphansConversations = true;
+        const { job, convo } = await chat();
+        const purge = h.get<AiToolsPurgeService>(AiToolsPurgeService);
+        await expect(purge.beforeErase(PLAIN)).rejects.toThrow();
+        expect(h.standin.openConversations()).toBe(open + 1);
+        h.standin.setConversation(convo, { status: 'done' });
+        await copies().sweep(later());
+        expect(await ref(job.id)).toBeNull();
+        await purge.beforeErase(PLAIN);
+        expect(h.standin.openConversations()).toBe(open);
+        expect(h.standin.openAgents()).toBe(0);
+      });
+    });
+
+    it('ignores a note older than 25 hours: it neither holds DELETE /receptionist nor the account purge', async () => {
       await setUp(PLAIN);
-      const open = h.standin.openConversations();
-      standin().chatConversationStatus = 'processing';
-      standin().agentDeleteTakesConversations = true;
-      const { job } = await chat();
+      const old = new Date(Date.now() - 26 * 3_600_000);
+      await noteRow('conversation:conv-old', {
+        createdAt: old,
+        finishedAt: old,
+      });
+      const res = await h
+        .http()
+        .delete('/ai-tools/receptionist')
+        .set(auth(PLAIN));
+      expect(data<ReceptionistRemovedView>(res).atProvider).toBe('gone');
+      await setUp(PLAIN);
       await h.get<AiToolsPurgeService>(AiToolsPurgeService).beforeErase(PLAIN);
-      expect(h.standin.openConversations()).toBe(open);
-      expect(h.standin.openAgents()).toBe(0);
-      expect(await ref(job.id)).toBeNull();
     });
   });
 
-  describe('the proof and the backoff, scripted', () => {
-    it('sends a delete only after a read shows it finished, marks the note first, and clears it only on a read that says 404', async () => {
+  describe('POST /end', () => {
+    it('does not wait for the provider to delete the talk: it answers within a moment and the delete carries on', async () => {
+      await setUp(PLAIN);
+      const open = h.standin.openConversations();
+      standin().conversationDeleteDelayMs = 1500;
+      const waited = copies().requestWaitMs;
+      copies().requestWaitMs = 200;
+      try {
+        const session = data<VoiceSessionView>(await talk(PLAIN));
+        h.standin.setConversation(session.conversationId!, {
+          status: 'done',
+          seconds: 61,
+        });
+        const t0 = Date.now();
+        const res = await h
+          .http()
+          .post(`/ai-tools/receptionist/voice-sessions/${session.id}/end`)
+          .set(auth(PLAIN));
+        expect(Date.now() - t0).toBeLessThan(1200);
+        expect(data<VoiceSessionView>(res).state).toBe('done');
+        // The delete is still on its way; once it ends the note is proven gone and cleared.
+        expect(h.standin.openConversations()).toBe(open + 1);
+        await copies().idle();
+        expect(standin().deletedConversations).toEqual([
+          session.conversationId,
+        ]);
+        expect(h.standin.openConversations()).toBe(open);
+        expect(await ref(session.id)).toBeNull();
+      } finally {
+        copies().requestWaitMs = waited;
+        standin().conversationDeleteDelayMs = 0;
+      }
+    });
+  });
+
+  describe('the proof, the retries and the sweep, scripted', () => {
+    const copy = (id: string) => ({ kind: 'conversation' as const, id });
+
+    it('sends a delete only after a read shows it finished, marks the note first, and clears it only when a read by id says 404 and the list lacks it', async () => {
       const row = await noteRow('conversation:conv-1');
-      const s = scripted(['done', 'absent']);
-      await s.service.discard(row.id, { kind: 'conversation', id: 'conv-1' });
-      expect(s.calls).toEqual(['read', 'delete', 'read']);
+      const s = scripted('conv-1', ['done', 'absent']);
+      await s.service.discard(row.id, copy('conv-1'));
+      expect(s.calls).toEqual(['read', 'delete', 'read', 'list']);
       expect(await ref(row.id)).toBeNull();
     });
 
-    it('keeps the note when the delete is answered 204 but the conversation is still there, and clears it on a later read that says 404', async () => {
+    it('keeps the note when the delete is answered 204 but the conversation is still there, and clears it on a later read that says 404 with the list empty', async () => {
       const row = await noteRow('conversation:conv-2');
-      const s = scripted(['done', 'done', 'absent']);
-      await s.service.discard(row.id, { kind: 'conversation', id: 'conv-2' });
+      const s = scripted('conv-2', ['done', 'done', 'absent']);
+      await s.service.discard(row.id, copy('conv-2'));
       expect(s.calls).toEqual(['read', 'delete', 'read']);
       expect(await ref(row.id)).toMatch(/^conversation:conv-2@\d+$/);
-      // Later: it reads 404 and a delete was sent after it finished: gone.
       expect(await s.service.sweep(later())).toEqual({
         cleared: 1,
         pending: 0,
       });
-      expect(s.calls).toEqual(['read', 'delete', 'read', 'read']);
+      expect(s.calls).toEqual(['read', 'delete', 'read', 'read', 'list']);
       expect(await ref(row.id)).toBeNull();
     });
 
-    it('counts a delete whose answer was lost: a later 404 clears the note', async () => {
+    it('does not take a 404 by id as proof after a delete while the list still holds the conversation', async () => {
       const row = await noteRow('conversation:conv-3');
-      const s = scripted(['done', 'absent']);
-      s.deletes.push('failed');
-      await s.service.discard(row.id, { kind: 'conversation', id: 'conv-3' });
-      expect(s.calls).toEqual(['read', 'delete']);
+      // Deleted when done; the read by id says 404 at once but the list still shows it (it lags, or it is kept).
+      const s = scripted(
+        'conv-3',
+        ['done', 'absent', 'absent'],
+        ['done', 'absent'],
+      );
+      await s.service.discard(row.id, copy('conv-3'));
+      expect(s.calls).toEqual(['read', 'delete', 'read', 'list']);
       expect(await ref(row.id)).toMatch(/^conversation:conv-3@\d+$/);
+      // The next pass: 404 by id, and the list no longer has it.
       expect(await s.service.sweep(later())).toEqual({
         cleared: 1,
         pending: 0,
@@ -432,64 +589,133 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
       expect(await ref(row.id)).toBeNull();
     });
 
-    it('does not clear a note on a 404 when no delete was sent, and does nothing on an answer it cannot read', async () => {
+    it('does not clear a note when the list cannot be read', async () => {
       const row = await noteRow('conversation:conv-4');
-      const s = scripted(['absent', 'unknown', 'in-progress', 'processing']);
+      const s = scripted(
+        'conv-4',
+        ['done', 'absent', 'absent'],
+        ['unknown', 'absent'],
+      );
+      await s.service.discard(row.id, copy('conv-4'));
+      expect(await ref(row.id)).toMatch(/^conversation:conv-4@\d+$/);
+      expect(await s.service.sweep(later())).toEqual({
+        cleared: 1,
+        pending: 0,
+      });
+    });
+
+    it('counts a delete whose answer was lost: a later 404 by id with the list empty clears the note', async () => {
+      const row = await noteRow('conversation:conv-5');
+      const s = scripted('conv-5', ['done', 'absent']);
+      s.deletes.push('failed');
+      await s.service.discard(row.id, copy('conv-5'));
+      expect(s.calls).toEqual(['read', 'delete']);
+      expect(await ref(row.id)).toMatch(/^conversation:conv-5@\d+$/);
+      expect(await s.service.sweep(later())).toEqual({
+        cleared: 1,
+        pending: 0,
+      });
+      expect(await ref(row.id)).toBeNull();
+    });
+
+    it('does not clear a note on a 404 when no delete was sent, whatever the list says about absence, and does nothing on an answer it cannot read', async () => {
+      const row = await noteRow('conversation:conv-6');
+      const s = scripted('conv-6', [
+        'absent',
+        'unknown',
+        'in-progress',
+        'processing',
+      ]);
       for (let i = 0; i < 4; i += 1)
         expect(await s.service.sweep(later())).toEqual({
           cleared: 0,
           pending: 1,
         });
-      expect(s.calls).toEqual(['read', 'read', 'read', 'read']);
-      expect(await ref(row.id)).toBe('conversation:conv-4');
+      // 404 by id read the list (the note is old enough); the others stopped at the read.
+      expect(s.calls).toEqual(['read', 'list', 'read', 'read', 'read']);
+      expect(await ref(row.id)).toBe('conversation:conv-6');
     });
 
-    it('treats failed like done', async () => {
-      const row = await noteRow('conversation:conv-5');
-      const s = scripted(['failed', 'absent']);
+    it('does not read the list for a young note the provider answers 404 for: it is probably not stored yet', async () => {
+      const row = await noteRow('conversation:conv-7');
+      const s = scripted('conv-7', ['absent']);
+      await s.service.discard(row.id, copy('conv-7'));
+      expect(s.calls).toEqual(['read']);
+      expect(await ref(row.id)).toBe('conversation:conv-7');
+    });
+
+    it('finds a conversation that reads 404 by id in the list (its agent was deleted), deletes it by id once finished, and clears it when the read by id and the list agree', async () => {
+      const row = await noteRow('conversation:conv-8');
+      // Pass 1: 404 by id, listed and still processing: nothing is sent. Pass 2: listed and done: marked, deleted, then
+      // 404 by id and an empty list.
+      const s = scripted(
+        'conv-8',
+        ['absent', 'absent', 'absent'],
+        ['processing', 'done', 'absent'],
+      );
+      expect(await s.service.sweep(later())).toEqual({
+        cleared: 0,
+        pending: 1,
+      });
+      expect(s.calls).toEqual(['read', 'list']);
       expect(await s.service.sweep(later())).toEqual({
         cleared: 1,
         pending: 0,
       });
-      expect(s.calls).toEqual(['read', 'delete', 'read']);
+      expect(s.calls).toEqual([
+        'read',
+        'list',
+        'read',
+        'list',
+        'delete',
+        'read',
+        'list',
+      ]);
       expect(await ref(row.id)).toBeNull();
     });
 
-    it('drops a note older than 25 hours with one warning and sends nothing to the provider', async () => {
-      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
-      const old = new Date(Date.now() - CONVERSATION_GIVE_UP_MS - 60_000);
-      const row = await noteRow('conversation:conv-6', {
-        createdAt: old,
-        finishedAt: old,
-      });
-      const s = scripted(['done']);
-      expect(await s.service.sweep(new Date())).toEqual({
+    it('treats failed like done', async () => {
+      const row = await noteRow('conversation:conv-9');
+      const s = scripted('conv-9', ['failed', 'absent']);
+      expect(await s.service.sweep(later())).toEqual({
         cleared: 1,
         pending: 0,
       });
-      expect(s.calls).toEqual([]);
+      expect(s.calls).toEqual(['read', 'delete', 'read', 'list']);
       expect(await ref(row.id)).toBeNull();
+    });
+
+    it('drops a note older than 25 hours with one warning and sends nothing to the provider; a note under 25 hours is still tried; one over 48 hours is left alone', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const hours = (n: number) => new Date(Date.now() - n * 3_600_000);
+      const drop = await noteRow('conversation:conv-10', {
+        createdAt: hours(26),
+        finishedAt: hours(26),
+      });
+      const tried = await noteRow('conversation:conv-11', {
+        createdAt: hours(24),
+        finishedAt: hours(24),
+      });
+      const stale = await noteRow('conversation:conv-12', {
+        createdAt: hours(50),
+        finishedAt: hours(50),
+      });
+      const s = scripted('conv-11', ['in-progress']);
+      expect(await s.service.sweep(new Date())).toEqual({
+        cleared: 1,
+        pending: 1,
+      });
+      // Only the 24 hour note was read.
+      expect(s.calls).toEqual(['read']);
+      expect(await ref(drop.id)).toBeNull();
+      expect(await ref(tried.id)).toBe('conversation:conv-11');
+      expect(await ref(stale.id)).toBe('conversation:conv-12');
       const dropped = warn.mock.calls.filter((c) =>
         String(c[0]).includes('25 hours'),
       );
       expect(dropped).toHaveLength(1);
-      expect(String(dropped[0][0])).not.toContain('conv-6');
+      expect(String(dropped[0][0])).not.toContain('conv-10');
       expect(String(dropped[0][0])).not.toMatch(/[–—]/);
-    });
-
-    it('still tries a note a little under 25 hours old, on the 30 minute schedule', async () => {
-      const made = new Date(Date.now() - CONVERSATION_GIVE_UP_MS + 3_600_000);
-      // 24 hours after it ended: 24 h is a multiple of 30 minutes, so a try is due now.
-      const row = await noteRow('conversation:conv-7', {
-        createdAt: made,
-        finishedAt: made,
-      });
-      const s = scripted(['in-progress']);
-      expect(
-        await s.service.sweep(new Date(made.getTime() + 24 * 3_600_000)),
-      ).toEqual({ cleared: 0, pending: 1 });
-      expect(s.calls).toEqual(['read']);
-      expect(await ref(row.id)).toBe('conversation:conv-7');
     });
 
     it('backs off: every minute for 5 minutes, every 5 minutes to the hour, every 30 minutes after', () => {
@@ -512,16 +738,88 @@ describe('REC-DELETE: a conversation note is cleared only on proof (contract)', 
 
     it('leaves a note that is not due alone: no read is made', async () => {
       const finished = new Date(Date.now() - 8 * 60_000);
-      const row = await noteRow('conversation:conv-8', {
+      const row = await noteRow('conversation:conv-13', {
         finishedAt: finished,
       });
-      const s = scripted(['done']);
+      const s = scripted('conv-13', ['done']);
       expect(await s.service.sweep(new Date())).toEqual({
         cleared: 0,
         pending: 1,
       });
       expect(s.calls).toEqual([]);
-      expect(await ref(row.id)).toBe('conversation:conv-8');
+      expect(await ref(row.id)).toBe('conversation:conv-13');
+    });
+
+    it('tries the newest due notes first and at most 50 a pass, so a pile of older notes never keeps a newer one waiting', async () => {
+      const base = Date.now() - 150_000;
+      const rows: { id: string; ref: string }[] = [];
+      for (let i = 0; i < 60; i += 1) {
+        const at = new Date(base + i * 1000);
+        const r = `conversation:conv-pile-${String(i).padStart(2, '0')}`;
+        rows.push({
+          id: (await noteRow(r, { createdAt: at, finishedAt: at })).id,
+          ref: r,
+        });
+      }
+      const seen: string[] = [];
+      const voice = {
+        readConversation: (id: string) => {
+          seen.push(id);
+          return Promise.resolve({ status: 'processing', seconds: null });
+        },
+        deleteConversation: () => Promise.resolve('deleted'),
+      } as unknown as AiVoiceProvider;
+      const service = new ProviderCopyService(h.prisma, voice, settings);
+      service.delaysMs = [];
+      expect(await service.sweep(new Date())).toEqual({
+        cleared: 0,
+        pending: 60,
+      });
+      expect(seen).toHaveLength(50);
+      // The 50 newest (indexes 10 to 59), newest first; the 10 oldest wait for a later pass.
+      expect(seen[0]).toBe('conv-pile-59');
+      expect(seen).not.toContain('conv-pile-00');
+      expect(seen).not.toContain('conv-pile-09');
+      expect(seen).toContain('conv-pile-10');
+    });
+
+    it('shares the in-process retries: a burst of notes starts no more than the limit, the rest wait for the sweep', async () => {
+      const ids = [1, 2, 3, 4, 5].map((n) => `conv-burst-${n}`);
+      const rows = await Promise.all(
+        ids.map((id) => noteRow(`conversation:${id}`)),
+      );
+      let reads = 0;
+      const voice = {
+        readConversation: () => {
+          reads += 1;
+          return Promise.resolve({ status: 'processing', seconds: null });
+        },
+        deleteConversation: () => Promise.resolve('deleted'),
+      } as unknown as AiVoiceProvider;
+      const service = new ProviderCopyService(h.prisma, voice, settings);
+      service.delaysMs = [30];
+      service.retryLimit = 2;
+      await Promise.all(
+        rows.map((r, i) => service.discard(r.id, copy(ids[i]))),
+      );
+      expect(reads).toBe(5);
+      await new Promise((r) => setTimeout(r, 400));
+      // Five first tries and one retry for each of the two loops that were allowed: seven, not ten.
+      expect(reads).toBe(7);
+      service.onModuleDestroy();
+    });
+
+    it('waits for a slow delete only a moment when a request asks, and lets it carry on', async () => {
+      const row = await noteRow('conversation:conv-14');
+      const s = scripted('conv-14', ['done', 'absent'], [], 400);
+      s.service.requestWaitMs = 50;
+      const t0 = Date.now();
+      await s.service.discardWithin(row.id, copy('conv-14'));
+      expect(Date.now() - t0).toBeLessThan(300);
+      expect(await ref(row.id)).toMatch(/^conversation:conv-14@\d+$/);
+      await s.service.idle();
+      expect(s.calls).toEqual(['read', 'delete', 'read', 'list']);
+      expect(await ref(row.id)).toBeNull();
     });
   });
 });

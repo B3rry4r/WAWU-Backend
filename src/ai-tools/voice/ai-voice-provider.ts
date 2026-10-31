@@ -428,6 +428,13 @@ export interface VoiceSessionLink {
   conversationId: string;
 }
 
+/** One conversation as the provider's list shows it (REC-DELETE). */
+export interface ConversationListed {
+  conversationId: string;
+  /** The same statuses as `ConversationRead`. */
+  status: ConversationRead['status'];
+}
+
 /** A finished conversation as the provider reports it. */
 export interface ConversationRead {
   /** `done` when the provider has closed it and knows its length. */
@@ -897,6 +904,19 @@ export interface AiVoiceProvider {
     conversationId: string,
     opts?: { signal?: AbortSignal },
   ): Promise<ConversationRead>;
+
+  /**
+   * REC-DELETE: the conversations the provider's LIST shows that started between two times (`GET /v1/convai/conversations`
+   * with `call_start_after_unix` and `call_start_before_unix`, oldest first, every page). The list is the only read that
+   * still shows a conversation whose agent was deleted while it was being finished: `readConversation` answers 404 for
+   * it (proven on the real provider, 31 Oct 2026) although the provider keeps it, and a DELETE by id still removes it.
+   * Throws `AiVoiceProviderError` when a page cannot be read or the window holds more than the pages read (an incomplete
+   * list proves nothing).
+   */
+  listConversations(window: {
+    afterUnix: number;
+    beforeUnix: number;
+  }): Promise<ConversationListed[]>;
 
   /**
    * One try at deleting a conversation the provider kept (`DELETE /v1/convai/conversations/{id}`), so it holds none of the

@@ -782,15 +782,17 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
         keptPoints: 0,
       });
       // REC-DELETE: the provider never closed it, so a delete now would be accepted and ignored: none is sent. Once the
-      // provider has finished it, the copy sweep deletes it and proves it gone.
+      // provider has finished it, the copy sweep deletes it and proves it gone. (The sweep tries the newest notes first
+      // and at most 50 a pass, so the newest stuck talk is the one finished here; 51 are stuck.)
+      const newest = stuck[stuck.length - 1];
       expect(standin().deletedConversations).not.toContain(
-        stuck[0].conversationId,
+        newest.conversationId,
       );
-      h.standin.setConversation(stuck[0].conversationId!, { status: 'failed' });
+      h.standin.setConversation(newest.conversationId!, { status: 'failed' });
       await h
         .get<ProviderCopyService>(ProviderCopyService)
         .sweep(new Date(Date.now() + 60_000));
-      expect(standin().deletedConversations).toContain(stuck[0].conversationId);
+      expect(standin().deletedConversations).toContain(newest.conversationId);
       // A pass again changes nothing: no point is given back or taken twice.
       expect(await h.receptionist.settleSessions(late)).toBe(0);
       expect(await h.balance(PLAIN)).toBe(before - VOICE);

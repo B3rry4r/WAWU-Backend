@@ -205,6 +205,12 @@ export interface StandinHandle {
     chatConversationStatus: string;
     /** REC-DELETE: whether deleting an agent takes its conversations with it (the real provider does). Off by default. */
     agentDeleteTakesConversations: boolean;
+    /** REC-DELETE round 1: whether deleting an agent leaves its conversations listed but 404 by id (the real provider did, for one still being finished). Off by default. */
+    agentDeleteOrphansConversations: boolean;
+    /** REC-DELETE round 1: how long a conversation's DELETE takes to answer, in milliseconds (the real one took 7 to 8 seconds). */
+    conversationDeleteDelayMs: number;
+    /** REC-DELETE round 1: how many times the list of conversations was read. */
+    conversationListReads: number;
   };
   /** Podcast projects, agents, documents and conversations the provider still holds (AITOOLS-13, AITOOLS-06). */
   openPodcasts: () => number;
@@ -221,7 +227,13 @@ export interface StandinHandle {
    */
   setConversation: (
     id: string,
-    patch: { status?: string; seconds?: number | null; hidden?: boolean },
+    patch: {
+      status?: string;
+      seconds?: number | null;
+      hidden?: boolean;
+      /** Not in the provider's list (not stored yet, or gone). */
+      unlisted?: boolean;
+    },
   ) => void;
   conversationIds: () => string[];
   /** Transcripts and cleaned recordings the provider still holds. */

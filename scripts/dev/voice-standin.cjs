@@ -196,7 +196,12 @@
 //     does (30 Oct 2026), a DELETE of a conversation that is not yet done or failed answers 204 and is ignored (the
 //     conversation then reads 404 until it finishes, and comes back); a DELETE of a finished one removes it. A text
 //     chat's conversation finishes when its socket closes, as state.chatConversationStatus says ('done' by default;
-//     'processing' keeps it open until setConversation finishes it). Markers in an agent's name or
+//     'processing' keeps it open until setConversation finishes it). REC-DELETE round 1: GET /v1/convai/conversations
+//     lists conversations (agent_id, call_start_after_unix, call_start_before_unix, page_size, cursor, sort_direction).
+//     With state.agentDeleteOrphansConversations an agent's delete leaves its conversations the way the real provider
+//     did when the agent was deleted while one was still being finished (31 Oct 2026): listed, with the deleted agent's
+//     id, but GET by id answers 404; a DELETE by id still removes a finished one. state.conversationDeleteDelayMs makes
+//     a conversation's DELETE slow (the real one took 7 to 8 seconds). Markers in an agent's name or
 //     prompt, a document's name or words and a message: [[fail]] 500, [[reject]] 422. state.agents, state.agentPatches,
 //     state.knowledge, state.chats (text-only or not, whether earlier messages came, never the words), state.signedUrls.
 // Nothing of a real provider beyond these. The Hub never sees a control route.
@@ -303,6 +308,12 @@ function startVoiceStandin({
     chatConversationStatus: 'done',
     /** REC-DELETE: whether deleting an agent takes its conversations with it (the real provider does; a spec turns it on). */
     agentDeleteTakesConversations: false,
+    /** REC-DELETE round 1: whether deleting an agent leaves its conversations listed but 404 by id (the real provider did, for one still being finished). */
+    agentDeleteOrphansConversations: false,
+    /** REC-DELETE round 1: how long a conversation's DELETE takes to answer (the real one took 7 to 8 seconds). */
+    conversationDeleteDelayMs: 0,
+    /** REC-DELETE round 1: how many times the list of conversations was read. */
+    conversationListReads: 0,
   };
   // AITOOLS-13: project id -> { readyAt, marks }.
   const podcastProjects = new Map();
@@ -1547,6 +1558,8 @@ function startVoiceStandin({
     state.deletedAgents.push(id);
     if (state.agentDeleteTakesConversations)
       for (const [convo, c] of [...conversations]) if (c.agent === id) conversations.delete(convo);
+    else if (state.agentDeleteOrphansConversations)
+      for (const c of conversations.values()) if (c.agent === id) c.orphan = true;
     return reply(res, 200, 'application/json', '{}');
   }
   function knowledgeAdd(kind) {
@@ -1606,7 +1619,7 @@ function startVoiceStandin({
     // An agent marked [[socket-id]] names its conversation on the socket only (the link carries none).
     const withId = url.searchParams.get('include_conversation_id') === 'true' && !agentsById.get(agent).socketId;
     const convo = `convo-${++convoSeq}`;
-    if (withId) conversations.set(convo, { agent, status: 'in-progress', seconds: null });
+    if (withId) conversations.set(convo, { agent, status: 'in-progress', seconds: null, startSecs: Math.floor(Date.now() / 1000) });
     const q = new URLSearchParams({ agent_id: agent, sig: `sig-${convoSeq}` });
     if (withId) q.set('conversation_id', convo);
     return reply(res, 200, 'application/json', JSON.stringify({ signed_url: `ws://127.0.0.1:${listenPort}/__standin/agent-socket?${q}` }));
@@ -1616,7 +1629,7 @@ function startVoiceStandin({
     if (!authed(req, res)) return;
     const id = decodeURIComponent(m[1]);
     const c = conversations.get(id);
-    if (!c || c.hidden) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
+    if (!c || c.hidden || c.orphan) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
     return reply(
       res,
       200,
@@ -1633,15 +1646,56 @@ function startVoiceStandin({
     }
     const c = conversations.get(id);
     if (!c) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
-    if (!FINISHED.includes(c.status)) {
-      // The real provider accepts the delete (204) and ignores it; the conversation reads 404 for a moment, then returns.
-      c.hidden = true;
-      state.ignoredConversationDeletes.push(id);
+    const answer = () => {
+      if (!FINISHED.includes(c.status)) {
+        // The real provider accepts the delete (204) and ignores it; the conversation reads 404 for a moment, then returns.
+        c.hidden = true;
+        state.ignoredConversationDeletes.push(id);
+        return reply(res, 204, 'application/json', '');
+      }
+      conversations.delete(id);
+      state.deletedConversations.push(id);
       return reply(res, 204, 'application/json', '');
-    }
-    conversations.delete(id);
-    state.deletedConversations.push(id);
-    return reply(res, 204, 'application/json', '');
+    };
+    if (state.conversationDeleteDelayMs > 0) setTimeout(answer, state.conversationDeleteDelayMs);
+    else answer();
+  }
+  // GET /v1/convai/conversations: the list (REC-DELETE round 1). A conversation whose agent was deleted while it was
+  // still being finished is listed with the deleted agent's id although GET by id says 404; one a spec marks `unlisted`
+  // is not listed (the provider has not stored it, or it is gone).
+  function conversationList(req, res) {
+    if (!authed(req, res)) return;
+    const url = new URL(req.url, 'http://127.0.0.1');
+    state.conversationListReads += 1;
+    const agent = url.searchParams.get('agent_id');
+    const after = url.searchParams.get('call_start_after_unix');
+    const before = url.searchParams.get('call_start_before_unix');
+    const size = Math.min(100, Math.max(1, Number(url.searchParams.get('page_size') ?? 30)));
+    const asc = url.searchParams.get('sort_direction') === 'asc';
+    const offset = Number(url.searchParams.get('cursor') ?? 0) || 0;
+    let items = [...conversations.entries()]
+      .filter(([, c]) => !c.unlisted)
+      .filter(([, c]) => !agent || c.agent === agent)
+      .filter(([, c]) => after === null || c.startSecs >= Number(after))
+      .filter(([, c]) => before === null || c.startSecs <= Number(before))
+      .map(([id, c]) => ({
+        agent_id: c.agent,
+        conversation_id: id,
+        start_time_unix_secs: c.startSecs,
+        call_duration_secs: c.seconds ?? 0,
+        message_count: 2,
+        status: c.status,
+        call_successful: 'unknown',
+      }));
+    items.sort((a, b) => (a.start_time_unix_secs - b.start_time_unix_secs) * (asc ? 1 : -1) || (a.conversation_id < b.conversation_id ? -1 : 1));
+    const page = items.slice(offset, offset + size);
+    const more = offset + size < items.length;
+    return reply(
+      res,
+      200,
+      'application/json',
+      JSON.stringify({ conversations: page, has_more: more, next_cursor: more ? String(offset + size) : null }),
+    );
   }
   // The agent socket: the text-only chat the Hub holds for a message.
   const sockets = new WebSocketServer({ noServer: true });
@@ -1688,7 +1742,7 @@ function startVoiceStandin({
         let convo = url.searchParams.get('conversation_id');
         if (!convo && agent?.socketId) {
           convo = `convo-${++convoSeq}`;
-          conversations.set(convo, { agent: agentId, status: 'in-progress', seconds: null });
+          conversations.set(convo, { agent: agentId, status: 'in-progress', seconds: null, startSecs: Math.floor(Date.now() / 1000) });
         }
         chatConvo = convo;
         ws.send(JSON.stringify({ type: 'conversation_initiation_metadata', conversation_initiation_metadata_event: { conversation_id: convo ?? 'x' } }));
@@ -1826,6 +1880,7 @@ function startVoiceStandin({
     { method: 'POST', path: /^\/v1\/convai\/knowledge-base\/file$/, handle: knowledgeAdd('file') },
     { method: 'DELETE', path: /^\/v1\/convai\/knowledge-base\/([^/]+)$/, handle: knowledgeDelete },
     { method: 'GET', path: /^\/v1\/convai\/conversation\/get-signed-url$/, handle: signedUrl },
+    { method: 'GET', path: /^\/v1\/convai\/conversations$/, handle: conversationList },
     { method: 'GET', path: /^\/v1\/convai\/conversations\/([^/]+)$/, handle: conversationRead },
     { method: 'DELETE', path: /^\/v1\/convai\/conversations\/([^/]+)$/, handle: conversationDelete },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
