@@ -21,7 +21,8 @@ interface Item {
 
 /**
  * What a person missed since a cursor (task INBOX-02): the new messages in
- * their chats and communities and the read marks that moved, oldest first.
+ * their chats and communities, the read marks that moved, and the room messages a host deleted (MOD-ROOMS, R-122),
+ * oldest first.
  * The app calls it after the socket reconnects and when it returns to the
  * foreground; it is a catch-up, and the socket carries everything after it.
  *
@@ -138,42 +139,69 @@ export class LiveCatchUpService {
     })();
 
     const take = limit + 1;
-    const [messages, reads, posts, requests] = await Promise.all([
-      this.prisma.chatMessage.findMany({
-        where: { conversationId: { in: chatIds }, ...after('m', 'createdAt') },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        take,
-      }),
-      this.prisma.chatParticipant.findMany({
-        where: {
-          conversationId: { in: chatIds },
-          wawuUserId: { not: me },
-          ...readsAfter,
-        },
-        orderBy: [{ readAt: 'asc' }, { conversationId: 'asc' }],
-        take,
-      }),
-      this.prisma.communityMessage.findMany({
-        where: {
-          communityId: { in: communityIds },
-          ...after('p', 'sentAt'),
-          senderWawuId: { notIn: [...blockedIds] },
-        },
-        orderBy: [{ sentAt: 'asc' }, { id: 'asc' }],
-        take,
-      }),
-      // Money requests paid, declined or cancelled (INBOX-15).
-      this.prisma.moneyRequest.findMany({
-        where: {
-          conversationId: { in: chatIds },
-          messageId: { not: null },
-          changedAt: { not: null },
-          ...after('q', 'changedAt'),
-        },
-        orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
-        take,
-      }),
-    ]);
+    const [messages, reads, posts, requests, removals, mutes] =
+      await Promise.all([
+        this.prisma.chatMessage.findMany({
+          where: {
+            conversationId: { in: chatIds },
+            ...after('m', 'createdAt'),
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take,
+        }),
+        this.prisma.chatParticipant.findMany({
+          where: {
+            conversationId: { in: chatIds },
+            wawuUserId: { not: me },
+            ...readsAfter,
+          },
+          orderBy: [{ readAt: 'asc' }, { conversationId: 'asc' }],
+          take,
+        }),
+        this.prisma.communityMessage.findMany({
+          where: {
+            communityId: { in: communityIds },
+            ...after('p', 'sentAt'),
+            senderWawuId: { notIn: [...blockedIds] },
+          },
+          orderBy: [{ sentAt: 'asc' }, { id: 'asc' }],
+          take,
+        }),
+        // Money requests paid, declined or cancelled (INBOX-15).
+        this.prisma.moneyRequest.findMany({
+          where: {
+            conversationId: { in: chatIds },
+            messageId: { not: null },
+            changedAt: { not: null },
+            ...after('q', 'changedAt'),
+          },
+          orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
+          take,
+        }),
+        // Room messages the host deleted (MOD-ROOMS, R-122): the row is gone, so the host's log says which and when.
+        this.prisma.communityModerationLog.findMany({
+          where: {
+            communityId: { in: communityIds },
+            action: 'message_deleted',
+            messageId: { not: null },
+            ...after('d', 'createdAt'),
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take,
+        }),
+        // The host muted or unmuted the caller (MOD-ROOMS r2, R-122, M3): the log says which and when. In the order the host
+        // did them, so the last one the phone applies is the state.
+        this.prisma.communityModerationLog.findMany({
+          where: {
+            communityId: { in: communityIds },
+            action: { in: ['member_muted', 'member_unmuted'] },
+            targetWawuId: me,
+            ...after('u', 'createdAt'),
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take,
+        }),
+      ]);
 
     const items: Item[] = [
       ...messages.map((row) => ({
@@ -236,6 +264,28 @@ export class LiveCatchUpService {
           // `sender` is filled in below, once for the whole page. The links
           // are signed fresh, as the list signs them (FIX-71).
           message: await this.communityMessages.withFreshMedia(row),
+        }),
+      })),
+      ...removals.map((row) => ({
+        kind: 'd' as const,
+        at: row.createdAt,
+        id: row.id,
+        build: (): LiveEvent => ({
+          type: 'community.message.removed',
+          cursor: encodeLiveCursor(row.createdAt),
+          communityId: row.communityId,
+          messageId: row.messageId as string,
+        }),
+      })),
+      ...mutes.map((row) => ({
+        kind: 'u' as const,
+        at: row.createdAt,
+        id: row.id,
+        build: (): LiveEvent => ({
+          type: 'community.mute.changed',
+          cursor: encodeLiveCursor(row.createdAt),
+          communityId: row.communityId,
+          muted: row.action === 'member_muted',
         }),
       })),
       // Each list already comes in time-then-id order, and the sort is stable,

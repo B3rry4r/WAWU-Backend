@@ -23,6 +23,14 @@ import type { LiveSignal } from './live-signal.type';
  *    `joined`, and not to anyone who has blocked its sender or been blocked
  *    by them (the sender's own other phones still get it).
  *
+ *  - a message the host deleted (`community.message.removed`, MOD-ROOMS, R-122) goes to the same people, host and joined
+ *    members whose pass has not ended, with no block filter: it names a message by id and carries no words, so telling
+ *    someone who blocked its writer to drop it leaks nothing;
+ *
+ *  - a mute or an unmute by the host (`community.mute.changed`, MOD-ROOMS r2, R-122) goes to the muted member only, on
+ *    every phone they have open, and only while they are still a joined member; it carries the room's id and whether they
+ *    are muted, no name and no words;
+ *
  *  - a consultant's message on a legal matter goes to the client who owns the
  *    matter, and to nobody else (`legal.thread`, LEGAL-02); it names the
  *    matter, never the words.
@@ -48,7 +56,9 @@ export class LiveDispatcher {
   handle(signal: LiveSignal): Promise<void> {
     if (this.connections.size === 0) return Promise.resolve();
     const room =
-      signal.kind === 'community.message'
+      signal.kind === 'community.message' ||
+      signal.kind === 'community.message.removed' ||
+      signal.kind === 'community.mute.changed'
         ? signal.communityId
         : signal.kind === 'legal.thread'
           ? signal.legalRequestId
@@ -76,6 +86,17 @@ export class LiveDispatcher {
         return this.moneyRequestUpdated(signal.chatId, signal.requestId);
       case 'community.message':
         return this.communityMessage(signal.communityId, signal.messageId);
+      case 'community.message.removed':
+        return this.communityMessageRemoved(
+          signal.communityId,
+          signal.messageId,
+        );
+      case 'community.mute.changed':
+        return this.communityMuteChanged(
+          signal.communityId,
+          signal.userWawuId,
+          signal.muted,
+        );
       case 'legal.thread':
         return this.legalThread(signal.legalRequestId, signal.messageId);
     }
@@ -209,6 +230,91 @@ export class LiveDispatcher {
       };
       this.connections.send(wawuId, event);
     }
+  }
+
+  /**
+   * The host deleted a message (MOD-ROOMS, R-122): everyone connected who is in the room drops it. The row is gone, so the
+   * cursor is the time the host did it, read from the log the delete wrote in the same transaction.
+   */
+  private async communityMessageRemoved(
+    communityId: string,
+    messageId: string,
+  ): Promise<void> {
+    const [log, community] = await Promise.all([
+      this.prisma.communityModerationLog.findFirst({
+        where: { communityId, messageId, action: 'message_deleted' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.community.findUnique({
+        where: { id: communityId },
+        select: { hostWawuId: true },
+      }),
+    ]);
+    if (!log || !community) return;
+    const connected = this.connections.userIds();
+    const members = await this.prisma.communityMembership.findMany({
+      where: {
+        communityId,
+        status: 'joined',
+        userWawuId: { in: connected },
+      },
+      select: { userWawuId: true },
+    });
+    const allowed = new Set(members.map((m) => m.userWawuId));
+    // INBOX-24 (R-63): a member whose pass has ended is not sent the room.
+    for (const id of await this.passAccess.lapsedMembers(
+      communityId,
+      [...allowed].filter((id) => id !== community.hostWawuId),
+    )) {
+      allowed.delete(id);
+    }
+    if (connected.includes(community.hostWawuId)) {
+      allowed.add(community.hostWawuId);
+    }
+    const event: LiveEvent = {
+      type: 'community.message.removed',
+      cursor: encodeLiveCursor(log.createdAt),
+      communityId,
+      messageId,
+    };
+    for (const wawuId of allowed) this.connections.send(wawuId, event);
+  }
+
+  /**
+   * The host muted or unmuted a member (MOD-ROOMS r2, R-122): that member's open room swaps the composer for the calm line,
+   * or brings it back, at once. The cursor is the time the host did it, read from the log the act wrote in the same
+   * transaction (the catch-up carries the same row).
+   */
+  private async communityMuteChanged(
+    communityId: string,
+    userWawuId: string,
+    muted: boolean,
+  ): Promise<void> {
+    if (!this.connections.has(userWawuId)) return;
+    const [log, member] = await Promise.all([
+      this.prisma.communityModerationLog.findFirst({
+        where: {
+          communityId,
+          targetWawuId: userWawuId,
+          action: muted ? 'member_muted' : 'member_unmuted',
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.communityMembership.findUnique({
+        where: { userWawuId_communityId: { userWawuId, communityId } },
+        select: { status: true },
+      }),
+    ]);
+    if (!log || member?.status !== 'joined') return;
+    const event: LiveEvent = {
+      type: 'community.mute.changed',
+      cursor: encodeLiveCursor(log.createdAt),
+      communityId,
+      muted,
+    };
+    this.connections.send(userWawuId, event);
   }
 
   private async communityMessage(

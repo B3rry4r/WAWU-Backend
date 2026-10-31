@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { CreditSpendModule } from '../credit-spend/credit-spend.module';
 import { CommunityMessageController } from './community-message.controller';
+import { CommunityRoomModerationController } from './community-room-moderation.controller';
+import { CommunityRoomModerationService } from './community-room-moderation.service';
 import { CommunityMessageService } from './community-message.service';
 import { CommunityMessageNoticeService } from './community-message-notice.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
@@ -41,9 +43,14 @@ import { StorageModule } from '../storage/storage.module';
     // (FIX-71).
     StorageModule,
   ],
-  controllers: [CommunityMessageController],
+  // MOD-ROOMS (R-122): the host's tools in their own room.
+  controllers: [CommunityMessageController, CommunityRoomModerationController],
   // FIX-105 (R-81): the sweep that turns new messages into grouped notices.
-  providers: [CommunityMessageService, CommunityMessageNoticeService],
+  providers: [
+    CommunityMessageService,
+    CommunityMessageNoticeService,
+    CommunityRoomModerationService,
+  ],
   // CommunityModule's "my communities" (INBOX-01) reuses lookupSenders.
   exports: [CommunityMessageService, CommunityMessageNoticeService],
 })

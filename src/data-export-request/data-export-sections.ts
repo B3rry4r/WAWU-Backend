@@ -1910,6 +1910,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         "A report about somebody else is a moderation record (REPORT-UGC); the reports made about this person are other people's.",
     },
     {
+      model: 'CommunityMute',
+      reason:
+        "A host's mute of a member of their room (MOD-ROOMS); the member is told in the room, and the record is the host's moderation, not content the person made.",
+    },
+    {
       model: 'UserSuspension',
       reason:
         "A moderator's record of an act on this person (USER-SUSPEND); the app tells the person they are suspended and how to reach support, and the note is internal.",

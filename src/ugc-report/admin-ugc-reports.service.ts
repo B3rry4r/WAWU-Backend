@@ -10,6 +10,8 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { AdminOpsAuditService } from '../common/audit/admin-ops-audit.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { AdminUserView } from '../admin/auth/admin-user-view.type';
+import { LivePublisher } from '../live/live-publisher.service';
+import { kindOf } from '../community-message/message-kind';
 import { AdminContentReviewService } from '../admin/content-review/admin-content-review.service';
 import type { AdminUgcReportsQueryDto } from './dto/admin-ugc-reports-query.dto';
 import type { ResolveUgcReportDto } from './dto/resolve-ugc-report.dto';
@@ -106,6 +108,7 @@ export class AdminUgcReportsService {
     private readonly content: AdminContentReviewService,
     private readonly suspensions: UserSuspensionService,
     private readonly audit: AdminOpsAuditService,
+    private readonly live: LivePublisher,
   ) {}
 
   async list(
@@ -372,10 +375,39 @@ export class AdminUgcReportsService {
         return;
       }
       case 'community_message': {
-        const gone = await this.prisma.communityMessage.deleteMany({
+        // MOD-ROOMS r2 (L2, R-122): a moderator's remove leaves every member's open room at once, as the host's delete does.
+        // The act is written to the room's moderation log in the same transaction (the live event's cursor and the catch-up
+        // read it), with the moderator as the actor, never a member's id.
+        const message = await this.prisma.communityMessage.findUnique({
           where: { id: targetId },
+          select: {
+            id: true,
+            communityId: true,
+            senderWawuId: true,
+            imageUrl: true,
+            videoUrl: true,
+            voiceUrl: true,
+          },
         });
-        if (gone.count > 0) {
+        if (!message) return;
+        const removed = await this.prisma.$transaction(async (tx) => {
+          const gone = await tx.communityMessage.deleteMany({
+            where: { id: targetId },
+          });
+          if (gone.count === 0) return false;
+          await tx.communityModerationLog.create({
+            data: {
+              communityId: message.communityId,
+              actorWawuId: `moderator:${admin.id}`,
+              action: 'message_deleted',
+              targetWawuId: message.senderWawuId,
+              messageId: message.id,
+              messageKind: kindOf(message),
+            },
+          });
+          return true;
+        });
+        if (removed) {
           await this.recordRemoved(
             admin,
             kind,
@@ -384,6 +416,11 @@ export class AdminUgcReportsService {
             reportId,
             subjectWawuId,
           );
+          await this.live.publish({
+            kind: 'community.message.removed',
+            communityId: message.communityId,
+            messageId: message.id,
+          });
         }
         return;
       }

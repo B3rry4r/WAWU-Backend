@@ -12,6 +12,19 @@ export type LiveSignal =
   | { kind: 'chat.read'; chatId: string; readerWawuId: string }
   | { kind: 'money_request.updated'; chatId: string; requestId: string }
   | { kind: 'community.message'; communityId: string; messageId: string }
+  // MOD-ROOMS (R-122): the host deleted a message; the row is gone, so this names it by id only.
+  | {
+      kind: 'community.message.removed';
+      communityId: string;
+      messageId: string;
+    }
+  // MOD-ROOMS r2 (R-122, M3): the host muted or unmuted a member; only that member's open room is told.
+  | {
+      kind: 'community.mute.changed';
+      communityId: string;
+      userWawuId: string;
+      muted: boolean;
+    }
   | { kind: 'legal.thread'; legalRequestId: string; messageId: string };
 
 /**

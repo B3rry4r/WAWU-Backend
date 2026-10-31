@@ -34335,6 +34335,172 @@
         ]
       }
     },
+    "/api/hub/communities/{id}/moderation": {
+      "get": {
+        "operationId": "CommunityRoomModerationController_view",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomModerationView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/messages/{messageId}": {
+      "delete": {
+        "operationId": "CommunityRoomModerationController_deleteMessage",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "removed"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/mutes/{userWawuId}": {
+      "put": {
+        "operationId": "CommunityRoomModerationController_mute",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userWawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "muted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "muted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      },
+      "delete": {
+        "operationId": "CommunityRoomModerationController_unmute",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userWawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "muted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "muted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "CommunityRoomModeration"
+        ]
+      }
+    },
     "/api/hub/payments/hosted-link": {
       "post": {
         "operationId": "PaymentLinkController_create",
@@ -75390,6 +75556,24 @@
           "costInCredits"
         ]
       },
+      "RoomModerationView": {
+        "type": "object",
+        "properties": {
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedMembers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "muted",
+          "mutedMembers"
+        ]
+      },
       "EventView": {
         "type": "object",
         "properties": {
@@ -76170,6 +76354,58 @@
           "cursor"
         ]
       },
+      "LiveCommunityMessageRemovedEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "community.message.removed"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "communityId",
+          "messageId",
+          "cursor"
+        ]
+      },
+      "LiveCommunityMuteEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "community.mute.changed"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "communityId",
+          "muted",
+          "cursor"
+        ]
+      },
       "LiveCatchUp": {
         "type": "object",
         "properties": {
@@ -76188,6 +76424,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/LiveCommunityMessageEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveCommunityMessageRemovedEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveCommunityMuteEvent"
                 }
               ]
             }
