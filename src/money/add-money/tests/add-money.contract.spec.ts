@@ -86,6 +86,13 @@ const nuban = () =>
 
 // What a 2048-bit key makes of a card: 256 bytes (the Hub checks the length against the key it gave the phone).
 const ENCRYPTED = Buffer.alloc(256, 7).toString('base64');
+// The ids the Hub and Nuvion make at random (a uuid, a hex ref) hold "4111" by chance about 1 run in 700, so a
+// look for the test card's digits ("4111...") is made on the text without them and sees everything else.
+const without = (text: string, ...ids: (string | null | undefined)[]) =>
+  ids
+    .filter((i): i is string => !!i)
+    .sort((a, b) => b.length - a.length)
+    .reduce((t, i) => t.split(i).join(''), text);
 const HOOK = '/api/hub/webhooks/nuvion';
 const SECRET = 'whsec_wallet25_fix1_0123456789abcdef';
 const cardBody = (over: Record<string, unknown> = {}) => ({
@@ -557,11 +564,21 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       status: 'completed',
     });
     // The card reached Nuvion encrypted, and the Hub keeps none of it.
-    const stored = JSON.stringify(await row(v.id), (_k, x: unknown) =>
+    const kept = await row(v.id);
+    const stored = JSON.stringify(kept, (_k, x: unknown) =>
       typeof x === 'bigint' ? x.toString() : x,
     );
     expect(stored).not.toContain(ENCRYPTED);
-    expect(stored).not.toMatch(/4111/);
+    expect(
+      without(
+        stored,
+        kept.id,
+        kept.wawuUserId,
+        kept.reference,
+        kept.providerRef,
+        kept.actionRef,
+      ),
+    ).not.toMatch(/4111/);
     // Nothing is credited by the charge itself.
     const s = await row(v.id);
     expect(await ledgerRows(s.reference)).toHaveLength(0);
@@ -1190,14 +1207,39 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       await settings.refresh();
     }
     await get(me, `/quote?rail=card&amountKobo=${AMOUNT}`).expect(200);
+    const pageId = randomUUID();
     const page = await request(app.getHttpServer())
-      .get(`${BASE}/return?id=${randomUUID()}`)
+      .get(`${BASE}/return?id=${pageId}`)
       .expect(200);
-    expect(page.text).toContain('wawu://add-money/status?id=');
-    expect(page.text).not.toMatch(/4111|token/i);
+    expect(page.text).toContain(`wawu://add-money/status?id=${pageId}`);
+    expect(without(page.text, pageId)).not.toMatch(/4111|token/i);
     const evil = await request(app.getHttpServer())
       .get(`${BASE}/return?id="><script>x</script>`)
       .expect(200);
     expect(evil.text).not.toContain('<script>x');
+  });
+});
+
+describe('the look for the test card digits (the "4111" checks above)', () => {
+  it('passes over a random id that holds 4111 by chance and still finds a card number kept anywhere else', () => {
+    const id = 'e0a1b2c3-d4e5-4111-8f00-000000000001';
+    const providerRef = 'PI40D943C30A7EE41112F3';
+    const row = (extra: object) =>
+      JSON.stringify({
+        id,
+        reference: `wawu-add-${id}`,
+        providerRef,
+        cardLast4: '1111',
+        ...extra,
+      });
+    expect(row({})).toMatch(/4111/);
+    expect(without(row({}), id, `wawu-add-${id}`, providerRef)).not.toMatch(
+      /4111/,
+    );
+    for (const kept of ['4111111111111111', '4111 1111 1111 1111', '411111']) {
+      expect(
+        without(row({ reviewNote: kept }), id, `wawu-add-${id}`, providerRef),
+      ).toMatch(/4111/);
+    }
   });
 });
