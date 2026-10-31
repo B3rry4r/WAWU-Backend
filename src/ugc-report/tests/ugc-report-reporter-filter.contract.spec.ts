@@ -99,10 +99,12 @@ describe('REPORT-UGC: a reported piece, on its own, leaves the reporter lists on
   const http = () => request(app.getHttpServer() as Server);
   const get = (who: Who, url: string) =>
     http().get(`/api/hub${url}`).set('Authorization', `Bearer ${who.token}`);
+  /** The answer's `data`, typed by the caller. */
+  const dataOf = <T>(res: { body: unknown }): T =>
+    (res.body as { data: T }).data;
   const ids = (res: { body: { data: unknown } }): string[] => {
     const data = res.body.data as
-      | Array<{ id: string }>
-      | { items: Array<{ id: string }> };
+      Array<{ id: string }> | { items: Array<{ id: string }> };
     return (Array.isArray(data) ? data : data.items).map((i) => i.id);
   };
   const savedIds = (res: { body: { data: { items: unknown[] } } }): string[] =>
@@ -118,19 +120,32 @@ describe('REPORT-UGC: a reported piece, on its own, leaves the reporter lists on
   async function listsFor(who: Who): Promise<Array<[string, string[]]>> {
     const q = `perPage=100`;
     return [
-      ['feed, trending', ids(await get(who, `/content?${q}&sort=trending`).expect(200))],
-      ['feed, recent', ids(await get(who, `/content?${q}&sort=recent`).expect(200))],
+      [
+        'feed, trending',
+        ids(await get(who, `/content?${q}&sort=trending`).expect(200)),
+      ],
+      [
+        'feed, recent',
+        ids(await get(who, `/content?${q}&sort=recent`).expect(200)),
+      ],
       ['feed, top', ids(await get(who, `/content?${q}&sort=top`).expect(200))],
-      ['following', ids(await get(who, `/content?${q}&scope=following`).expect(200))],
+      [
+        'following',
+        ids(await get(who, `/content?${q}&scope=following`).expect(200)),
+      ],
       [
         'search',
-        (
-          (await get(who, `/search?q=${TAG}&tab=content`).expect(200)).body
-            .data.content as Array<{ id: string }>
-        ).map((i) => i.id),
+        dataOf<{ content: Array<{ id: string }> }>(
+          await get(who, `/search?q=${TAG}&tab=content`).expect(200),
+        ).content.map((i) => i.id),
       ],
       ['closest', ids(await get(who, `/search/closest?q=${TAG}`).expect(200))],
-      ['the creator shelf', ids(await get(who, `/users/${CREATOR}/content?perPage=100`).expect(200))],
+      [
+        'the creator shelf',
+        ids(
+          await get(who, `/users/${CREATOR}/content?perPage=100`).expect(200),
+        ),
+      ],
       ['saved', savedIds(await get(who, `/me/saved?type=content`).expect(200))],
     ];
   }
@@ -257,18 +272,25 @@ describe('REPORT-UGC: a reported piece, on its own, leaves the reporter lists on
       await prisma.ugcReport.count({ where: { reporterWawuId: ana.sub } }),
     ).toBe(1);
 
-    for (const [name, got] of await listsFor(ana)) {
-      expect([name, got.includes(pieceOne)]).toEqual([name, false]);
-      expect([name, got.includes(pieceTwo)]).toEqual([name, true]);
-    }
-    // The shelf's count leaves it out too, and Saved's own count.
-    const shelf = (await get(ana, `/users/${CREATOR}/content?perPage=100`).expect(200)).body;
+    // Every list at once, so a failure names each list that still shows it.
+    const lists = await listsFor(ana);
     expect(
-      ids({ body: shelf }).filter((id) => [pieceOne, pieceTwo].includes(id)),
+      lists.filter(([, got]) => got.includes(pieceOne)).map(([n]) => n),
+    ).toEqual([]);
+    expect(
+      lists.filter(([, got]) => !got.includes(pieceTwo)).map(([n]) => n),
+    ).toEqual([]);
+    // The shelf's count leaves it out too, and Saved's own count.
+    const shelf = await get(
+      ana,
+      `/users/${CREATOR}/content?perPage=100`,
+    ).expect(200);
+    expect(
+      ids(shelf).filter((id) => [pieceOne, pieceTwo].includes(id)),
     ).toHaveLength(1);
-    const counts = (await get(ana, '/me/counts').expect(200)).body.data as {
-      saved: number;
-    };
+    const counts = dataOf<{ saved: number }>(
+      await get(ana, '/me/counts').expect(200),
+    );
     expect(counts.saved).toBe(1);
   });
 
@@ -277,9 +299,9 @@ describe('REPORT-UGC: a reported piece, on its own, leaves the reporter lists on
       expect([name, got.includes(pieceOne)]).toEqual([name, true]);
       expect([name, got.includes(pieceTwo)]).toEqual([name, true]);
     }
-    const counts = (await get(bayo, '/me/counts').expect(200)).body.data as {
-      saved: number;
-    };
+    const counts = dataOf<{ saved: number }>(
+      await get(bayo, '/me/counts').expect(200),
+    );
     expect(counts.saved).toBe(2);
   });
 
@@ -290,7 +312,7 @@ describe('REPORT-UGC: a reported piece, on its own, leaves the reporter lists on
     expect(ids(pub)).toEqual(expect.arrayContaining([pieceOne, pieceTwo]));
     // Opening it by its own link: the person chose to open it.
     const open = await get(ana, `/content/${pieceOne}`).expect(200);
-    expect(open.body.data.id).toBe(pieceOne);
+    expect(dataOf<{ id: string }>(open).id).toBe(pieceOne);
   });
 
   it('a reported PROFILE still opens, with its shelf: hiding a person is what Block does', async () => {
@@ -301,7 +323,10 @@ describe('REPORT-UGC: a reported piece, on its own, leaves the reporter lists on
       .expect(200);
     await get(cara, `/users/${CREATOR}/visitor-profile`).expect(200);
     await get(cara, `/users/${CREATOR}/profile-fields`).expect(200);
-    const shelf = await get(cara, `/users/${CREATOR}/content?perPage=100`).expect(200);
+    const shelf = await get(
+      cara,
+      `/users/${CREATOR}/content?perPage=100`,
+    ).expect(200);
     expect(ids(shelf)).toEqual(expect.arrayContaining([pieceOne, pieceTwo]));
   });
 });
