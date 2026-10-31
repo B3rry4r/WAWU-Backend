@@ -76416,6 +76416,32 @@
           "cursor"
         ]
       },
+      "LiveCommunityMessageRemovedEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "community.message.removed"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "communityId",
+          "messageId",
+          "cursor"
+        ]
+      },
       "LiveCatchUp": {
         "type": "object",
         "properties": {
@@ -76434,6 +76460,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LiveCommunityMessageEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveCommunityMessageRemovedEvent"
                 }
               ]
             }

@@ -211,6 +211,17 @@ function parseSignal(payload: string): LiveSignal | LiveProbe | null {
         messageId: s('messageId'),
       };
     }
+    if (
+      v.kind === 'community.message.removed' &&
+      s('communityId') &&
+      s('messageId')
+    ) {
+      return {
+        kind: 'community.message.removed',
+        communityId: s('communityId'),
+        messageId: s('messageId'),
+      };
+    }
     if (v.kind === 'legal.thread' && s('legalRequestId') && s('messageId')) {
       return {
         kind: 'legal.thread',

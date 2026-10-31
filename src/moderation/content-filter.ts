@@ -29,9 +29,9 @@ import {
 /** The `reason.code` of the refusal. The app keys on this, never on the words. */
 export const CONTENT_BLOCKED_CODE = 'content_blocked';
 
-/** One sentence, no em-dash: the app shows it as it is. The product's name is "Who Made This" (R-37). */
+/** Two sentences, no em-dash: the app shows them as they are. The app's name is written "Who Made This?" (R-37, R-122). */
 export const CONTENT_BLOCKED_MESSAGE =
-  "That has words we don't allow on Who Made This. Change them and try again.";
+  'Who Made This? does not allow some of those words. Change them and try again.';
 
 /** Endings a `~` entry takes. */
 const ENDINGS = ['s', 'es', 'ed', 'er', 'ers', 'ing', 'in', 'y'] as const;

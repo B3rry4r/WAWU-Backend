@@ -62,6 +62,7 @@ are already open:
 | `chat.message` | the two people in the chat, never once either has blocked the other |
 | `chat.read` | the other person (not when blocked) and the reader's own other phones |
 | `community.message` | the host and members whose status is `joined`; not anyone who has blocked the sender or been blocked by them |
+| `community.message.removed` | the same people as `community.message`, with no block filter: it names the message by id and carries no words (MOD-ROOMS, R-122) |
 | `legal.thread` | the client who owns the legal matter a consultant just wrote on, and nobody else (LEGAL-02) |
 
 A person may hold 8 sockets; the 9th closes the oldest with `4409`.
@@ -72,6 +73,7 @@ A person may hold 8 sockets; the 9th closes the oldest with `4409`.
 { type: 'chat.message',      cursor, message: ChatMessage }
 { type: 'chat.read',         cursor, chatId, readerWawuId, mine, lastReadAt, lastReadMessageId }
 { type: 'community.message', cursor, communityId, message: CommunityMessage }
+{ type: 'community.message.removed', cursor, communityId, messageId }   // the host deleted it (MOD-ROOMS, R-122)
 { type: 'legal.thread',      cursor, legalRequestId }   // socket only (LEGAL-02)
 ```
 
@@ -128,7 +130,7 @@ catch-up. With no `cursor` the answer is empty and `cursor` is "now".
 
 The cursor is a time, and, when it continues a page, the last row that page
 ended on. A page lists rows by time, then by kind (chat messages, read marks,
-community messages), then by id, and a continuing cursor is read exactly after
+community messages, money requests, then room messages the host deleted), then by id, and a continuing cursor is read exactly after
 that row, so paging loses nothing however many rows share a millisecond. A
 cursor without a row (from an event, `ready`, or the last page) is read 10 s
 behind its time, because a message is stamped when its transaction starts and
@@ -136,7 +138,9 @@ can commit after a later one has already been pushed; the id check in step 3
 removes the repeats. A cursor that is not one the server gave out is a 400.
 
 What it returns: new messages in the caller's chats and in the communities
-they are in, and the read marks the other person moved (one event per chat,
+they are in, the room messages a host deleted (`community.message.removed`, from
+the host's log, because the row is gone; applying one twice, or for a message
+the phone never held, is harmless), and the read marks the other person moved (one event per chat,
 the latest mark; this includes the other person's mark when their own sending moved
 it, which the socket does not push, and applying it twice is harmless). It
 leaves out chats where either person has blocked the

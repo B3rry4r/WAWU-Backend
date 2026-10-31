@@ -3,14 +3,16 @@ import { BadRequestException } from '@nestjs/common';
 /**
  * Which list a row came from, in the order a page lists them when rows share
  * a time: chat messages, read marks, community messages, then money requests
- * that changed (INBOX-15).
+ * that changed (INBOX-15), then room messages the host deleted
+ * (MOD-ROOMS, R-122).
  */
-export type LiveKind = 'm' | 'r' | 'p' | 'q';
+export type LiveKind = 'm' | 'r' | 'p' | 'q' | 'd';
 export const LIVE_KIND_RANK: Record<LiveKind, number> = {
   m: 0,
   r: 1,
   p: 2,
   q: 3,
+  d: 4,
 };
 
 /** The last row a page ended on. */
@@ -52,7 +54,11 @@ export function decodeLiveCursor(cursor: string): LiveCursor {
     validTime &&
     parts.length === 4 &&
     parts[1] === '1' &&
-    (kind === 'm' || kind === 'r' || kind === 'p' || kind === 'q') &&
+    (kind === 'm' ||
+      kind === 'r' ||
+      kind === 'p' ||
+      kind === 'q' ||
+      kind === 'd') &&
     UUID.test(parts[3])
   ) {
     return { at, position: { kind, id: parts[3] } };

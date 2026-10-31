@@ -54,6 +54,18 @@ export interface LiveCommunityMessageEvent extends LiveEventBase {
 }
 
 /**
+ * MOD-ROOMS (R-122). The host of a room deleted a message: every open room drops it at once. It names the message by id
+ * and carries no words. It goes to the people a `community.message` goes to, and into `GET /live/catch-up`, so a phone
+ * that was offline when the host deleted it drops the message when it comes back. `cursor` is the time the host deleted
+ * it. Applying it twice, or for a message the phone never held, changes nothing.
+ */
+export interface LiveCommunityMessageRemovedEvent extends LiveEventBase {
+  type: 'community.message.removed';
+  communityId: string;
+  messageId: string;
+}
+
+/**
  * A legal conversation changed (LEGAL-02): a consultant wrote in it. Socket only,
  * and not part of `GET /live/catch-up` (a phone reads the conversation itself,
  * `GET /legal/assistant/{id}`, when it reconnects). It carries no words and no
@@ -69,7 +81,8 @@ export type LiveEvent =
   | LiveChatMessageEvent
   | LiveChatReadEvent
   | LiveMoneyRequestEvent
-  | LiveCommunityMessageEvent;
+  | LiveCommunityMessageEvent
+  | LiveCommunityMessageRemovedEvent;
 
 /** First frame the server sends once a token is accepted. */
 export interface LiveReadyFrame {

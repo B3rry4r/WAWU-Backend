@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { LivePublisher } from '../live/live-publisher.service';
 import { kindOf } from './message-kind';
 
 /** The refusal a muted member gets when they send. The app keys on `reason.code`, never on the words. */
@@ -32,7 +33,10 @@ const ONLY_THE_HOST = 'Only the host of this room can do that.';
  */
 @Injectable()
 export class CommunityRoomModerationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly live: LivePublisher,
+  ) {}
 
   private async hostedBy(
     communityId: string,
@@ -93,7 +97,8 @@ export class CommunityRoomModerationService {
 
   /**
    * DELETE /communities/:id/messages/:messageId. The message is gone for everyone (the row is deleted, so no list, preview,
-   * unread count or live catch-up can show it again) and the act is logged. A member or a stranger gets 403. The words are
+   * unread count or live catch-up can show it again), every member's open room is told at once (`community.message.removed`
+   * on the live channel, and in the catch-up for a phone that was away), and the act is logged. A member or a stranger gets 403. The words are
    * not kept in the log, only the message's id and kind and who wrote it.
    */
   async deleteMessage(
@@ -113,12 +118,12 @@ export class CommunityRoomModerationService {
       },
     });
     if (!message) throw new NotFoundException('Message not found');
-    await this.prisma.$transaction(async (tx) => {
+    const deleted = await this.prisma.$transaction(async (tx) => {
       const gone = await tx.communityMessage.deleteMany({
         where: { id: message.id, communityId },
       });
       // Two deletes at once: the second finds nothing and writes no second record.
-      if (gone.count === 0) return;
+      if (gone.count === 0) return false;
       await tx.communityModerationLog.create({
         data: {
           communityId,
@@ -129,7 +134,17 @@ export class CommunityRoomModerationService {
           messageKind: kindOf(message),
         },
       });
+      return true;
     });
+    // After the commit, through the channel new messages use: every member's open room drops it at once, and a phone that
+    // was away reads it from the catch-up (the log row). Never throws; a lost signal is the catch-up's job.
+    if (deleted) {
+      await this.live.publish({
+        kind: 'community.message.removed',
+        communityId,
+        messageId: message.id,
+      });
+    }
     return { removed: true };
   }
 

@@ -117,9 +117,9 @@ describe('MOD-ROOMS: the objectionable-words filter', () => {
     });
   });
 
-  it('the refusal is a 400 with the code content_blocked, one plain sentence, no em-dash, and no word named', () => {
+  it('the refusal is a 400 with the code content_blocked, plain words, no em-dash, and no word named', () => {
     expect(CONTENT_BLOCKED_MESSAGE).toBe(
-      "That has words we don't allow on Who Made This. Change them and try again.",
+      'Who Made This? does not allow some of those words. Change them and try again.',
     );
     expect(CONTENT_BLOCKED_MESSAGE).not.toContain('—');
     let caught: unknown;

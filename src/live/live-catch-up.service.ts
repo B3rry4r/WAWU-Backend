@@ -21,7 +21,8 @@ interface Item {
 
 /**
  * What a person missed since a cursor (task INBOX-02): the new messages in
- * their chats and communities and the read marks that moved, oldest first.
+ * their chats and communities, the read marks that moved, and the room messages a host deleted (MOD-ROOMS, R-122),
+ * oldest first.
  * The app calls it after the socket reconnects and when it returns to the
  * foreground; it is a catch-up, and the socket carries everything after it.
  *
@@ -138,7 +139,7 @@ export class LiveCatchUpService {
     })();
 
     const take = limit + 1;
-    const [messages, reads, posts, requests] = await Promise.all([
+    const [messages, reads, posts, requests, removals] = await Promise.all([
       this.prisma.chatMessage.findMany({
         where: { conversationId: { in: chatIds }, ...after('m', 'createdAt') },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -171,6 +172,17 @@ export class LiveCatchUpService {
           ...after('q', 'changedAt'),
         },
         orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
+        take,
+      }),
+      // Room messages the host deleted (MOD-ROOMS, R-122): the row is gone, so the host's log says which and when.
+      this.prisma.communityModerationLog.findMany({
+        where: {
+          communityId: { in: communityIds },
+          action: 'message_deleted',
+          messageId: { not: null },
+          ...after('d', 'createdAt'),
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take,
       }),
     ]);
@@ -236,6 +248,17 @@ export class LiveCatchUpService {
           // `sender` is filled in below, once for the whole page. The links
           // are signed fresh, as the list signs them (FIX-71).
           message: await this.communityMessages.withFreshMedia(row),
+        }),
+      })),
+      ...removals.map((row) => ({
+        kind: 'd' as const,
+        at: row.createdAt,
+        id: row.id,
+        build: (): LiveEvent => ({
+          type: 'community.message.removed',
+          cursor: encodeLiveCursor(row.createdAt),
+          communityId: row.communityId,
+          messageId: row.messageId as string,
         }),
       })),
       // Each list already comes in time-then-id order, and the sort is stable,

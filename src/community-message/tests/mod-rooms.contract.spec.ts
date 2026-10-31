@@ -475,6 +475,23 @@ describe('MOD-ROOMS (R-122)', () => {
       ).toBe(2);
     });
 
+    it('the room preview in "my communities" shows the newest message and loses it when the host deletes it (MOD-ROOMS r1)', async () => {
+      const preview = async (): Promise<string> => {
+        const mine = await get(cat, '/communities/mine').expect(200);
+        const row = mine.body.data.find((r: any) => r.id === roomId);
+        return JSON.stringify(row?.lastMessage ?? null);
+      };
+      const sent = await say(bob, 'preview probe words').expect(201);
+      expect(await preview()).toContain('preview probe words');
+      await h
+        .http()
+        .delete(api(`/communities/${roomId}/messages/${sent.body.data.id}`))
+        .set(as(host))
+        .expect(200);
+      expect(await preview()).not.toContain('preview probe words');
+      expect(await texts(cat)).not.toContain('preview probe words');
+    });
+
     it('muting: a joined member only, never yourself, a repeat writes nothing new', async () => {
       await h
         .http()
