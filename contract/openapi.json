@@ -26448,6 +26448,140 @@
         ]
       }
     },
+    "/api/hub/admin/users/{id}/suspend": {
+      "post": {
+        "operationId": "AdminUserSuspensionController_suspend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuspendUserDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSuspensionView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Suspend a person. Safe to repeat: a person already suspended answers their state and writes nothing.",
+        "tags": [
+          "AdminUserSuspension"
+        ]
+      }
+    },
+    "/api/hub/admin/users/{id}/lift": {
+      "post": {
+        "operationId": "AdminUserSuspensionController_lift",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiftSuspensionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSuspensionView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Lift the suspension in force. Everything of theirs is back at once; nothing was deleted. Safe to repeat.",
+        "tags": [
+          "AdminUserSuspension"
+        ]
+      }
+    },
+    "/api/hub/admin/users/{id}/suspension": {
+      "get": {
+        "operationId": "AdminUserSuspensionController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSuspensionView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether the person is suspended, and every suspension they have had.",
+        "tags": [
+          "AdminUserSuspension"
+        ]
+      }
+    },
+    "/api/hub/me/suspension": {
+      "get": {
+        "operationId": "MeSuspensionController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MySuspensionView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "MeSuspension"
+        ]
+      }
+    },
     "/api/hub/creators/{wawuId}/evg": {
       "get": {
         "operationId": "EvgScoreController_getEvgScore",
@@ -50340,21 +50474,77 @@
         "properties": {
           "action": {
             "type": "string",
-            "description": "`dismiss`: nothing wrong. `take_down`: the item comes down (a piece through content take-down; a comment, community message or chat message is deleted).",
+            "description": "`dismiss`: nothing wrong. `take_down`: the item comes down (a piece through content take-down; a comment, community\nmessage or chat message is deleted); on a reported PROFILE it suspends the person (USER-SUSPEND, R-121).\n`take_down_and_suspend`: the item comes down AND the person who made it is suspended. `suspend`: the person is\nsuspended and the item is left as it is (the way to act on a paid question, which carries money).",
             "enum": [
               "dismiss",
-              "take_down"
+              "take_down",
+              "take_down_and_suspend",
+              "suspend"
             ]
           },
           "note": {
             "type": "string",
-            "description": "Why. Required for a take-down (it is the only record of why it came down); optional for a dismissal.",
+            "description": "Why. Required for a take-down or a suspension (it is the only record of why); optional for a dismissal.",
             "maxLength": 1000
+          },
+          "suspendReason": {
+            "type": "string",
+            "description": "Why the person is suspended, from the same short list as a report. Defaults to the report's own reason.",
+            "enum": [
+              "spam",
+              "harassment",
+              "hate",
+              "sexual",
+              "illegal",
+              "impersonation",
+              "other"
+            ]
           }
         },
         "required": [
           "action"
         ]
+      },
+      "SuspendUserDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why, from the short fixed list the report sheet uses.",
+            "enum": [
+              "spam",
+              "harassment",
+              "hate",
+              "sexual",
+              "illegal",
+              "impersonation",
+              "other"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "What the moderator saw. Kept with the suspension and in the audit trail; the person is never shown it.",
+            "maxLength": 1000
+          },
+          "reportId": {
+            "type": "string",
+            "description": "The report that led to it, when there was one.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "LiftSuspensionDto": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "description": "Why it is lifted. Kept in the audit trail.",
+            "maxLength": 1000
+          }
+        }
       },
       "UpsertLearnGuideDto": {
         "type": "object",
@@ -71588,6 +71778,150 @@
           "slotsTotal"
         ]
       },
+      "SuspensionEntryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "other",
+              "spam",
+              "harassment",
+              "hate",
+              "sexual",
+              "illegal",
+              "impersonation"
+            ]
+          },
+          "reasonLabel": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reportId": {
+            "type": "string",
+            "nullable": true
+          },
+          "suspendedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "suspendedBy": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "role"
+            ]
+          },
+          "liftedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "liftNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "liftedBy": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "role"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "reasonLabel",
+          "note",
+          "reportId",
+          "suspendedAt",
+          "suspendedBy",
+          "liftedAt",
+          "liftNote",
+          "liftedBy"
+        ]
+      },
+      "AdminSuspensionView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "current": {
+            "$ref": "#/components/schemas/SuspensionEntryView",
+            "nullable": true
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SuspensionEntryView"
+            }
+          }
+        },
+        "required": [
+          "wawuId",
+          "handle",
+          "suspended",
+          "current",
+          "history"
+        ]
+      },
+      "MySuspensionView": {
+        "type": "object",
+        "properties": {
+          "suspended": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "supportEmail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "suspended",
+          "since",
+          "message",
+          "supportEmail"
+        ]
+      },
       "AdminUgcPerson": {
         "type": "object",
         "properties": {
@@ -71698,6 +72032,12 @@
           },
           "canTakeDown": {
             "type": "boolean"
+          },
+          "subjectSuspended": {
+            "type": "boolean"
+          },
+          "canSuspend": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -71715,7 +72055,9 @@
           "subject",
           "item",
           "emailed",
-          "canTakeDown"
+          "canTakeDown",
+          "subjectSuspended",
+          "canSuspend"
         ]
       },
       "AdminUgcResolveView": {
@@ -71747,6 +72089,9 @@
           },
           "resolved": {
             "type": "number"
+          },
+          "suspended": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -71754,7 +72099,8 @@
           "kind",
           "targetId",
           "status",
-          "resolved"
+          "resolved",
+          "suspended"
         ]
       },
       "UgcReportView": {

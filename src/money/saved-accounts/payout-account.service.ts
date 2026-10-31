@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  isSuspended,
+  suspendedRefusal,
+} from '../../common/suspension/user-suspension';
+import {
   accountNameIsWalletName,
   accountNameMatches,
   nameWords,
@@ -99,7 +103,12 @@ export class PayoutAccountService {
     // R-51: only the person's own name is saved. Nothing is stored before
     // this, and nothing is held while the bank was asked above.
     const refusal = await this.notYourNameRefusal(wawuUserId, account);
-    if (refusal) throw refusal;
+    if (refusal) {
+      // USER-SUSPEND (R-121 tightened, round 2 H1): the same refusal, in the suspended person's words (403
+      // account_suspended), so the app shows its one calm screen. Everybody else gets `refusal` as before.
+      if (await isSuspended(this.prisma, wawuUserId)) throw suspendedRefusal();
+      throw refusal;
+    }
     const stamp = this.banks.checkedStamp(account.bankCode);
     const held = await this.prisma.moneyPayoutAccount.findUnique({
       where: { wawuUserId },

@@ -54,6 +54,11 @@ export class ProfileAudienceService {
     const owner = profile.wawuUserId;
     if (owner === viewer) return owner;
 
+    await this.blockedAccounts.assertNotSuspended(
+      viewer,
+      owner,
+      USER_NOT_FOUND,
+    );
     if (await this.blockedAccounts.isBlockedEitherWay(viewer, owner)) {
       throw new NotFoundException(USER_NOT_FOUND);
     }

@@ -9,6 +9,10 @@ import { deriveVerificationState } from '../common/verification/verification-sta
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { BlockedAccount, BlockedAccountUser } from '../common/types';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import {
+  isSuspended,
+  suspendedIds,
+} from '../common/suspension/user-suspension';
 import type { CreateBlockedAccountDto } from './dto/create-blocked-account.dto';
 
 /**
@@ -221,15 +225,18 @@ export class BlockedAccountService {
    * the button, for the same reason `isBlockedEitherWay` is symmetric.
    *
    * Read surfaces call this once per request and filter with the result
-   * (`notIn`), so a page costs one indexed query, not one per row. Returns an
-   * empty list for a caller with no account (a signed-out reader): a block is
-   * between two accounts, so there is nobody to hide anything from.
+   * (`notIn`), so a page costs one indexed query, not one per row. A
+   * signed-out reader has no blocks, so they are hidden nothing but the
+   * suspended (USER-SUSPEND, R-121), who are hidden from everyone.
    *
    * Exported on purpose: the wallet recipient search (WALLET-08) filters its
    * results with this same method.
    */
   async hiddenFrom(viewer: string | null | undefined): Promise<string[]> {
-    if (!viewer) return [];
+    // USER-SUSPEND (R-121): a suspended person is hidden from EVERYONE, a signed-out reader too, so this runs before the
+    // signed-out return. Not from themselves: they still see their own things.
+    const suspended = await suspendedIds(this.prisma, viewer);
+    if (!viewer) return suspended;
     const [rows, reportedPeople] = await Promise.all([
       this.prisma.blockedAccount.findMany({
         where: { OR: [{ userWawuId: viewer }, { blockedWawuId: viewer }] },
@@ -238,7 +245,7 @@ export class BlockedAccountService {
       // REPORT-UGC: a person the viewer reported is hidden from the viewer only, like a block that only they feel.
       this.reportedIds(viewer, 'profile'),
     ]);
-    const ids = new Set<string>(reportedPeople);
+    const ids = new Set<string>([...reportedPeople, ...suspended]);
     for (const r of rows) {
       ids.add(r.userWawuId === viewer ? r.blockedWawuId : r.userWawuId);
     }
@@ -273,8 +280,35 @@ export class BlockedAccountService {
     owner: string,
     notFound: string,
   ): Promise<void> {
+    await this.assertNotSuspended(viewer, owner, notFound);
     if (!viewer || viewer === owner) return;
     if (await this.isBlockedEitherWay(viewer, owner)) {
+      throw new NotFoundException(notFound);
+    }
+  }
+
+  /** USER-SUSPEND (R-121). Everybody suspended right now, except `except` (the person asking, who sees their own things). */
+  suspendedPeople(except?: string | null): Promise<string[]> {
+    return suspendedIds(this.prisma, except);
+  }
+
+  /** USER-SUSPEND (R-121). True while a moderator's suspension of this person is in force. */
+  isSuspended(wawuId: string | null | undefined): Promise<boolean> {
+    return isSuspended(this.prisma, wawuId);
+  }
+
+  /**
+   * USER-SUSPEND (R-121). A profile, piece, listing or room of a suspended person answers exactly like one that does
+   * not exist, for everyone but the person themselves: a signed-out reader too, and somebody who paid for it too. Same
+   * 404 and words as `notFound`, so a direct link learns nothing.
+   */
+  async assertNotSuspended(
+    viewer: string | null | undefined,
+    owner: string,
+    notFound: string,
+  ): Promise<void> {
+    if (viewer && viewer === owner) return;
+    if (await isSuspended(this.prisma, owner)) {
       throw new NotFoundException(notFound);
     }
   }
@@ -290,6 +324,8 @@ export class BlockedAccountService {
     communityId: string,
     notFound = 'Community not found',
   ): Promise<void> {
+    // USER-SUSPEND (R-121): a room hosted by a suspended person is gone for everyone, members too.
+    await this.assertNotSuspended(viewer, hostWawuId, notFound);
     if (!viewer || viewer === hostWawuId) return;
     if (!(await this.isBlockedEitherWay(viewer, hostWawuId))) return;
     const member = await this.prisma.communityMembership.findFirst({
@@ -313,6 +349,11 @@ export class BlockedAccountService {
    */
   async assertNotBlocked(a: string, b: string, message: string): Promise<void> {
     if (await this.isBlockedEitherWay(a, b)) {
+      throw new ForbiddenException(message);
+    }
+    // USER-SUSPEND (R-121): nobody messages, tips, follows or buys from a suspended person. (When `a` is the suspended
+    // one the write guard has already refused them, in its own words.) Same neutral message as a block.
+    if ((await this.isSuspended(a)) || (await this.isSuspended(b))) {
       throw new ForbiddenException(message);
     }
   }
