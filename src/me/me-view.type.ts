@@ -48,6 +48,8 @@ export interface SavedContentView {
   priceKobo: number | null;
   /** The piece's preview picture, a fresh link; null when it has none. */
   thumbnailUrl: string | null;
+  /** CONTENT-COVER (R-114): a fresh link to the piece's own cover picture; null when it has none. */
+  coverUrl: string | null;
   /** True when the caller has a completed purchase of it (M30 "Bought"). */
   bought: boolean;
   creator: MePerson;
@@ -124,6 +126,8 @@ export interface PurchasedPieceView {
   /** Picks the row's action on M29: video Watch, pdf Read, course Resume, template Download. */
   contentType: 'video' | 'course' | 'audio' | 'pdf' | 'image' | 'template';
   thumbnailUrl: string | null;
+  /** CONTENT-COVER (R-114): a fresh link to the piece's own cover picture; null when it has none. */
+  coverUrl: string | null;
   creator: MePerson;
 }
 

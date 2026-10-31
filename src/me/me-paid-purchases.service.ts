@@ -267,6 +267,7 @@ export class MePaidPurchasesService {
         title: true,
         contentType: true,
         previewAssetUrl: true,
+        coverKey: true,
         creatorWawuId: true,
       },
     });
@@ -284,6 +285,7 @@ export class MePaidPurchasesService {
           title: p.title,
           contentType: p.contentType,
           thumbnailUrl: await this.storage.freshUrlFor(p.previewAssetUrl),
+          coverUrl: await this.storage.coverUrlFor(p.coverKey),
           creator: people.get(p.creatorWawuId)!,
         },
         lessons:

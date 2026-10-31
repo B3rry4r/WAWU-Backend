@@ -108,6 +108,7 @@ export class MePurchasesService {
             title: true,
             contentType: true,
             previewAssetUrl: true,
+            coverKey: true,
             creatorWawuId: true,
           },
         },
@@ -140,6 +141,7 @@ export class MePurchasesService {
           thumbnailUrl: await this.storage.freshUrlFor(
             r.content.previewAssetUrl,
           ),
+          coverUrl: await this.storage.coverUrlFor(r.content.coverKey),
           creator: people.get(r.content.creatorWawuId)!,
         },
         lessons:

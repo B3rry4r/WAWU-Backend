@@ -33,7 +33,11 @@ const MOCK_PORT = process.env.WAWU_ID_JWKS_URL
 const MOCK_BASE = `http://localhost:${MOCK_PORT}`;
 const DAY = 86_400_000;
 
-const storageStub = { freshUrlFor: (s: string | null) => Promise.resolve(s) };
+const storageStub = {
+  freshUrlFor: (s: string | null) => Promise.resolve(s),
+  // CONTENT-COVER: the feed cards ask for a cover link; a piece here has no cover.
+  coverUrlFor: (s: string | null | undefined) => Promise.resolve(s ?? null),
+};
 
 async function waitForHealth(url: string, timeoutMs = 15000): Promise<boolean> {
   const start = Date.now();

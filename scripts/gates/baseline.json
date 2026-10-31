@@ -880,6 +880,14 @@
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/creator-subscription/mock-flutterwave.adapter.ts:38"
     },
+    "de06cc191c6ca5a6": {
+      "evidence": "src/content-piece/content-piece.service.ts:73, src/credit-purchase/credit-purchase.service.ts:16, src/purchase/purchase.service.ts:25",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 3 files - one of them is a fork",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60); line moved by CONTENT-COVER (lead, 30 Oct 2026)",
+      "reason": "R-1 and CLAUDE.md (Money): the web stays on Flutterwave until after launch, so the per-module copies of FlutterwaveConfigResponse in content-piece, credit-purchase and purchase stay as built; the web's protected routes use them. Merging them changes money code the web calls, so it belongs to the after-launch Flutterwave removal task, which deletes all of them. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or code changed. Same finding as da96f6e5b113ff0b: CONTENT-COVER added 6 import lines above it, so it now sits at line 73.",
+      "where": "src/content-piece/content-piece.service.ts:73"
+    },
     "dfa8ffad2078edfc": {
       "evidence": "mock: MockFlutterwaveAdapter,",
       "gate": "fake_data",

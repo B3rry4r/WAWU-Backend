@@ -500,6 +500,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           accessType: true,
           price: true,
           status: true,
+          // CONTENT-COVER (R-114): the storage key of the piece's cover picture, if it has one.
+          coverKey: true,
           views: true,
           likes: true,
           commentCount: true,

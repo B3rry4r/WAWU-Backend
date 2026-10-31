@@ -803,6 +803,9 @@ model ContentPiece {
   pageCount              Int?
   previewAssetUrl        String
   fullAssetUrl           String?
+  /// CONTENT-COVER (R-114): the storage key of the piece's own cover picture (`content/cover/<creator>/<uuid>.<jpg|png|webp>`),
+  /// never a link. Null: no cover. Each view signs a fresh link and serves it as `coverUrl`; this column is never served as it is.
+  coverKey               String?
   /// True for a creator's first piece, free or paid (R-8 removed the rule that
   /// it must be free). Old name kept: renaming it would break clients.
   creatorFirstUploadFree Boolean       @default(false)

@@ -17,6 +17,8 @@ export interface UnlockWalletQuoteView {
   creator: MoneyPartyView | null;
   /** The piece's price in kobo, the server's own record of it. */
   priceKobo: number;
+  /** CONTENT-COVER (R-114): a fresh link to the piece's own cover picture for the pay sheet; null when it has none. */
+  coverUrl: string | null;
   /** The wallet payment quote: price, the provider's charge, total, balance, shortfall and its token. */
   payment: PaymentQuoteView;
 }

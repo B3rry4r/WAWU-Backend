@@ -58,6 +58,7 @@ import { AdminEarningsController } from './earnings/admin-earnings.controller';
 import { EarningSettlementService } from './earnings/earning-settlement.service';
 import { EarningsInReviewService } from './earnings/earnings-in-review.service';
 import { EarningsViewService } from './earnings/earnings-view.service';
+import { CoverLinkService } from '../storage/cover-link';
 import { MoneyEarningsController } from './earnings/money-earnings.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
@@ -423,6 +424,8 @@ import { WalletCardService } from './cards/wallet-card.service';
     WalletHoldService,
     EarningSettlementService,
     EarningsViewService,
+    // CONTENT-COVER (R-114): signs the covers on the earnings rows without importing the storage module.
+    CoverLinkService,
     EarningsInReviewService,
     ReceiptSettings,
     ReceiptService,

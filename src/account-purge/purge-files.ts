@@ -56,6 +56,10 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
     decision: 'DELETE',
     what: 'A creator listing file and the pictures of a photo set (ContentPiece.fullAssetUrl, ContentFrame.url). Deleted, except those of pieces a buyer paid for that were live when the deletion began (kept for the buyers).',
   },
+  'content/cover': {
+    decision: 'DELETE',
+    what: 'A creator listing cover picture (ContentPiece.coverKey, CONTENT-COVER R-114). Deleted, except the covers of pieces a buyer paid for that were live when the deletion began (kept for the buyers, like the preview).',
+  },
   'kyc/id-document': {
     decision: 'OWNER',
     what: 'The identity document for the wallet check (KycSubmission.idDocumentUrl). Kept, hidden, for the days in `id_docs_keep_days` (R-73), then deleted by the daily sweep.',
@@ -330,6 +334,7 @@ export async function listKeptFiles(
       NOT: [
         { key: { startsWith: 'content/preview/' } },
         { key: { startsWith: 'content/full/' } },
+        { key: { startsWith: 'content/cover/' } },
       ],
     },
     orderBy: { id: 'asc' },
@@ -365,12 +370,14 @@ async function keysOfKeptPieces(
       OR: [
         { previewAssetUrl: named },
         { fullAssetUrl: named },
+        { coverKey: named },
         { frames: { some: { url: named } } },
       ],
     },
     select: {
       previewAssetUrl: true,
       fullAssetUrl: true,
+      coverKey: true,
       frames: { select: { url: true } },
     },
   });
@@ -379,6 +386,7 @@ async function keysOfKeptPieces(
     for (const stored of [
       p.previewAssetUrl,
       p.fullAssetUrl,
+      p.coverKey,
       ...p.frames.map((f) => f.url),
     ]) {
       if (stored) keys.add(objectKeyFrom(stored));

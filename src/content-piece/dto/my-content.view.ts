@@ -9,6 +9,8 @@ import type { ContentPieceResponse } from '../../common/types/content-piece.type
  * reason no longer describes it. The reviewer's identity is never included.
  */
 export type MyContentItem = ContentPieceResponse & {
+  /** CONTENT-COVER (R-114): a fresh link to the piece's cover picture; null when it has none. Always present here. */
+  coverUrl: string | null;
   salesCount: number;
   rejectionReason: string | null;
   rejectedAt: Date | null;

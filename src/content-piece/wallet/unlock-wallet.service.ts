@@ -115,11 +115,17 @@ export class UnlockWalletService implements OnModuleInit {
       kind: UNLOCK_KIND,
       targetId: contentId,
     });
+    // CONTENT-COVER (R-114): the pay sheet shows the piece's own picture. The quote above proved the piece is live.
+    const piece = await this.prisma.contentPiece.findUnique({
+      where: { id: contentId },
+      select: { coverKey: true },
+    });
     return {
       contentId,
       title: payment.title,
       creator: payment.payee,
       priceKobo: payment.priceKobo,
+      coverUrl: await this.storage.coverUrlFor(piece?.coverKey),
       payment,
     };
   }

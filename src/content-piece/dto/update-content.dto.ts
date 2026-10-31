@@ -77,4 +77,13 @@ export class UpdateContentDto {
   @IsOptional()
   @IsUrl({ require_tld: false })
   fullAsset?: string;
+
+  /**
+   * CONTENT-COVER (R-114): the key (or `fileUrl`) of a cover uploaded to the folder `content/cover`, which replaces the
+   * old one (the old file is deleted); `null` takes the cover off. Left out, the cover stays as it is.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  coverAsset?: string | null;
 }
