@@ -522,7 +522,17 @@ export class ContentPieceService {
       });
       if (!exists) throw new NotFoundException('User not found');
     }
-    const where = { creatorWawuId, status: 'live' as const };
+    // REPORT-UGC: a piece the caller reported is left out of the creator's shelf for them only.
+    // A signed-out reader has reported nothing. Opening the piece by its own link still works.
+    const reported = await this.blockedAccounts.reportedIds(
+      requesterWawuId,
+      'piece',
+    );
+    const where = {
+      creatorWawuId,
+      status: 'live' as const,
+      id: { notIn: reported },
+    };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.contentPiece.findMany({
