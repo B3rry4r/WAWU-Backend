@@ -1834,7 +1834,11 @@ export class StorageService {
    * ME-04 round 2: gives back the space of an upload the caller reserved and
    * no listing has claimed (POST /uploads/release). See upload-release.ts.
    */
-  releaseUpload(wawuId: string, key: string): Promise<{ released: true }> {
+  releaseUpload(
+    wawuId: string,
+    key: string,
+    options: { finishing?: boolean } = {},
+  ): Promise<{ released: true }> {
     return releaseOwnUpload(
       {
         client: this.client,
@@ -1845,6 +1849,7 @@ export class StorageService {
       },
       wawuId,
       key,
+      options,
     );
   }
 

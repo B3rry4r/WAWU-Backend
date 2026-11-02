@@ -26,6 +26,7 @@ import {
 import { successBody } from '../payments/wallet-payment.service';
 import { CARDS_ENABLED_SETTING, CardSettings } from './card-config';
 import { cleanCardName, CreateCardDto } from './card-request.dto';
+import { cardTargetFor, followCardStatus, stepWords } from './card-status';
 import type {
   CardDetailsView,
   CardKind,
@@ -42,6 +43,11 @@ export const CARD_CREATE_ROUTE = 'POST money/cards';
 /** States that count as a card the person holds (and so against the limit). */
 export const HELD_STATES = ['creating', 'unknown', 'active', 'frozen'];
 const PENDING_STATES = ['creating', 'unknown'];
+
+/** How often one card is read from the issuer when its screen is opened. */
+const READ_THROUGH_EVERY_MS = 60_000;
+/** How long the bookkeeping of a card's screen reads is kept once the books are large. */
+const MISSING_FORGOTTEN_MS = 60 * 60_000;
 
 /** How long a card that nobody confirmed is waited for before it is looked for. */
 const LOOK_AFTER_MS = 20_000;
@@ -136,6 +142,10 @@ export function cardView(
 @Injectable()
 export class WalletCardService implements OnModuleInit {
   private readonly logger = new Logger(WalletCardService.name);
+  /** When each card was last read from the issuer for its screen: one read a minute per card, per process. */
+  private readonly readThrough = new Map<string, number>();
+  /** When a screen read of a card first answered "not found" and no read has found it since: per process, so a restart forgets it. */
+  private readonly missingSince = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -431,10 +441,96 @@ export class WalletCardService implements OnModuleInit {
   async get(wallet: OpenWallet, id: string): Promise<CardView> {
     this.cards();
     const row = await this.own(wallet, id);
-    const settled = await this.settlePending(wallet, row);
-    if (settled.state === 'failed') throw this.notFound();
+    const pending = await this.settlePending(wallet, row);
+    if (pending.state === 'failed') throw this.notFound();
+    const settled = await this.readThroughOnce(wallet, pending);
     await this.collectFee(wallet, settled);
     return cardView(settled);
+  }
+
+  /**
+   * An active single-use card is read from the issuer when its screen is
+   * opened, at most once a minute per card (CARD-USE, F1): the issuer sends no
+   * event for the payment that uses it up, only a delivery that may be late.
+   * Never on the list. The throttle is set before the call, so two screens at
+   * once make one read, and nothing is held while the issuer answers. A read
+   * that fails leaves the card as it was and never fails the screen.
+   *
+   * One "not found" never blocks a card for good: the person paid for it, and
+   * one answer can be wrong (CARD-USE fix round 1, LOW-1). The first is noted
+   * and logged and the card stays as it was; the card is blocked only when a
+   * later read, at least a minute on, also gets Nuvion's own 404, and no read
+   * has found the card in between.
+   */
+  private async readThroughOnce(
+    wallet: OpenWallet,
+    row: WalletCard,
+  ): Promise<WalletCard> {
+    if (
+      row.state !== 'active' ||
+      row.type !== 'single_use' ||
+      !row.providerCardId
+    ) {
+      return row;
+    }
+    const now = Date.now();
+    const last = this.readThrough.get(row.id);
+    if (last !== undefined && now - last < READ_THROUGH_EVERY_MS) return row;
+    for (const [book, keepMs] of [
+      [this.readThrough, READ_THROUGH_EVERY_MS],
+      [this.missingSince, MISSING_FORGOTTEN_MS],
+    ] as const) {
+      if (book.size < 500) continue;
+      for (const [key, at] of book) {
+        if (now - at >= keepMs) book.delete(key);
+      }
+    }
+    this.readThrough.set(row.id, now);
+    try {
+      const card = await this.cards().getCard(
+        { walletId: wallet.walletId },
+        row.providerCardId,
+      );
+      this.missingSince.delete(row.id);
+      const step = await followCardStatus(this.prisma, row, card.status);
+      if (!step) return row;
+      this.logger.log(
+        `card ${row.id} (${row.type}): the issuer says ${card.status}; now ${stepWords(step)}`,
+      );
+    } catch (e) {
+      // `not_found` is only ever Nuvion's own 404: a gateway page or an empty
+      // body is `unavailable` (nuvion-error.ts, kindForStatus).
+      const missing =
+        e instanceof WalletProviderError &&
+        e.kind === 'not_found' &&
+        e.httpStatus === 404;
+      if (!missing) {
+        this.logger.warn(
+          `card ${row.id}: not read from the issuer (${e instanceof WalletProviderError ? e.kind : 'error'}); left as it was`,
+        );
+        return row;
+      }
+      const first = this.missingSince.get(row.id);
+      if (first === undefined || now - first < READ_THROUGH_EVERY_MS) {
+        if (first === undefined) this.missingSince.set(row.id, now);
+        this.logger.warn(
+          `card ${row.id}: the issuer did not know it (not_found); left as it was`,
+        );
+        return row;
+      }
+      this.missingSince.delete(row.id);
+      this.logger.warn(
+        `card ${row.id}: the issuer did not know it on two reads a minute or more apart (not_found); blocked for good`,
+      );
+      await this.prisma.walletCard.updateMany({
+        where: { id: row.id, state: 'active' },
+        data: { state: 'cancelled', cancelledAt: new Date() },
+      });
+    }
+    return (
+      (await this.prisma.walletCard.findUnique({ where: { id: row.id } })) ??
+      row
+    );
   }
 
   async transactions(
@@ -578,26 +674,31 @@ export class WalletCardService implements OnModuleInit {
   }
 
   /**
-   * The row now that the issuer has the card: active, frozen when the issuer
-   * says blocked, or used when it says a single-use card is deactivated (it
-   * took its one payment before it was found).
+   * The row now that the issuer has the card, by the same rules as every other
+   * read of a card (`card-status.ts`): active; frozen when the issuer says
+   * blocked; used when it says a single-use card is deactivated (it took its
+   * one payment before it was found); frozen as support's for fraud, and for a
+   * reusable card it calls deactivated. The write holds the row pending: a card
+   * that was blocked for good, or used, while the issuer was being asked is not
+   * brought back.
    */
   private async adopt(
     row: WalletCard,
     card: ProviderCard,
   ): Promise<WalletCard> {
-    const state =
-      card.status === 'active'
-        ? 'active'
-        : card.status === 'deactivated' && row.type === 'single_use'
-          ? 'used'
-          : 'frozen';
+    const to = cardTargetFor(row, card.status);
+    if (to.state === 'frozen' && to.frozenBy === 'admin') {
+      this.logger.warn(
+        `card ${row.id} (${row.type}): the issuer says ${card.status}; held as support's`,
+      );
+    }
     try {
       return await this.prisma.walletCard.update({
-        where: { id: row.id },
+        where: { id: row.id, state: { in: PENDING_STATES } },
         data: {
           providerCardId: card.id,
-          state: row.state === 'cancelled' ? 'cancelled' : state,
+          state: to.state,
+          frozenBy: to.frozenBy,
           failure: null,
         },
       });

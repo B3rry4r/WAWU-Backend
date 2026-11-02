@@ -1,11 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import type { WalletCard } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { followCardStatus, stepWords } from '../../money/cards/card-status';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
+import { isNuvionId, readNuvionWalletId } from '../areas/accounts';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import type { NuvionWebhookEventName } from '../nuvion.interface';
 import type {
@@ -20,10 +23,46 @@ export const NUVION_CARDS_EVENTS: readonly NuvionWebhookEventName[] = [
   'cards.frozen',
   'cards.unfrozen',
   'cards.deleted',
+  // A card payment is not a `cards.*` event: it arrives as an outflow whose
+  // `payment_type` is `card-debit` or `card-debit-recoup` and which names the
+  // card (the card guide, "Webhooks"; CARD-USE).
+  'outflows.created',
+  'outflows.completed',
+  'outflows.failed',
 ];
+
+/** The `payment_type` of a card being charged (a reversal or a refund is a credit and changes no card). */
+const CARD_DEBIT_TYPES = ['card-debit', 'card-debit-recoup'];
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** True for a delivery about a card being charged. */
+function isCardDebit(data: Record<string, unknown> | null): boolean {
+  return (
+    data !== null &&
+    typeof data.payment_type === 'string' &&
+    CARD_DEBIT_TYPES.includes(data.payment_type)
+  );
+}
+
+/** The card a payment names: `card_id` (the webhook), or the initiator's (the shape of Get card transactions). */
+function cardIdOf(data: Record<string, unknown>): string | null {
+  const direct = data.card_id;
+  const nested = isRecord(data.initiator) ? data.initiator.card_id : undefined;
+  const id = typeof direct === 'string' ? direct : nested;
+  return isNuvionId(id) ? id : null;
+}
+
+/** The entity a payment names, or the one the stored delivery was filed under. */
+function entityOf(
+  d: NuvionDelivery,
+  data: Record<string, unknown> | null,
+): string | null {
+  const own =
+    data && typeof data.entity_id === 'string' ? data.entity_id : null;
+  return own ?? d.entityId;
 }
 
 /**
@@ -38,9 +77,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  *   could undo a newer change; the card's status is read from Nuvion
  *   (`getCard`, which keeps no number or CVV) and the row follows that.
  * - `cards.deleted`: the card is blocked for good.
- * - A single-use card Nuvion calls `deactivated` (a disposable card that has
- *   been used, Nuvion's docs of 29 Oct 2026) is `used` in the row, whichever of
- *   these events brought us to ask. The docs name no event for the use itself.
+ * - A card payment (CARD-USE): the docs name no `cards.*` event for a use. It
+ *   arrives as `outflows.created`, `.completed` or `.failed` with `payment_type`
+ *   `card-debit` and the card's id in `card_id`. For a card of ours, the card is
+ *   read from Nuvion and the row follows it, exactly as for `cards.frozen`; any
+ *   other outflow is not this handler's and costs nothing.
+ * - The row follows Nuvion's status (the card guide, 29 Oct 2026; the rules are
+ *   in `money/cards/card-status.ts`): `deactivated` on a single-use card is
+ *   `used`; `blocked` is frozen (deleted cards are a 404, blocked for good);
+ *   `fraud`, and `deactivated` on a reusable card, are frozen as support's.
  * - A status Nuvion adds later, which `getCard` cannot read, leaves the row as
  *   it was: the delivery waits and is logged, never a crash.
  * A card the row says is blocked for good stays so. Idempotent: Nuvion may
@@ -59,6 +104,13 @@ export class NuvionCardsHandler implements NuvionEventHandler {
   ) {}
 
   async handle(d: NuvionDelivery): Promise<NuvionHandlerResult> {
+    const data = isRecord(d.data) ? d.data : null;
+    const isOutflow = d.event.startsWith('outflows.');
+    // Every transfer of every kind is an outflow: the other rails are not this
+    // handler's, whatever the server runs.
+    if (isOutflow && !isCardDebit(data)) {
+      return { outcome: 'done', note: 'not a card payment' };
+    }
     const provider = this.find<WalletProvider>(WALLET_PROVIDER);
     if (!provider) {
       return { outcome: 'wait', note: 'the wallet provider is not mounted' };
@@ -69,7 +121,7 @@ export class NuvionCardsHandler implements NuvionEventHandler {
         note: `the server runs ${provider.label}; left for a Nuvion server`,
       };
     }
-    const data = isRecord(d.data) ? d.data : null;
+    if (isOutflow) return this.onOutflow(d, data, provider);
     const cardId = data && typeof data.id === 'string' ? data.id : null;
     if (!cardId) return { outcome: 'failed', note: 'the event names no card' };
 
@@ -116,59 +168,99 @@ export class NuvionCardsHandler implements NuvionEventHandler {
     if (d.event !== 'cards.frozen' && d.event !== 'cards.unfrozen') {
       return { outcome: 'done', note: `${d.event}: not WALLET-31's` };
     }
-    // The state now, from Nuvion, not from the event.
+    return this.follow(row, provider);
+  }
+
+  /**
+   * A card payment (CARD-USE, F1). Nuvion sends no `cards.*` event for a use:
+   * the payment is an `outflows.*` delivery with `payment_type` `card-debit`
+   * naming the card in `card_id`. When the card is one of ours the card is read
+   * from Nuvion and the row follows its status (a single-use card the payment
+   * used is `deactivated` there). Only the row of that card is touched, only
+   * when the delivery's entity is the card owner's, and no money moves. The log
+   * has the row's id and a fixed word, never what was bought, where or for how
+   * much.
+   */
+  private async onOutflow(
+    d: NuvionDelivery,
+    data: Record<string, unknown> | null,
+    provider: NuvionWalletProvider,
+  ): Promise<NuvionHandlerResult> {
+    const cardId = data ? cardIdOf(data) : null;
+    if (!cardId) {
+      return { outcome: 'done', note: 'a card payment that names no card' };
+    }
+    const row = await this.prisma.walletCard.findUnique({
+      where: { providerCardId: cardId },
+    });
+    if (!row) return { outcome: 'done', note: 'not a card of ours' };
+    // A payment is a poor moment to learn that a card is gone for good: one
+    // "not found" is asked again after the delivery's rest (a minute at least),
+    // and only a second one blocks the card.
+    return this.follow(row, provider, entityOf(d, data), d.attempts >= 2);
+  }
+
+  /**
+   * The row follows the card's state at Nuvion, read now (`getCard` keeps no
+   * number or CVV), never the event's. `entity` is the entity a delivery names;
+   * when it is not the card owner's, the card is left alone. `blockWhenMissing`
+   * false: a Nuvion 404 waits for the next try instead of blocking the card.
+   */
+  private async follow(
+    row: WalletCard,
+    provider: NuvionWalletProvider,
+    entity: string | null = null,
+    blockWhenMissing = true,
+  ): Promise<NuvionHandlerResult> {
+    if (!['active', 'frozen'].includes(row.state)) {
+      return {
+        outcome: 'done',
+        note: `the card is ${row.state}: left as it was`,
+      };
+    }
+    const cardId = row.providerCardId;
     const wallet = await this.prisma.fintavaWallet.findUnique({
       where: { wawuUserId: row.wawuUserId },
       select: { walletId: true },
     });
     if (!wallet)
       return { outcome: 'wait', note: "the card's owner has no wallet row" };
+    const owner = readNuvionWalletId(wallet.walletId);
+    if (!cardId || !owner) {
+      return {
+        outcome: 'done',
+        note: 'no Nuvion wallet for the card: left alone',
+      };
+    }
+    if (entity !== null && entity !== owner.entityId) {
+      this.logger.warn(
+        `card ${row.id}: a delivery from another entity named it; left alone`,
+      );
+      return { outcome: 'done', note: 'another entity: left alone' };
+    }
     try {
+      // Nothing is held while Nuvion is asked.
       const card = await provider.cards.getCard(
         { walletId: wallet.walletId },
         cardId,
       );
-      if (card.status === 'deactivated') {
-        // A disposable card that has been used: it takes no further payment.
-        // A card of another kind is not described by the docs as deactivated,
-        // so it is left as it was.
-        if (row.type !== 'single_use') {
-          this.logger.warn(
-            `card ${row.id}: Nuvion says a reusable card is deactivated; left as it was`,
-          );
-          return {
-            outcome: 'done',
-            note: 'a reusable card is deactivated: left as it was',
-          };
-        }
-        await this.prisma.walletCard.updateMany({
-          where: { id: row.id, state: { in: ['active', 'frozen'] } },
-          data: { state: 'used', frozenBy: null },
-        });
-        return { outcome: 'done', note: 'single-use card is used' };
-      }
-      if (card.status === 'active' && row.state === 'frozen') {
-        await this.prisma.walletCard.updateMany({
-          where: { id: row.id, state: 'frozen' },
-          data: { state: 'active', frozenBy: null },
-        });
-      } else if (card.status !== 'active' && row.state === 'active') {
-        // Nuvion blocked a card the Hub had not frozen. A single-use card
-        // Nuvion answered `blocked` for after its one payment (the sandbox did,
-        // round 1, L2; the docs now say `deactivated`, above) is used, not
-        // frozen; any other card was frozen elsewhere. The Hub's own freeze writes
-        // `frozen` right after Nuvion answers, over this if it came first.
-        await this.prisma.walletCard.updateMany({
-          where: { id: row.id, state: 'active' },
-          data:
-            row.type === 'single_use'
-              ? { state: 'used', frozenBy: null }
-              : { state: 'frozen', frozenBy: row.frozenBy ?? 'person' },
-        });
-      }
-      return { outcome: 'done', note: 'card state followed Nuvion' };
+      const step = await followCardStatus(this.prisma, row, card.status);
+      if (!step) return { outcome: 'done', note: 'card state followed Nuvion' };
+      this.logger.log(
+        `card ${row.id} (${row.type}): Nuvion says ${card.status}; now ${stepWords(step)}`,
+      );
+      return { outcome: 'done', note: `card is ${stepWords(step)}` };
     } catch (e) {
       if (e instanceof WalletProviderError && e.kind === 'not_found') {
+        if (!blockWhenMissing) {
+          this.logger.warn(
+            `card ${row.id}: Nuvion did not know it (not_found); left as it was, asked again`,
+          );
+          return {
+            outcome: 'wait',
+            note: 'Nuvion did not know the card: asked again before it is blocked',
+          };
+        }
         await this.prisma.walletCard.updateMany({
           where: { id: row.id, state: { not: 'cancelled' } },
           data: { state: 'cancelled', cancelledAt: new Date() },

@@ -53,7 +53,9 @@
 //
 //   POST card-spend                { card_id, amount_cents, merchant?, reverse? }: a card payment (or its reversal) on a card
 //                                  made through POST /virtual-cards or /disposable-cards (WALLET-31); a single-use card is
-//                                  blocked after its first payment, as Nuvion does it
+//                                  `deactivated` after its first payment (cards guide, 29 Oct 2026) and the payment goes to
+//                                  the Hub as outflows.created and outflows.completed (payment_type card-debit, card_id),
+//                                  with no cards.* event, as Nuvion does it (CARD-USE)
 // Settings (environment): PORT (NUVION_STANDIN_PORT), HUB_WEBHOOK_URL, NUVION_WEBHOOK_SECRET,
 // NUVION_OPERATIONAL_ACCOUNT_ID, STANDIN_PARENT_ENTITY_ID, STANDIN_OPERATIONAL_KOBO (opening balance),
 // NUVION_FEE_BOOK_TRANSFER / NUVION_FEE_BANK_PAYOUT / NUVION_FEE_INFLOW (kobo, as the Hub's settings;
@@ -1310,9 +1312,19 @@ on('POST', '/__standin/card-spend', (req) => {
     applicable_fee: 0, created: now(), updated: now(), deleted: 0, version: 0,
   };
   c.txns.push(t);
-  if (c.type === 'disposable' && !reverse) {
-    c.status = 'blocked';
-    deliver('cards.frozen', cardEvent(c));
+  if (!reverse) {
+    // Nuvion's docs (cards guide, 29 Oct 2026): a disposable card that has taken its first payment is `deactivated`, and
+    // there is no cards.* event for a use: the payment arrives as outflows.created and outflows.completed, payment_type
+    // card-debit, naming the card in card_id (webhooks/event-types).
+    if (c.type === 'disposable') c.status = 'deactivated';
+    const view = {
+      id: t._id, amount: t.amount, currency: t.currency, unique_reference: t.unique_reference,
+      counterparty_id: `acct-${a.id}-card-debit`, account_id: a.id, entity_id: a.entity_id,
+      narration: t.narration, type: 'outflow', payment_type: 'card-debit', applicable_fee: 0, meta: {},
+      account: { id: a.id, display_name: a.display_name }, created: t.created, updated: t.updated, card_id: c.id,
+    };
+    deliver('outflows.created', { ...view, status: 'new', status_reason: 'payment_initiated' });
+    deliver('outflows.completed', { ...view, status: 'successful', status_reason: 'processing_complete' }, HOOK_DELAY_MS + 200);
   }
   return { status: 201, body: { transaction: t, balance: a.balance } };
 });
