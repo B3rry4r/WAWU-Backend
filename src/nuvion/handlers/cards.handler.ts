@@ -194,18 +194,23 @@ export class NuvionCardsHandler implements NuvionEventHandler {
       where: { providerCardId: cardId },
     });
     if (!row) return { outcome: 'done', note: 'not a card of ours' };
-    return this.follow(row, provider, entityOf(d, data));
+    // A payment is a poor moment to learn that a card is gone for good: one
+    // "not found" is asked again after the delivery's rest (a minute at least),
+    // and only a second one blocks the card.
+    return this.follow(row, provider, entityOf(d, data), d.attempts >= 2);
   }
 
   /**
    * The row follows the card's state at Nuvion, read now (`getCard` keeps no
    * number or CVV), never the event's. `entity` is the entity a delivery names;
-   * when it is not the card owner's, the card is left alone.
+   * when it is not the card owner's, the card is left alone. `blockWhenMissing`
+   * false: a Nuvion 404 waits for the next try instead of blocking the card.
    */
   private async follow(
     row: WalletCard,
     provider: NuvionWalletProvider,
     entity: string | null = null,
+    blockWhenMissing = true,
   ): Promise<NuvionHandlerResult> {
     if (!['active', 'frozen'].includes(row.state)) {
       return {
@@ -247,6 +252,15 @@ export class NuvionCardsHandler implements NuvionEventHandler {
       return { outcome: 'done', note: `card is ${stepWords(step)}` };
     } catch (e) {
       if (e instanceof WalletProviderError && e.kind === 'not_found') {
+        if (!blockWhenMissing) {
+          this.logger.warn(
+            `card ${row.id}: Nuvion did not know it (not_found); left as it was, asked again`,
+          );
+          return {
+            outcome: 'wait',
+            note: 'Nuvion did not know the card: asked again before it is blocked',
+          };
+        }
         await this.prisma.walletCard.updateMany({
           where: { id: row.id, state: { not: 'cancelled' } },
           data: { state: 'cancelled', cancelledAt: new Date() },

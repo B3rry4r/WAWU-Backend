@@ -22,6 +22,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { StorageModule } from '../../storage/storage.module';
+import { inPersonsTurn } from '../../storage/storage-lock';
 import { StorageService } from '../../storage/storage.service';
 import { ContentPieceModule } from '../content-piece.module';
 import { SearchResponseModule } from '../../search-response/search-response.module';
@@ -486,6 +487,44 @@ describe('A piece carries an optional cover picture (CONTENT-COVER, R-114, contr
     expect((await storage.usageFor(MAKER)).usedBytes - base).toBe(
       200_000 * unlisted,
     );
+  });
+
+  it('a cover that an edit has replaced is freed even when the person already has a request running and two waiting: the release of a finished edit is never refused', async () => {
+    // CI run 41470069796, shard 3: four replaces at once; the first one to finish asked to free the original
+    // cover while the other three held the person's line (one running, two waiting), the release was refused
+    // 429 storage_busy, and the swallowed refusal left the original in the bucket and in the person's count.
+    const first = await landed(MAKER, 'content/cover', 'image/jpeg');
+    const piece = data<Piece>(await created201({ coverAsset: first.fileUrl }));
+    const next = await landed(MAKER, 'content/cover', 'image/webp');
+    const real = storage.releaseUpload.bind(storage);
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const holds: Promise<void>[] = [];
+    const spy = jest
+      .spyOn(storage, 'releaseUpload')
+      .mockImplementationOnce((...args) => {
+        // The edit is written. Three requests of the same person take the line: one runs, two wait.
+        for (let i = 0; i < 3; i++)
+          holds.push(inPersonsTurn(MAKER, () => gate));
+        const freed = real(...args);
+        // Let the line go once the release has asked for its turn (or been refused).
+        void freed.then(open, open);
+        setTimeout(open, 50);
+        return freed;
+      });
+    const res = await request(server())
+      .patch(`/content/${piece.id}`)
+      .set('Authorization', bearer(MAKER))
+      .send({ coverAsset: next.key })
+      .expect(200);
+    spy.mockRestore();
+    await Promise.all(holds);
+    expect(data<Piece>(res).coverUrl).toContain(next.key);
+    expect(deleted).toContain(first.key);
+    expect(inBucket.has(first.key)).toBe(false);
+    expect(inBucket.has(next.key)).toBe(true);
   });
 
   it('a rejected piece keeps its cover for the resend', async () => {

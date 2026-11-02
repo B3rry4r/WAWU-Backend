@@ -46,6 +46,8 @@ const PENDING_STATES = ['creating', 'unknown'];
 
 /** How often one card is read from the issuer when its screen is opened. */
 const READ_THROUGH_EVERY_MS = 60_000;
+/** How long the bookkeeping of a card's screen reads is kept once the books are large. */
+const MISSING_FORGOTTEN_MS = 60 * 60_000;
 
 /** How long a card that nobody confirmed is waited for before it is looked for. */
 const LOOK_AFTER_MS = 20_000;
@@ -142,6 +144,8 @@ export class WalletCardService implements OnModuleInit {
   private readonly logger = new Logger(WalletCardService.name);
   /** When each card was last read from the issuer for its screen: one read a minute per card, per process. */
   private readonly readThrough = new Map<string, number>();
+  /** When a screen read of a card first answered "not found" and no read has found it since: per process, so a restart forgets it. */
+  private readonly missingSince = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -451,6 +455,12 @@ export class WalletCardService implements OnModuleInit {
    * Never on the list. The throttle is set before the call, so two screens at
    * once make one read, and nothing is held while the issuer answers. A read
    * that fails leaves the card as it was and never fails the screen.
+   *
+   * One "not found" never blocks a card for good: the person paid for it, and
+   * one answer can be wrong (CARD-USE fix round 1, LOW-1). The first is noted
+   * and logged and the card stays as it was; the card is blocked only when a
+   * later read, at least a minute on, also gets Nuvion's own 404, and no read
+   * has found the card in between.
    */
   private async readThroughOnce(
     wallet: OpenWallet,
@@ -466,9 +476,13 @@ export class WalletCardService implements OnModuleInit {
     const now = Date.now();
     const last = this.readThrough.get(row.id);
     if (last !== undefined && now - last < READ_THROUGH_EVERY_MS) return row;
-    if (this.readThrough.size >= 500) {
-      for (const [key, at] of this.readThrough) {
-        if (now - at >= READ_THROUGH_EVERY_MS) this.readThrough.delete(key);
+    for (const [book, keepMs] of [
+      [this.readThrough, READ_THROUGH_EVERY_MS],
+      [this.missingSince, MISSING_FORGOTTEN_MS],
+    ] as const) {
+      if (book.size < 500) continue;
+      for (const [key, at] of book) {
+        if (now - at >= keepMs) book.delete(key);
       }
     }
     this.readThrough.set(row.id, now);
@@ -477,23 +491,41 @@ export class WalletCardService implements OnModuleInit {
         { walletId: wallet.walletId },
         row.providerCardId,
       );
+      this.missingSince.delete(row.id);
       const step = await followCardStatus(this.prisma, row, card.status);
       if (!step) return row;
       this.logger.log(
         `card ${row.id} (${row.type}): the issuer says ${card.status}; now ${stepWords(step)}`,
       );
     } catch (e) {
-      if (e instanceof WalletProviderError && e.kind === 'not_found') {
-        await this.prisma.walletCard.updateMany({
-          where: { id: row.id, state: 'active' },
-          data: { state: 'cancelled', cancelledAt: new Date() },
-        });
-      } else {
+      // `not_found` is only ever Nuvion's own 404: a gateway page or an empty
+      // body is `unavailable` (nuvion-error.ts, kindForStatus).
+      const missing =
+        e instanceof WalletProviderError &&
+        e.kind === 'not_found' &&
+        e.httpStatus === 404;
+      if (!missing) {
         this.logger.warn(
           `card ${row.id}: not read from the issuer (${e instanceof WalletProviderError ? e.kind : 'error'}); left as it was`,
         );
         return row;
       }
+      const first = this.missingSince.get(row.id);
+      if (first === undefined || now - first < READ_THROUGH_EVERY_MS) {
+        if (first === undefined) this.missingSince.set(row.id, now);
+        this.logger.warn(
+          `card ${row.id}: the issuer did not know it (not_found); left as it was`,
+        );
+        return row;
+      }
+      this.missingSince.delete(row.id);
+      this.logger.warn(
+        `card ${row.id}: the issuer did not know it on two reads a minute or more apart (not_found); blocked for good`,
+      );
+      await this.prisma.walletCard.updateMany({
+        where: { id: row.id, state: 'active' },
+        data: { state: 'cancelled', cancelledAt: new Date() },
+      });
     }
     return (
       (await this.prisma.walletCard.findUnique({ where: { id: row.id } })) ??

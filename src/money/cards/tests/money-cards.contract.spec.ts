@@ -1697,6 +1697,97 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       expect(lost).toMatchObject({ status: 'frozen', frozenBySupport: true });
     });
 
+    it('F1: the card id may ride in the payment record the way Get card transactions shows it (initiator.card_id); the top-level card_id wins when both are there', async () => {
+      // The docs show `card_id` at the top of an outflow; the card-transactions record (which the Hub reads
+      // elsewhere) holds it under `initiator`. Both are read: a missed id would be a missed update.
+      const p = await person();
+      const a = await singleUse(p);
+      const b = await singleUse(p);
+      cards.get(a.nuvionId)!.status = 'deactivated';
+      const nested = await handler.handle(
+        payment('outflows.completed', null, p.entity, {
+          initiator: { type: 'account', id: '01ACCT', card_id: a.nuvionId },
+        }),
+      );
+      expect(nested.outcome).toBe('done');
+      expect((await rowOf(a.view.id)).state).toBe('used');
+      // Both present: the top-level one is the card. Here it names b (active at Nuvion) and the
+      // initiator names c (deactivated): c must stay as it was.
+      const c = await singleUse(p);
+      cards.get(c.nuvionId)!.status = 'deactivated';
+      await handler.handle(
+        payment('outflows.completed', b.nuvionId, p.entity, {
+          initiator: { type: 'account', id: '01ACCT', card_id: c.nuvionId },
+        }),
+      );
+      expect((await rowOf(b.view.id)).state).toBe('active');
+      expect((await rowOf(c.view.id)).state).toBe('active');
+    });
+
+    it("F1: the entity in the payment's data decides, before the one the delivery was filed under", async () => {
+      const p = await person();
+      const other = await person();
+      const a = await singleUse(p);
+      cards.get(a.nuvionId)!.status = 'deactivated';
+      const before = reads();
+      // Data names another entity, the filing says the owner: left alone.
+      const forged = await handler.handle({
+        ...payment('outflows.completed', a.nuvionId, p.entity, {
+          entity_id: other.entity,
+        }),
+        entityId: p.entity,
+      });
+      expect(forged.outcome).toBe('done');
+      expect(reads()).toBe(before);
+      expect((await rowOf(a.view.id)).state).toBe('active');
+      // Data names the owner, the filing says another entity: read and followed.
+      const real = await handler.handle({
+        ...payment('outflows.completed', a.nuvionId, p.entity),
+        entityId: other.entity,
+      });
+      expect(real.outcome).toBe('done');
+      expect(reads()).toBe(before + 1);
+      expect((await rowOf(a.view.id)).state).toBe('used');
+    });
+
+    it("F1: a card the person froze while Nuvion was being asked still ends used, or held as support's for fraud: the write holds either of the two live states", async () => {
+      const p = await person();
+      const used = await singleUse(p);
+      const fraud = await singleUse(p, 'virtual');
+      cards.get(used.nuvionId)!.status = 'deactivated';
+      cards.get(fraud.nuvionId)!.status = 'fraud';
+      const real = provider().cards.getCard.bind(provider().cards);
+      const spy = jest
+        .spyOn(provider().cards, 'getCard')
+        .mockImplementation(async (w, id) => {
+          const card = await real(w, id);
+          // Mid-call, the person freezes it: the row the decision was made on is stale.
+          await prisma.walletCard.updateMany({
+            where: { providerCardId: id, state: 'active' },
+            data: { state: 'frozen', frozenBy: 'person' },
+          });
+          return card;
+        });
+      try {
+        await handler.handle(
+          payment('outflows.completed', used.nuvionId, p.entity),
+        );
+        await handler.handle(
+          payment('outflows.completed', fraud.nuvionId, p.entity),
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await rowOf(used.view.id)).toMatchObject({
+        state: 'used',
+        frozenBy: null,
+      });
+      expect(await rowOf(fraud.view.id)).toMatchObject({
+        state: 'frozen',
+        frozenBy: 'admin',
+      });
+    });
+
     it('F1: opening the screen of an active single-use card reads Nuvion at most once a minute, and the list never does', async () => {
       const p = await person();
       const { view, nuvionId } = await singleUse(p);
@@ -1738,14 +1829,12 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       expect(reads()).toBe(before + 2);
     });
 
-    it("F1: the screen's read applies Nuvion's word the same way: blocked is frozen, fraud is support's, a card Nuvion no longer knows is blocked for good", async () => {
+    it("F1: the screen's read applies Nuvion's word the same way: blocked is frozen, fraud is support's", async () => {
       const p = await person();
       const a = await singleUse(p);
       const b = await singleUse(p);
-      const c = await singleUse(p);
       cards.get(a.nuvionId)!.status = 'blocked';
       cards.get(b.nuvionId)!.status = 'fraud';
-      cards.get(c.nuvionId)!.deleted = true;
       expect(await getView(p, a.view.id)).toMatchObject({
         status: 'frozen',
         frozenBySupport: false,
@@ -1754,7 +1843,163 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
         status: 'frozen',
         frozenBySupport: true,
       });
-      expect(await getView(p, c.view.id)).toMatchObject({ status: 'blocked' });
+    });
+
+    /** The screen's two books: the throttle and the first "not found". Back-dated, as a minute going by would. */
+    const books = () =>
+      service() as unknown as {
+        readThrough: Map<string, number>;
+        missingSince: Map<string, number>;
+      };
+    const aMinuteOn = (id: string, ms = 61_000) => {
+      const b = books();
+      const t = b.readThrough.get(id);
+      if (t !== undefined) b.readThrough.set(id, t - ms);
+      const m = b.missingSince.get(id);
+      if (m !== undefined) b.missingSince.set(id, m - ms);
+    };
+    const gone = (nuvionId: string, yes: boolean) => {
+      cards.get(nuvionId)!.deleted = yes;
+    };
+
+    it('F1 LOW-1: one 404 from Nuvion on the screen leaves the card as it was, and a read that finds it forgets the 404', async () => {
+      const p = await person();
+      const { view, nuvionId } = await singleUse(p);
+      const before = logger.lines.length;
+      gone(nuvionId, true);
+      expect(await getView(p, view.id)).toMatchObject({ status: 'active' });
+      expect((await rowOf(view.id)).state).toBe('active');
+      const first = logger.lines
+        .slice(before)
+        .filter((l) => l.includes(view.id) && l.includes('not_found'));
+      expect(first).toHaveLength(1);
+      // The card is live at Nuvion again: found, still active, the 404 forgotten.
+      gone(nuvionId, false);
+      aMinuteOn(view.id);
+      expect(await getView(p, view.id)).toMatchObject({ status: 'active' });
+      expect(books().missingSince.has(view.id)).toBe(false);
+      // Another single 404 a minute later is a first one again, not a second.
+      gone(nuvionId, true);
+      aMinuteOn(view.id);
+      expect(await getView(p, view.id)).toMatchObject({ status: 'active' });
+      expect((await rowOf(view.id)).state).toBe('active');
+    });
+
+    it('F1 LOW-1: two 404s a minute or more apart block the card for good; two inside the minute do not', async () => {
+      const p = await person();
+      const { view, nuvionId } = await singleUse(p);
+      gone(nuvionId, true);
+      expect(await getView(p, view.id)).toMatchObject({ status: 'active' });
+      // The throttle is lifted but the 404 is only seconds old: still a first one.
+      books().readThrough.delete(view.id);
+      expect(await getView(p, view.id)).toMatchObject({ status: 'active' });
+      expect((await rowOf(view.id)).state).toBe('active');
+      // A minute on, Nuvion still does not know it: blocked for good, in the Hub's words.
+      const before = logger.lines.length;
+      aMinuteOn(view.id);
+      expect(await getView(p, view.id)).toMatchObject({ status: 'blocked' });
+      expect(await rowOf(view.id)).toMatchObject({ state: 'cancelled' });
+      expect(
+        logger.lines
+          .slice(before)
+          .some((l) => l.includes(view.id) && l.includes('not_found')),
+      ).toBe(true);
+    });
+
+    it("F1 LOW-1: only Nuvion's own 404 counts: an unavailable read, or a not_found with no 404 behind it, never blocks a card, however often", async () => {
+      const p = await person();
+      const { view } = await singleUse(p);
+      for (const err of [
+        { kind: 'unavailable' as const, httpStatus: 404 },
+        { kind: 'not_found' as const, httpStatus: null },
+        { kind: 'not_found' as const, httpStatus: 200 },
+      ]) {
+        for (let i = 0; i < 3; i += 1) {
+          const spy = jest
+            .spyOn(provider().cards, 'getCard')
+            .mockRejectedValueOnce(
+              new WalletProviderError({
+                ...err,
+                provider: 'nuvion',
+                operation: 'get card',
+              }),
+            );
+          aMinuteOn(view.id);
+          books().readThrough.delete(view.id);
+          expect(await getView(p, view.id)).toMatchObject({ status: 'active' });
+          spy.mockRestore();
+        }
+      }
+      expect(books().missingSince.has(view.id)).toBe(false);
+      expect((await rowOf(view.id)).state).toBe('active');
+    });
+
+    it('F1 LOW-1: a second 404 does not block a card that was frozen, used or blocked while Nuvion was being asked', async () => {
+      for (const became of ['frozen', 'used', 'cancelled']) {
+        const p = await person();
+        const { view } = await singleUse(p);
+        // A 404 a minute ago.
+        books().missingSince.set(view.id, Date.now() - 61_000);
+        const spy = jest
+          .spyOn(provider().cards, 'getCard')
+          .mockImplementationOnce(async () => {
+            await prisma.walletCard.update({
+              where: { id: view.id },
+              data: {
+                state: became,
+                ...(became === 'frozen' ? { frozenBy: 'person' } : {}),
+                ...(became === 'cancelled' ? { cancelledAt: new Date() } : {}),
+              },
+            });
+            throw new WalletProviderError({
+              kind: 'not_found',
+              httpStatus: 404,
+              provider: 'nuvion',
+              operation: 'get card',
+            });
+          });
+        await getView(p, view.id);
+        spy.mockRestore();
+        expect((await rowOf(view.id)).state).toBe(became);
+      }
+    });
+
+    it('F1 LOW-1: a card payment that meets one 404 asks again; only the second try blocks the card, and a try that finds it follows it', async () => {
+      const p = await person();
+      const a = await singleUse(p);
+      gone(a.nuvionId, true);
+      const first = await handler.handle(
+        payment('outflows.completed', a.nuvionId, p.entity),
+      );
+      expect(first.outcome).toBe('wait');
+      expect((await rowOf(a.view.id)).state).toBe('active');
+      const second = await handler.handle({
+        ...payment('outflows.completed', a.nuvionId, p.entity),
+        attempts: 2,
+      });
+      expect(second.outcome).toBe('done');
+      expect((await rowOf(a.view.id)).state).toBe('cancelled');
+      // The second try finds a card that is live and used: it follows Nuvion.
+      const b = await singleUse(p);
+      gone(b.nuvionId, true);
+      expect(
+        (
+          await handler.handle(
+            payment('outflows.completed', b.nuvionId, p.entity),
+          )
+        ).outcome,
+      ).toBe('wait');
+      gone(b.nuvionId, false);
+      cards.get(b.nuvionId)!.status = 'deactivated';
+      expect(
+        (
+          await handler.handle({
+            ...payment('outflows.completed', b.nuvionId, p.entity),
+            attempts: 2,
+          })
+        ).outcome,
+      ).toBe('done');
+      expect((await rowOf(b.view.id)).state).toBe('used');
     });
 
     it('F1: the screen does not read a reusable card, and a read that fails never fails the screen', async () => {

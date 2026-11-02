@@ -346,7 +346,12 @@ Where it runs:
 - **The card screen.** `GET /money/cards/:id` on an active single-use card reads Nuvion
   at most once a minute per card (per Hub process) and applies the rule, in case the
   delivery is late. Never on the list, never for a reusable, used or blocked card. A
-  failed read leaves the card as it was and never fails the screen.
+  failed read leaves the card as it was and never fails the screen. One Nuvion 404 never
+  blocks a card (the person paid for it): the first is noted and logged and the card stays
+  as it was; only a second 404, a minute or more later with no read that found the card in
+  between, blocks it for good. The note is per Hub process, so a restart forgets it (safer).
+  A card payment that meets one 404 waits for the delivery's next try (a minute on) and only
+  the second blocks the card.
 - **A card found by its reference** (the answer to the create was lost): the same rule.
 - **`cards.created`, `.frozen`, `.unfrozen`, `.deleted`:** `.frozen` and `.unfrozen` read
   the card and apply the rule; `.deleted` blocks it for good.

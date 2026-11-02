@@ -131,6 +131,7 @@ export async function releaseOwnUpload(
   deps: ReleaseDeps,
   wawuId: string,
   key: string,
+  options: { finishing?: boolean } = {},
 ): Promise<{ released: true }> {
   const { client, bucket, folders, prisma, logger } = deps;
   if (!client) {
@@ -143,52 +144,63 @@ export async function releaseOwnUpload(
   // releases waits in memory and not on pooled connections (ME-04 round 6).
   // The first part may be refused with 429 (nothing is changed yet); the
   // second is never refused, because the delete it records has been asked for.
-  const claim = await inPersonsTurn(wawuId, () =>
-    prisma.$transaction(async (tx) => {
-      await lockStorageQuota(tx, wawuId);
-      const row = await tx.storageObject.findUnique({ where: { key } });
-      if (!row || row.wawuUserId !== wawuId || !folders.includes(row.folder)) {
-        throw new NotFoundException(UPLOAD_NOT_FOUND);
-      }
-      if (await isClaimed(tx, key)) {
-        throw new ConflictException({
-          message: isChatKey(key)
-            ? 'That file is already part of a message.'
-            : 'That file is already part of a listing.',
-          reason: { code: 'upload_claimed' },
-        });
-      }
-      // Another removal of this file is in flight (a second tap, the sweep): it
-      // owns the row until it ends.
-      if (removalInFlight(row))
-        throw new ServiceUnavailableException(TRY_AGAIN);
+  const claim = await inPersonsTurn(
+    wawuId,
+    () =>
+      prisma.$transaction(async (tx) => {
+        await lockStorageQuota(tx, wawuId);
+        const row = await tx.storageObject.findUnique({ where: { key } });
+        if (
+          !row ||
+          row.wawuUserId !== wawuId ||
+          !folders.includes(row.folder)
+        ) {
+          throw new NotFoundException(UPLOAD_NOT_FOUND);
+        }
+        if (await isClaimed(tx, key)) {
+          throw new ConflictException({
+            message: isChatKey(key)
+              ? 'That file is already part of a message.'
+              : 'That file is already part of a listing.',
+            reason: { code: 'upload_claimed' },
+          });
+        }
+        // Another removal of this file is in flight (a second tap, the sweep): it
+        // owns the row until it ends.
+        if (removalInFlight(row))
+          throw new ServiceUnavailableException(TRY_AGAIN);
 
-      // `releasedAt` is what keeps the row released: POST /uploads/confirm never
-      // counts it again if a late file lands (the PUT link stays valid for its
-      // whole life after this call), and the sweep removes that file once the
-      // link has expired (late-file-sweep.ts). A row already given up some other
-      // way (a settled, missing upload) is marked too: the person has released
-      // it now. A row confirmed a moment ago is released too, because the lock
-      // made that confirm finish first.
-      const at = new Date();
-      await tx.storageObject.update({
-        where: { id: row.id },
-        data: {
-          status: 'abandoned',
-          releasedAt: row.releasedAt ?? at,
-          removingAt: at,
-        },
-      });
-      return {
-        id: row.id,
-        at,
-        before: {
-          status: row.status,
-          confirmedAt: row.confirmedAt,
-          releasedAt: row.releasedAt,
-        },
-      };
-    }, LOCKED_TX),
+        // `releasedAt` is what keeps the row released: POST /uploads/confirm never
+        // counts it again if a late file lands (the PUT link stays valid for its
+        // whole life after this call), and the sweep removes that file once the
+        // link has expired (late-file-sweep.ts). A row already given up some other
+        // way (a settled, missing upload) is marked too: the person has released
+        // it now. A row confirmed a moment ago is released too, because the lock
+        // made that confirm finish first.
+        const at = new Date();
+        await tx.storageObject.update({
+          where: { id: row.id },
+          data: {
+            status: 'abandoned',
+            releasedAt: row.releasedAt ?? at,
+            removingAt: at,
+          },
+        });
+        return {
+          id: row.id,
+          at,
+          before: {
+            status: row.status,
+            confirmedAt: row.confirmedAt,
+            releasedAt: row.releasedAt,
+          },
+        };
+      }, LOCKED_TX),
+    // `finishing`: the release is the second half of a step that already
+    // changed something (a cover an edit replaced, CONTENT-COVER), so it queues
+    // behind the person's other requests and is never refused 429: a refusal
+    // here would leave the old file in the bucket and in their count.
+    { finishing: options.finishing === true },
   );
 
   const outcome = await deleteFromBucket(client, bucket, key);

@@ -811,7 +811,10 @@ export class ContentPieceService {
   ): Promise<void> {
     if (!key || key === keptKey) return;
     try {
-      await this.storage.releaseUpload(creatorWawuId, key);
+      // The edit that replaced the cover is written: freeing the old file is
+      // the end of that step and is never refused when the person has other
+      // requests in line (CI run 41470069796: four replaces at once).
+      await this.storage.releaseUpload(creatorWawuId, key, { finishing: true });
     } catch (err) {
       this.logger.warn(`Could not remove the old cover ${key}: ${String(err)}`);
     }
