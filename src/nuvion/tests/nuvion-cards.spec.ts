@@ -58,6 +58,42 @@ describe('WALLET-31: reading Nuvion card objects', () => {
     expect(readCard(null)).toBeNull();
   });
 
+  it('every card status Nuvion lists is read (api-reference cards, re-read 29 Oct 2026); a used disposable card is deactivated', () => {
+    // The shapes are the docs': a List cards row and a Get card details answer.
+    for (const status of ['active', 'blocked', 'deactivated', 'fraud']) {
+      expect(
+        readCard({
+          id: '01HXYZ9012ABCDEFGHJKMNPQRS',
+          status,
+          name: 'wawu-card-ab12cd34ef56',
+          type: 'disposable',
+          currency: 'USD',
+          nuvion_account_name: 'Naira wallet',
+          last4: '4242',
+        }),
+      ).toEqual({
+        id: '01HXYZ9012ABCDEFGHJKMNPQRS',
+        type: 'single_use',
+        name: 'wawu-card-ab12cd34ef56',
+        status,
+        currency: 'USD',
+        last4: '4242',
+      });
+    }
+    // A used card with no type in the answer takes the kind asked for.
+    expect(
+      readCard(
+        { id: '01HXYZ9012ABCDEFGHJKMNPQRS', status: 'deactivated' },
+        'single_use',
+      ),
+    ).toMatchObject({ type: 'single_use', status: 'deactivated' });
+    // A status Nuvion adds later, or a wrong case, is not read as any of them.
+    for (const status of ['used', 'Deactivated', 'DEACTIVATED', 'closed', '']) {
+      expect(readCard({ id: '01HXYZ9012ABCDEFGHJKMNPQRS', status })).toBeNull();
+    }
+    expect(readCard({ id: '01HXYZ9012ABCDEFGHJKMNPQRS' })).toBeNull();
+  });
+
   it('a card payment, a reversal and a refund are read; other payment types are left out', () => {
     const base = {
       _id: '01HXYZ0057ABCDEFGHJKMNPQRS',

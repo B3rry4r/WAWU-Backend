@@ -96,7 +96,8 @@ interface FakeCard {
   id: string;
   name: string;
   type: 'virtual' | 'disposable';
-  status: 'active' | 'blocked';
+  /** Nuvion's word: active, blocked, fraud or deactivated (docs of 29 Oct 2026), or a word it adds later. */
+  status: string;
   account: string;
   entity: string;
   deleted: boolean;
@@ -122,6 +123,8 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
   let cardSeq = 0;
   /** `lose`: the next create makes the card and then the answer is lost. */
   let loseCreate = false;
+  /** The status a card made while its answer is lost already has when it is looked for (a single-use card used in between). */
+  let lostCreateStatus = 'active';
   /** `refuseFee`: the next create is refused as Nuvion refuses a funding account that cannot pay its fee. */
   let refuseFee = false;
 
@@ -186,6 +189,8 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       cards.set(c.id, c);
       if (loseCreate) {
         loseCreate = false;
+        c.status = lostCreateStatus;
+        lostCreateStatus = 'active';
         return { status: 200, hangUp: true };
       }
       return {
@@ -1144,6 +1149,175 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       await http().get(`${BASE}/quote`).set('Authorization', p.auth),
     ).data!;
     expect(quote.limits.activeNow).toBe(0);
+  });
+
+  describe('a used single-use card is deactivated at Nuvion (CARD-STATUS, docs of 29 Oct 2026)', () => {
+    const delivery = (
+      event: string,
+      row: { providerCardId: string | null; reference: string },
+      entity: string,
+    ) => ({
+      id: randomUUID(),
+      eventId: randomUUID(),
+      event,
+      resourceId: row.providerCardId,
+      entityId: entity,
+      data: { id: row.providerCardId, name: row.reference },
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+
+    it('the webhook path ends with the card shown as used: nothing to freeze, unfreeze or show, not held any more, and a repeat or a later event changes nothing', async () => {
+      const p = await person();
+      const card = asEnvelope<CardView>(await makeCard(p, 'single_use')).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      // Nuvion's word once the card has taken its one payment.
+      cards.get(row.providerCardId!)!.status = 'deactivated';
+      const first = await handler.handle(
+        delivery('cards.frozen', row, p.entity),
+      );
+      expect(first.outcome).toBe('done');
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .state,
+      ).toBe('used');
+      const used = asEnvelope<CardView>(
+        await http().get(`${BASE}/${card.id}`).set('Authorization', p.auth),
+      ).data!;
+      expect(used).toMatchObject({
+        kind: 'single_use',
+        status: 'used',
+        frozenBySupport: false,
+        statusMessage: null,
+      });
+      const list = asEnvelope<CardListView>(
+        await http().get(BASE).set('Authorization', p.auth),
+      ).data!;
+      expect(list.cards.find((c) => c.id === card.id)?.status).toBe('used');
+      for (const [method, path, pin] of [
+        ['post', `${BASE}/${card.id}/freeze`, false],
+        ['post', `${BASE}/${card.id}/unfreeze`, true],
+        ['post', `${BASE}/${card.id}/reveal`, true],
+      ] as const) {
+        let req = http()[method](path).set('Authorization', p.auth);
+        if (pin) req = req.set('X-Transaction-Pin', PIN);
+        const res = await req;
+        expect(res.status).toBe(409);
+        expect(asEnvelope(res).reason?.code).toBe('card_blocked');
+      }
+      const quote = asEnvelope<CardQuoteView>(
+        await http().get(`${BASE}/quote`).set('Authorization', p.auth),
+      ).data!;
+      expect(quote.limits.activeNow).toBe(0);
+      // Nuvion delivers twice, and sends another card event later: still used.
+      for (const event of ['cards.frozen', 'cards.unfrozen']) {
+        expect(
+          (await handler.handle(delivery(event, row, p.entity))).outcome,
+        ).toBe('done');
+      }
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .state,
+      ).toBe('used');
+    });
+
+    it('a single-use card the person had frozen, then used, is used, not frozen', async () => {
+      const p = await person();
+      const card = asEnvelope<CardView>(await makeCard(p, 'single_use')).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      await prisma.walletCard.update({
+        where: { id: card.id },
+        data: { state: 'frozen', frozenBy: 'person' },
+      });
+      cards.get(row.providerCardId!)!.status = 'deactivated';
+      expect(
+        (await handler.handle(delivery('cards.frozen', row, p.entity))).outcome,
+      ).toBe('done');
+      expect(
+        await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }),
+      ).toMatchObject({ state: 'used', frozenBy: null });
+    });
+
+    it('a reusable card Nuvion calls deactivated is not described by the docs: it is left as it was, and logged', async () => {
+      const p = await person();
+      const card = asEnvelope<CardView>(await makeCard(p, 'virtual')).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      cards.get(row.providerCardId!)!.status = 'deactivated';
+      const before = logger.lines.length;
+      const result = await handler.handle(
+        delivery('cards.frozen', row, p.entity),
+      );
+      expect(result.outcome).toBe('done');
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .state,
+      ).toBe('active');
+      expect(
+        logger.lines
+          .slice(before)
+          .some((l) => l.includes(row.id) && l.includes('left as it was')),
+      ).toBe(true);
+    });
+
+    it('a status Nuvion adds later does not crash the handler: the delivery waits, the card is left as it was, and it is logged', async () => {
+      const p = await person();
+      const card = asEnvelope<CardView>(await makeCard(p, 'single_use')).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      cards.get(row.providerCardId!)!.status = 'retired';
+      const before = logger.lines.length;
+      const result = await handler.handle(
+        delivery('cards.frozen', row, p.entity),
+      );
+      expect(result.outcome).toBe('wait');
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .state,
+      ).toBe('active');
+      expect(
+        logger.lines
+          .slice(before)
+          .some((l) => l.includes(row.id) && l.includes('bad_response')),
+      ).toBe(true);
+      // The card is still readable by the person as the active card it was.
+      expect(
+        asEnvelope<CardView>(
+          await http().get(`${BASE}/${card.id}`).set('Authorization', p.auth),
+        ).data,
+      ).toMatchObject({ status: 'active' });
+      // And once Nuvion says a word we read, the same delivery is handled.
+      cards.get(row.providerCardId!)!.status = 'deactivated';
+      expect(
+        (await handler.handle(delivery('cards.frozen', row, p.entity))).outcome,
+      ).toBe('done');
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .state,
+      ).toBe('used');
+    });
+
+    it('a single-use card whose answer was lost and which was used before it was found is adopted as used, and never made twice', async () => {
+      const p = await person();
+      loseCreate = true;
+      lostCreateStatus = 'deactivated';
+      const res = await makeCard(p, 'single_use');
+      expect(res.status).toBe(201);
+      const card = asEnvelope<CardView>(res).data!;
+      expect(card).toMatchObject({ kind: 'single_use', status: 'used' });
+      expect(
+        await prisma.walletCard.count({ where: { wawuUserId: p.id } }),
+      ).toBe(1);
+      expect(
+        [...cards.values()].filter((c) => c.entity === p.entity),
+      ).toHaveLength(1);
+    });
   });
 
   it('support blocking a used single-use card is refused 409 card_blocked in the Hub error shape, and writes no audit row (WALLET-31 L6)', async () => {

@@ -76,7 +76,14 @@ export function readCard(
   const id = text(raw, 'id');
   const status = text(raw, 'status');
   if (!id || !isNuvionId(id)) return null;
-  if (status !== 'active' && status !== 'blocked' && status !== 'fraud') {
+  // The four statuses Nuvion's docs list (re-read 29 Oct 2026): `deactivated`
+  // is a disposable card that has been used. Any other word is not read.
+  if (
+    status !== 'active' &&
+    status !== 'blocked' &&
+    status !== 'fraud' &&
+    status !== 'deactivated'
+  ) {
     return null;
   }
   const last4 = text(raw, 'last4');

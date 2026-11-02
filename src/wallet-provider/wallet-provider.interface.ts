@@ -773,14 +773,16 @@ export type ProviderCardType = 'virtual' | 'single_use';
  * A card as the provider describes it for a list or a status read. Never the
  * number, the expiry or the CVV: those are `ProviderCardSecrets`, read on
  * their own and never kept. `status` is the provider's: `blocked` is a frozen
- * card (or a deleted one, which no longer lists).
+ * card (or a deleted one, which no longer lists); `deactivated` is a single-use
+ * card that has been used, which takes no further payment (Nuvion's docs,
+ * 29 Oct 2026).
  */
 export interface ProviderCard {
   id: string;
   type: ProviderCardType | null;
   /** The name the card was made under: our reference. */
   name: string;
-  status: 'active' | 'blocked' | 'fraud';
+  status: 'active' | 'blocked' | 'fraud' | 'deactivated';
   /** ISO 4217, the currency the card spends in (USD). */
   currency: string;
   /** The last four digits, when the provider says them; null otherwise. */

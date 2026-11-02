@@ -577,12 +577,21 @@ export class WalletCardService implements OnModuleInit {
     throw await this.fail(e, row);
   }
 
-  /** The row now that the issuer has the card: active, or frozen when the issuer says blocked. */
+  /**
+   * The row now that the issuer has the card: active, frozen when the issuer
+   * says blocked, or used when it says a single-use card is deactivated (it
+   * took its one payment before it was found).
+   */
   private async adopt(
     row: WalletCard,
     card: ProviderCard,
   ): Promise<WalletCard> {
-    const state = card.status === 'active' ? 'active' : 'frozen';
+    const state =
+      card.status === 'active'
+        ? 'active'
+        : card.status === 'deactivated' && row.type === 'single_use'
+          ? 'used'
+          : 'frozen';
     try {
       return await this.prisma.walletCard.update({
         where: { id: row.id },
