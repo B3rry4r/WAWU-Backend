@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -38,6 +38,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  *   could undo a newer change; the card's status is read from Nuvion
  *   (`getCard`, which keeps no number or CVV) and the row follows that.
  * - `cards.deleted`: the card is blocked for good.
+ * - A single-use card Nuvion calls `deactivated` (a disposable card that has
+ *   been used, Nuvion's docs of 29 Oct 2026) is `used` in the row, whichever of
+ *   these events brought us to ask. The docs name no event for the use itself.
+ * - A status Nuvion adds later, which `getCard` cannot read, leaves the row as
+ *   it was: the delivery waits and is logged, never a crash.
  * A card the row says is blocked for good stays so. Idempotent: Nuvion may
  * deliver an event twice. Only under `WALLET_PROVIDER=nuvion`, like the other
  * handlers: a server on Fintava leaves the deliveries pending.
@@ -46,6 +51,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export class NuvionCardsHandler implements NuvionEventHandler {
   readonly task = 'WALLET-31';
   readonly events: readonly NuvionWebhookEventName[] = NUVION_CARDS_EVENTS;
+  private readonly logger = new Logger(NuvionCardsHandler.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -122,15 +128,35 @@ export class NuvionCardsHandler implements NuvionEventHandler {
         { walletId: wallet.walletId },
         cardId,
       );
+      if (card.status === 'deactivated') {
+        // A disposable card that has been used: it takes no further payment.
+        // A card of another kind is not described by the docs as deactivated,
+        // so it is left as it was.
+        if (row.type !== 'single_use') {
+          this.logger.warn(
+            `card ${row.id}: Nuvion says a reusable card is deactivated; left as it was`,
+          );
+          return {
+            outcome: 'done',
+            note: 'a reusable card is deactivated: left as it was',
+          };
+        }
+        await this.prisma.walletCard.updateMany({
+          where: { id: row.id, state: { in: ['active', 'frozen'] } },
+          data: { state: 'used', frozenBy: null },
+        });
+        return { outcome: 'done', note: 'single-use card is used' };
+      }
       if (card.status === 'active' && row.state === 'frozen') {
         await this.prisma.walletCard.updateMany({
           where: { id: row.id, state: 'frozen' },
           data: { state: 'active', frozenBy: null },
         });
       } else if (card.status !== 'active' && row.state === 'active') {
-        // Nuvion blocked a card the Hub had not frozen. A single-use card is
-        // blocked after its one payment: it is used, not frozen (round 1, L2);
-        // any other card was frozen elsewhere. The Hub's own freeze writes
+        // Nuvion blocked a card the Hub had not frozen. A single-use card
+        // Nuvion answered `blocked` for after its one payment (the sandbox did,
+        // round 1, L2; the docs now say `deactivated`, above) is used, not
+        // frozen; any other card was frozen elsewhere. The Hub's own freeze writes
         // `frozen` right after Nuvion answers, over this if it came first.
         await this.prisma.walletCard.updateMany({
           where: { id: row.id, state: 'active' },
@@ -148,6 +174,16 @@ export class NuvionCardsHandler implements NuvionEventHandler {
           data: { state: 'cancelled', cancelledAt: new Date() },
         });
         return { outcome: 'done', note: 'Nuvion no longer knows the card' };
+      }
+      const kind = e instanceof WalletProviderError ? e.kind : 'error';
+      this.logger.warn(
+        `card ${row.id}: Nuvion's answer was not used (${kind}); left as it was`,
+      );
+      if (kind === 'bad_response') {
+        return {
+          outcome: 'wait',
+          note: "Nuvion's answer was not one we read (a new card status, say): card left as it was",
+        };
       }
       return { outcome: 'wait', note: 'Nuvion could not be asked' };
     }
