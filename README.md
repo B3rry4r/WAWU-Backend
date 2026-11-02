@@ -317,6 +317,45 @@ output in `<scratch>/logs/<name>.log`, appends `EXIT <code>`, prints the last 15
 lines and, on failure, up to 20 lines matching `FAIL`, `Error`, `✕` or `failed`.
 It exits with the command's code.
 
+### Nuvion cards: how a card follows Nuvion (WALLET-31, CARD-STATUS, CARD-USE)
+
+A card's row (`WalletCard`) follows Nuvion's status for the card, read from Nuvion
+(`getCard`) and never taken from an event. One rule decides it for every path, in
+`src/money/cards/card-status.ts` (Nuvion's card guide, "Card statuses", 29 Oct 2026):
+
+| Nuvion says | The row becomes |
+| - | - |
+| `active` | active (a frozen row is unfrozen) |
+| `blocked` | frozen, by the person unless support had it. Single-use or reusable alike: only `deactivated` means used. A deleted card is a 404 and is blocked for good |
+| `deactivated` on a single-use card | used |
+| `deactivated` on a reusable card | frozen as support's (the docs describe no such thing; logged) |
+| `fraud` | frozen as support's, whatever the kind: the person sees "Support has frozen this card" and cannot unfreeze it. Never used |
+
+The row changes only when it is still in the state the decision started from, so a
+card the person blocked while Nuvion was being asked stays blocked. Nothing is held
+while Nuvion is asked; no money moves; a card of another entity is never touched.
+
+Where it runs:
+
+- **A card payment.** Nuvion sends no `cards.*` event for a use. A payment arrives as
+  `outflows.created`, `.completed` or `.failed` with `payment_type` `card-debit` (or
+  `card-debit-recoup`) and the card's id in `card_id`. `NuvionCardsHandler` reads those:
+  for a card of ours whose delivery names the owner's entity it reads the card and
+  applies the rule. Any other outflow costs nothing there. Its log line has the row id,
+  the card kind and a fixed word, never an amount, a merchant or a narration.
+- **The card screen.** `GET /money/cards/:id` on an active single-use card reads Nuvion
+  at most once a minute per card (per Hub process) and applies the rule, in case the
+  delivery is late. Never on the list, never for a reusable, used or blocked card. A
+  failed read leaves the card as it was and never fails the screen.
+- **A card found by its reference** (the answer to the create was lost): the same rule.
+- **`cards.created`, `.frozen`, `.unfrozen`, `.deleted`:** `.frozen` and `.unfrozen` read
+  the card and apply the rule; `.deleted` blocks it for good.
+
+On the stack, the Nuvion stand-in's `POST /__standin/card-spend` makes a spent single-use
+card `deactivated` and sends the payment as `outflows.created` and `outflows.completed`
+(`payment_type` `card-debit`, `card_id`), with no `cards.*` event, as Nuvion does. Its
+reversal sends nothing yet.
+
 ## Protected route suite (MONEY-01, V3)
 
 Nothing the live web app or the admin dashboard uses may change behaviour while
