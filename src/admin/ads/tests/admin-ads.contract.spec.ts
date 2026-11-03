@@ -2413,7 +2413,9 @@ describe('Admin ads contract (ADS-06)', () => {
         ]),
       );
       const hidden = await ids('hide');
-      expect(hidden).toEqual(expect.arrayContaining([running.id, pastDraft.id]));
+      expect(hidden).toEqual(
+        expect.arrayContaining([running.id, pastDraft.id]),
+      );
       expect(hidden).not.toContain(byHand.id);
       expect(hidden).not.toContain(pastWindow.id);
       const only = await ids('only');
