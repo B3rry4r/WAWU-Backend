@@ -20,11 +20,13 @@ import {
   type AdminMoneyHeldView,
   type AdminMoneyLedgerRowView,
   type AdminMoneyMerchantView,
-  type AdminMoneyPageQueryDto,
   type AdminMoneyWalletDetailView,
   type AdminMoneyWalletPage,
-  type AdminMoneyWalletsQueryDto,
   type AdminMoneyWalletView,
+} from './admin-money.dto';
+import type {
+  AdminMoneyPageQueryDto,
+  AdminMoneyWalletsQueryDto,
 } from './admin-money.dto';
 
 const DEFAULT_LIMIT = 20;

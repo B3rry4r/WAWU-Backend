@@ -5,7 +5,10 @@ import { ConfigModule } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import { AdminRole } from '../../../../generated/prisma/enums';
+import {
+  AdminRole,
+  type StoreProductKind,
+} from '../../../../generated/prisma/enums';
 import { AdminAuthModule } from '../../../admin/auth/admin-auth.module';
 import { AdminTokenService } from '../../../admin/auth/admin-token.service';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
@@ -624,7 +627,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       // Store sales: a product per platform.
       const mkProduct = async (
         platformName: 'ios' | 'android',
-        kind: 'buy' | 'tier' | 'credits',
+        kind: StoreProductKind,
       ) => {
         const p = await prisma.storeProduct.create({
           data: {
@@ -642,7 +645,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
         p: {
           id: string;
           platform: 'ios' | 'android';
-          kind: 'buy' | 'tier' | 'credits';
+          kind: StoreProductKind;
           storeProductId: string;
         },
         o: { ref: number | null; at: Date; status?: 'granted' | 'refunded' },
