@@ -65,7 +65,6 @@ export class WaitlistPublicController {
    * uses. `best` marks the one the page preselects. Public.
    */
   @Get('tiers')
-  @Throttle(WAITLIST_THROTTLE_READ)
   @Header('Cache-Control', 'no-store')
   tiers(): WaitlistTiersView {
     return this.waitlist.tiers();

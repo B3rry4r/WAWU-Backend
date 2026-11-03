@@ -13,6 +13,7 @@ import { giveTierPurchase } from '../../plans/tier-purchase-grant';
 import { purgePersonPoints } from '../../points/points-purge';
 import { ReferralAdminService } from '../referral/referral-admin.service';
 import { WaitlistService, newReference } from '../waitlist.service';
+import { WaitlistClaimCore } from '../waitlist-claim-core';
 import { waitlistHeaderLine, waitlistLine } from '../waitlist-export';
 import {
   bootWaitlist,
@@ -649,6 +650,44 @@ describe('/join sells the three tiers (JOIN-TIERS-HUB, R-125) over HTTP', () => 
   });
 
   describe('the access code still works', () => {
+    it('a row claimed between the read and the update is not taken by the second claimer', async () => {
+      const first = person();
+      const second = person();
+      const stale = await paidRow(first, 'plus');
+      const core = app.get(WaitlistClaimCore, { strict: false });
+      const goods = core.goodsOf(stale)!;
+      // The first claimer wins; the second still holds the row as it was read.
+      const won = await core.claimRow(
+        first.sub,
+        stale,
+        goods,
+        'auto',
+        new Date(),
+      );
+      expect(won.kind).toBe('claimed');
+      const lost = await core.claimRow(
+        second.sub,
+        stale,
+        goods,
+        'code',
+        new Date(),
+      );
+      expect(lost.kind).toBe('taken');
+      const row = await prisma.waitlistRegistration.findUniqueOrThrow({
+        where: { id: stale.id },
+      });
+      expect(row).toMatchObject({
+        claimedByWawuId: first.sub,
+        claimedVia: 'auto',
+      });
+      expect(
+        await prisma.makerTier.count({ where: { wawuUserId: second.sub } }),
+      ).toBe(0);
+      expect(
+        await prisma.makerPurchase.count({ where: { wawuUserId: second.sub } }),
+      ).toBe(0);
+    });
+
     it('claims a tier registration with its code, as a store purchase of that tier would', async () => {
       const who = person();
       const row = await paidRow(who, 'founding');
