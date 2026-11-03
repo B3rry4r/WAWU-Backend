@@ -50508,6 +50508,48 @@
           "nextCursor"
         ]
       },
+      "AdminMoneyBasisView": {
+        "type": "object",
+        "properties": {
+          "basis": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "grossKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "basis",
+          "label",
+          "count",
+          "grossKobo"
+        ]
+      },
+      "AdminMoneyForeignChargeView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "amountMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "currency",
+          "count",
+          "amountMinor"
+        ]
+      },
       "AdminMoneyBreakdownView": {
         "type": "object",
         "properties": {
@@ -50525,6 +50567,13 @@
           },
           "unpricedCount": {
             "type": "number"
+          },
+          "bases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyBasisView"
+            },
+            "nullable": true
           }
         },
         "required": [
@@ -50580,6 +50629,23 @@
             "type": "integer",
             "nullable": true
           },
+          "keptKobo": {
+            "type": "integer"
+          },
+          "bases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyBasisView"
+            },
+            "nullable": true
+          },
+          "foreignCharges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyForeignChargeView"
+            },
+            "nullable": true
+          },
           "breakdown": {
             "type": "array",
             "items": {
@@ -50600,7 +50666,8 @@
           "grossBasis",
           "wawuKobo",
           "creatorsKobo",
-          "refundedKobo"
+          "refundedKobo",
+          "keptKobo"
         ]
       },
       "AdminMoneyRevenueView": {

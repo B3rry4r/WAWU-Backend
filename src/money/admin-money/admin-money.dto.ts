@@ -190,6 +190,26 @@ export class AdminMoneyBreakdownView {
   grossKobo!: number;
   /** Sales counted but carrying no price in our records (a tier or a points pack from a store): never guessed. */
   unpricedCount!: number;
+  /** How the gross was priced, one entry per basis in use (store streams). */
+  bases?: AdminMoneyBasisView[];
+}
+
+/** Sales priced on one basis, so the reader sees how each figure was got. */
+export class AdminMoneyBasisView {
+  /** `store_charge`, `recorded_list_price`, `todays_list_price` or `unpriced`. */
+  basis!: string;
+  /** Plain words for the basis. */
+  label!: string;
+  count!: number;
+  grossKobo!: number;
+}
+
+/** What the store charged in a currency other than naira. Never converted and never added into naira. */
+export class AdminMoneyForeignChargeView {
+  currency!: string;
+  count!: number;
+  /** In the currency's minor unit (hundredths), as the store charged. */
+  amountMinor!: number;
 }
 
 export class AdminMoneyStreamView {
@@ -207,11 +227,17 @@ export class AdminMoneyStreamView {
   unpricedCount!: number;
   /** What `grossKobo` is, in plain words. */
   grossBasis!: string;
-  /** WAWU's 15% and the creators' 85%, as stored on each payment; null where a split does not apply to the stream. */
+  /** WAWU's 15% and the creators' 85% on the money kept (a refunded payment contributes 0); null where a split does not apply. */
   wawuKobo!: number | null;
   creatorsKobo!: number | null;
-  /** Money given back on held payments of the stream in the window; null where it does not apply. */
+  /** Refunded to payers: held payments given back, or store sales refunded or revoked. Gross stays the money taken. Null where it does not apply. */
   refundedKobo!: number | null;
+  /** Gross less refunded: the money kept. */
+  keptKobo!: number;
+  /** How the gross was priced (store streams): the count and amount under each basis. */
+  bases?: AdminMoneyBasisView[];
+  /** Store charges in other currencies, by currency (store streams). */
+  foreignCharges?: AdminMoneyForeignChargeView[];
   breakdown?: AdminMoneyBreakdownView[];
 }
 
