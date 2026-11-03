@@ -22035,6 +22035,215 @@
         "x-wawu-built-by": "NUV-11"
       }
     },
+    "/api/hub/admin/money/wallets": {
+      "get": {
+        "operationId": "AdminMoneyController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the last page, as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Finds a wallet by handle, WAWU ID, account name or the last digits of its account number.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "withBalance",
+            "required": false,
+            "in": "query",
+            "description": "`true`: ask the wallet provider for each row's balance. The page then holds at most 25 rows, and a row the provider\ndid not answer for carries `balanceUnavailable` and no figure.",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMoneyWalletPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app's wallets, newest first. Balances only with `withBalance=true` (a page of at most 25).",
+        "tags": [
+          "AdminMoney"
+        ],
+        "x-wawu-built-by": "DASH-B-HUB"
+      }
+    },
+    "/api/hub/admin/money/wallets/{wawuId}": {
+      "get": {
+        "operationId": "AdminMoneyController_one",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the last page, as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMoneyWalletDetailView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One wallet with the provider's balance and the person's recent ledger rows (our records).",
+        "tags": [
+          "AdminMoney"
+        ],
+        "x-wawu-built-by": "DASH-B-HUB"
+      }
+    },
+    "/api/hub/admin/money/merchant": {
+      "get": {
+        "operationId": "AdminMoneyController_merchant",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the last page, as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMoneyMerchantView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "WAWU's merchant wallet: the provider's balance, and what our records say is held for whom.",
+        "tags": [
+          "AdminMoney"
+        ],
+        "x-wawu-built-by": "DASH-B-HUB"
+      }
+    },
+    "/api/hub/admin/money/revenue": {
+      "get": {
+        "operationId": "AdminMoneyController_revenueByStream",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive lower bound, ISO 8601. With neither bound: the current calendar month (UTC).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Exclusive upper bound, ISO 8601.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMoneyRevenueView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app's money by stream over `[from, to)`, each with its source table, statuses and rail.",
+        "tags": [
+          "AdminMoney"
+        ],
+        "x-wawu-built-by": "DASH-B-HUB"
+      }
+    },
     "/api/hub/money/fx/currencies": {
       "get": {
         "operationId": "FxController_currencies",
@@ -49954,6 +50163,498 @@
         "required": [
           "outcome",
           "reason"
+        ]
+      },
+      "AdminMoneyBalanceView": {
+        "type": "object",
+        "properties": {
+          "availableKobo": {
+            "type": "integer"
+          },
+          "bookedKobo": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "provider"
+            ]
+          },
+          "asOf": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "availableKobo",
+          "bookedKobo",
+          "source",
+          "asOf"
+        ]
+      },
+      "AdminMoneyWalletView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "openedAt": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open"
+            ]
+          },
+          "accountLast4": {
+            "type": "string"
+          },
+          "balance": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminMoneyBalanceView"
+              }
+            ],
+            "nullable": true
+          },
+          "balanceUnavailable": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "handle",
+          "displayName",
+          "provider",
+          "openedAt",
+          "status",
+          "accountLast4"
+        ]
+      },
+      "AdminMoneyWalletPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyWalletView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AdminMoneyLedgerRowView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed",
+              "reversed"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "feeKobo": {
+            "type": "integer"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "counterpartyName": {
+            "type": "string",
+            "nullable": true
+          },
+          "linkKind": {
+            "type": "string",
+            "nullable": true
+          },
+          "linkTitle": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "occurredAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "direction",
+          "status",
+          "category",
+          "amountKobo",
+          "feeKobo",
+          "totalKobo",
+          "counterpartyName",
+          "linkKind",
+          "linkTitle",
+          "reference",
+          "occurredAt"
+        ]
+      },
+      "AdminMoneyWalletDetailView": {
+        "type": "object",
+        "properties": {
+          "wallet": {
+            "$ref": "#/components/schemas/AdminMoneyWalletView"
+          },
+          "recordsNote": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyLedgerRowView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wallet",
+          "recordsNote",
+          "records",
+          "nextCursor"
+        ]
+      },
+      "AdminMoneyHeldByKindView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "heldKobo": {
+            "type": "integer"
+          },
+          "payeeShareKobo": {
+            "type": "integer"
+          },
+          "wawuShareKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "count",
+          "heldKobo",
+          "payeeShareKobo",
+          "wawuShareKobo"
+        ]
+      },
+      "AdminMoneyHeldView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "payerWawuId": {
+            "type": "string",
+            "nullable": true
+          },
+          "payerHandle": {
+            "type": "string",
+            "nullable": true
+          },
+          "payeeWawuId": {
+            "type": "string",
+            "nullable": true
+          },
+          "payeeHandle": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "payeeShareKobo": {
+            "type": "integer"
+          },
+          "wawuShareKobo": {
+            "type": "integer"
+          },
+          "heldAt": {
+            "type": "string"
+          },
+          "waiting": {
+            "type": "string",
+            "nullable": true
+          },
+          "inReview": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "payerWawuId",
+          "payerHandle",
+          "payeeWawuId",
+          "payeeHandle",
+          "amountKobo",
+          "payeeShareKobo",
+          "wawuShareKobo",
+          "heldAt",
+          "waiting",
+          "inReview"
+        ]
+      },
+      "AdminMoneyMerchantView": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "account": {
+            "type": "object",
+            "properties": {
+              "accountLast4": {
+                "type": "string"
+              },
+              "accountName": {
+                "type": "string"
+              },
+              "balance": {
+                "$ref": "#/components/schemas/AdminMoneyBalanceView"
+              }
+            },
+            "required": [
+              "accountLast4",
+              "accountName",
+              "balance"
+            ],
+            "nullable": true
+          },
+          "balanceUnavailable": {
+            "type": "string",
+            "nullable": true
+          },
+          "recordsNote": {
+            "type": "string"
+          },
+          "heldByKind": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyHeldByKindView"
+            }
+          },
+          "holds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyHeldView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "provider",
+          "account",
+          "recordsNote",
+          "heldByKind",
+          "holds",
+          "nextCursor"
+        ]
+      },
+      "AdminMoneyBreakdownView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "grossKobo": {
+            "type": "integer"
+          },
+          "unpricedCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "count",
+          "grossKobo",
+          "unpricedCount"
+        ]
+      },
+      "AdminMoneyStreamView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "rail": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "number"
+          },
+          "grossKobo": {
+            "type": "integer"
+          },
+          "unpricedCount": {
+            "type": "number"
+          },
+          "grossBasis": {
+            "type": "string"
+          },
+          "wawuKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "creatorsKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "refundedKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "breakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyBreakdownView"
+            },
+            "nullable": true
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "rail",
+          "source",
+          "statuses",
+          "count",
+          "grossKobo",
+          "unpricedCount",
+          "grossBasis",
+          "wawuKobo",
+          "creatorsKobo",
+          "refundedKobo"
+        ]
+      },
+      "AdminMoneyRevenueView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "window": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "window"
+            ]
+          },
+          "split": {
+            "type": "object",
+            "properties": {
+              "creatorsPercent": {
+                "type": "number"
+              },
+              "wawuPercent": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "creatorsPercent",
+              "wawuPercent"
+            ]
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMoneyStreamView"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "split",
+          "streams",
+          "note"
         ]
       },
       "OpenFxAccountDto": {

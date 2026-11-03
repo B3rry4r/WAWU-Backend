@@ -108,6 +108,9 @@ import {
   AddMoneyReturnController,
   MoneyAddMoneyController,
 } from './add-money/add-money.controller';
+import { AdminMoneyController } from './admin-money/admin-money.controller';
+import { AdminMoneyRevenueService } from './admin-money/admin-money-revenue.service';
+import { AdminMoneyWalletsService } from './admin-money/admin-money-wallets.service';
 import { AbroadAdminController } from './abroad/abroad-admin.controller';
 import { AbroadAdminService } from './abroad/abroad-admin.service';
 import { AbroadController } from './abroad/abroad.controller';
@@ -345,6 +348,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     // NUV-11: sending money abroad (R-84).
     AbroadController,
     AbroadAdminController,
+    AdminMoneyController,
     // WALLET-21 (R-83, R-84): foreign accounts, swaps and crypto sends, and the
     // admin reads and the freeze.
     FxController,
@@ -375,6 +379,8 @@ import { WalletCardService } from './cards/wallet-card.service';
     CardRevealLimitGuard,
     WalletCardPurge,
     AdminCardsService,
+    AdminMoneyWalletsService,
+    AdminMoneyRevenueService,
     WalletGate,
     WalletGateGuard,
     TransactionPinService,
