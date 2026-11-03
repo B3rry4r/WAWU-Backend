@@ -24,6 +24,7 @@ import {
   type PlansConfig,
 } from '../plans/plans-config';
 import { lockPersonTier, TierGrantService } from '../plans/tier-grant.service';
+import { giveTierPurchase } from '../plans/tier-purchase-grant';
 import {
   PACK_NOT_ALLOWED_FLAG,
   packRefusalFor,
@@ -242,60 +243,23 @@ export class StoreGrantService {
         const tier = tierById(this.plans, grants.tierId ?? '');
         if (tier === null)
           throw new Error(`Product ${product.id} names no tier.`);
-        await lockPersonTier(tx, userId);
-        const held = await tx.makerTier.findUnique({
-          where: { wawuUserId: userId },
-        });
-        const heldTier =
-          held !== null && held.activeUntil.getTime() > now.getTime()
-            ? tierById(this.plans, held.tierId)
-            : null;
-        // A bigger tier than the one that runs moves the person up (the same
-        // upgrade a wallet purchase makes). Anything else adds this tier's
-        // days to what runs: the store has been paid, so it is never refused.
-        const upgrade =
-          held !== null &&
-          heldTier !== null &&
-          held.tierId !== tier.id &&
-          priceIn(tier.price, 'NGN') > priceIn(heldTier.price, 'NGN');
-        const outcome = upgrade
-          ? await this.tierGrants.upgrade(tx, {
-              wawuUserId: userId,
-              fromTierId: held.tierId,
-              tierId: tier.id,
-              sourceRef: ref,
-              now,
-            })
-          : await this.tierGrants.grant(tx, {
-              wawuUserId: userId,
-              tierId: tier.id,
-              sourceRef: ref,
-              now,
-            });
-        await tx.makerPurchase.createMany({
-          data: [
-            {
-              paymentRef: ref,
-              wawuUserId: userId,
-              kind: upgrade
-                ? 'upgrade'
-                : held !== null && heldTier !== null && held.tierId === tier.id
-                  ? 'renew'
-                  : 'tier',
-              tierId: tier.id,
-              fromTierId: upgrade ? held.tierId : null,
-              bump: false,
-              currency: 'NGN',
-              amountMinor: purchase.referenceKobo ?? priceIn(tier.price, 'NGN'),
-              method: 'store',
-            },
-          ],
-          skipDuplicates: true,
-        });
+        const { outcome, upgrade, fromTierId } = await giveTierPurchase(
+          tx,
+          this.plans,
+          this.tierGrants,
+          {
+            wawuUserId: userId,
+            tierId: tier.id,
+            ref,
+            method: 'store',
+            amountMinor: purchase.referenceKobo ?? priceIn(tier.price, 'NGN'),
+            now,
+          },
+        );
         return {
           kind: 'tier',
           tierId: outcome.tierId,
-          fromTierId: upgrade ? held.tierId : null,
+          fromTierId: upgrade ? fromTierId : null,
           days: outcome.daysAdded > 0 ? outcome.daysAdded : tier.days,
           until: outcome.activeUntil.toISOString(),
           bonusPoints: outcome.pointsGranted,

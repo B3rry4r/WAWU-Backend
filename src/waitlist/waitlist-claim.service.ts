@@ -5,15 +5,13 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { PLANS_CONFIG, type PlansConfig } from '../plans/plans-config';
 import { PlansService } from '../plans/plans.service';
 import { TierGrantService } from '../plans/tier-grant.service';
+import { WaitlistClaimCore } from './waitlist-claim-core';
 import {
   holdsRegisteredContact,
   readAccessCode,
   verifiedContactsOf,
 } from './waitlist-claim-proof';
-import {
-  readStoredClaimResult,
-  type StoredClaimResult,
-} from './waitlist-claim-result';
+import { readStoredClaimResult } from './waitlist-claim-result';
 import { WaitlistError } from './waitlist-error';
 import type { WaitlistClaimView } from './waitlist-view.type';
 
@@ -48,8 +46,11 @@ const WORDS = {
  * registration: that it is a refunded extra payment, or already claimed.
  *
  * ── WHAT IT GIVES ────────────────────────────────────────────────────────
- * What the offer's tier gives (what Verify gives, R-48), its days counted
- * from the claim, through TierGrantService: the one place a plan is granted.
+ * What the registration's tier gives (a registration with none is the old
+ * offer's Verify, R-48), through the same grant a store purchase of that tier
+ * makes (WaitlistClaimCore, R-125): an upgrade of a smaller running tier,
+ * otherwise the days added, with the purchase record written. The automatic
+ * match (WaitlistAutoClaimService) runs the very same transaction.
  * A `failed` row (a second payment kept for a refund) is refused.
  *
  * ── ONCE, AND SAFE TO REPEAT ─────────────────────────────────────────────
@@ -75,13 +76,17 @@ const WORDS = {
 @Injectable()
 export class WaitlistClaimService {
   private readonly logger = new Logger(WaitlistClaimService.name);
+  /** The one claim transaction, shared with the automatic claim (WaitlistClaimCore). */
+  private readonly core: WaitlistClaimCore;
 
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(PLANS_CONFIG) private readonly plans: PlansConfig,
-    private readonly grants: TierGrantService,
+    @Inject(PLANS_CONFIG) plans: PlansConfig,
+    grants: TierGrantService,
     private readonly tiers: PlansService,
-  ) {}
+  ) {
+    this.core = new WaitlistClaimCore(prisma, plans, grants);
+  }
 
   /** POST /waitlist/claims. */
   async claim(
@@ -118,49 +123,11 @@ export class WaitlistClaimService {
       throw new WaitlistError('code_refunded', WORDS.refunded);
     if (row.claimedByWawuId !== null) return this.answerClaimed(user, row, now);
 
-    const offer = this.plans.eventOffers.find((o) => o.id === row.offerId);
-    if (offer === undefined)
+    const goods = this.core.goodsOf(row);
+    if (goods === null)
       throw new WaitlistError('offer_unavailable', WORDS.offerGone);
 
-    const outcome = await this.prisma.$transaction(async (tx) => {
-      const claimed = await tx.waitlistRegistration.updateMany({
-        where: {
-          id: row.id,
-          status: WaitlistStatus.paid,
-          claimedByWawuId: null,
-        },
-        data: { claimedByWawuId: user.sub, claimedAt: now },
-      });
-      if (claimed.count === 0) {
-        // Lost the race to another tap: the row is claimed now, and by whom
-        // decides the answer below. Nothing was written here.
-        return {
-          kind: 'taken' as const,
-          current: await tx.waitlistRegistration.findUniqueOrThrow({
-            where: { id: row.id },
-          }),
-        };
-      }
-      const granted = await this.grants.grant(tx, {
-        wawuUserId: user.sub,
-        tierId: offer.tier,
-        sourceRef: `join:${row.id}`,
-        days: offer.tierDays,
-        now,
-      });
-      const told: StoredClaimResult = {
-        offerName: offer.name,
-        days: granted.daysAdded,
-        extended: granted.extended,
-        pointsGranted: granted.pointsGranted,
-        pointsExpireAt: granted.pointsExpireAt?.toISOString() ?? null,
-      };
-      await tx.waitlistRegistration.update({
-        where: { id: row.id },
-        data: { claimResult: told },
-      });
-      return { kind: 'claimed' as const, told };
-    });
+    const outcome = await this.core.claimRow(user.sub, row, goods, 'code', now);
 
     if (outcome.kind === 'taken')
       return this.answerClaimed(user, outcome.current, now);

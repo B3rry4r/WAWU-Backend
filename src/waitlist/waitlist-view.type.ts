@@ -23,6 +23,38 @@ export interface WaitlistOfferView {
   closesAt: string | null;
 }
 
+/** One tier on the /join page (GET /waitlist/tiers): the app's own figures, read live from the plan settings. */
+export interface WaitlistTierView {
+  id: string;
+  name: string;
+  /** What the tier costs on /join, in whole kobo: the app's live price. */
+  priceKobo: number;
+  /** How long it lasts, in days. */
+  days: number;
+  /** Products it lets a person publish. */
+  products: number;
+  /** Bonus points the tier adds. */
+  bonusPoints: number;
+  /** The event pass it issues. */
+  eventPass: { id: string; name: string; benefits?: string[] | null };
+  /** The badge it carries; `numbered` is Founding's numbered badge. */
+  badge: { id: string; numbered: boolean };
+  /** Extra points on points packs bought on this tier, in percent. */
+  packBonusPercent: number;
+  /** The first Voice Intro is included. */
+  firstVoiceIntroIncluded: boolean;
+  /** The one the page preselects ("Best"): the app preselects Founding. */
+  best: boolean;
+}
+
+/** GET /waitlist/tiers: what /join sells. */
+export interface WaitlistTiersView {
+  currency: 'NGN';
+  tiers: WaitlistTierView[];
+  /** The tier id the page preselects. */
+  bestTier: string | null;
+}
+
 /** The Flutterwave checkout settings the page opens the payment with. */
 export interface WaitlistCheckoutView {
   publicKey: string;
@@ -63,6 +95,8 @@ export interface WaitlistRegistrationStartView {
   completed?: WaitlistRegistrationCompletedView;
   /** Present only when a referral code was sent: what became of it. */
   referral?: WaitlistReferralOutcomeView;
+  /** Present only when the registration named a tier (R-125): the tier it pays for. */
+  tier?: string;
 }
 
 export type WaitlistRegistrationStatus = 'pending' | 'paid' | 'failed';
@@ -139,6 +173,10 @@ export interface AdminWaitlistRegistrationView {
   referralCode: string | null;
   /** The code's community when the person registered; null with `referralCode`. */
   referralCommunity: string | null;
+  /** The tier it paid for (verify, plus, founding); null is an older page's registration: the old offer's Verify (R-125). */
+  tier: string | null;
+  /** How it was claimed: `code` (typed in the app) or `auto` (the server matched a proven email or phone); null until claimed. */
+  claimedVia: string | null;
 }
 
 /** The CSV file the team downloads. */

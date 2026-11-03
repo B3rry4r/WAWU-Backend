@@ -21,8 +21,11 @@ import {
   type EventOffer,
   INT4_MAX,
   PLANS_CONFIG,
+  priceIn,
+  tierById,
   type PlansConfig,
 } from '../plans/plans-config';
+import { planIn } from '../plans/plans.service';
 import type {
   AdminWaitlistListQueryDto,
   CreateWaitlistRegistrationDto,
@@ -50,6 +53,7 @@ import { ReferralService } from './referral/referral.service';
 import type {
   AdminWaitlistSplitRowView,
   AdminWaitlistSummaryView,
+  AdminWaitlistTierRowView,
   WaitlistReferralCheckView,
   WaitlistReferralOutcomeView,
 } from './referral/referral-view.type';
@@ -69,6 +73,7 @@ import type {
   WaitlistOfferView,
   WaitlistRegistrationStartView,
   WaitlistRegistrationStatusView,
+  WaitlistTiersView,
 } from './waitlist-view.type';
 
 const KOBO_PER_NAIRA = 100;
@@ -216,6 +221,72 @@ export class WaitlistService {
     return this.offerView(open);
   }
 
+  /**
+   * The tier a registration or a code check names (R-125), with the live price
+   * the app charges for it, in whole kobo. Null when none was named (an older
+   * page): everything then stays as it was. A tier the plans file does not
+   * sell is refused.
+   */
+  private chosenTier(
+    id: string | undefined | null,
+  ): { id: string; priceKobo: number } | null {
+    if (id === undefined || id === null || id === '') return null;
+    const tier = tierById(this.plans, id);
+    if (tier === null)
+      throw new WaitlistError(
+        'tier_invalid',
+        'Choose one of the plans on the page.',
+      );
+    return { id: tier.id, priceKobo: priceIn(tier.price, 'NGN') };
+  }
+
+  /**
+   * Whether a code prices the tier being bought. A code bound to a tier prices
+   * that one; a code bound to none prices the offer's own tier (Verify), the
+   * only thing codes ever priced, so no older code can discount Plus or
+   * Founding (R-125).
+   */
+  private codeFitsTier(
+    code: { tier: string | null },
+    offer: EventOffer,
+    tier: { id: string } | null,
+  ): boolean {
+    return (code.tier ?? offer.tier) === (tier?.id ?? offer.tier);
+  }
+
+  /**
+   * GET /waitlist/tiers (R-125): the plans /join sells, with the app's own
+   * figures read live from the plan settings, the same ones `GET /plans`
+   * answers a signed-in phone. Public, naira only.
+   */
+  tiers(): WaitlistTiersView {
+    const plan = planIn(this.plans, 'NGN');
+    const best = plan.tiers.find((t) => t.preselected)?.id ?? null;
+    return {
+      currency: 'NGN',
+      bestTier: best,
+      tiers: plan.tiers.map((t) => ({
+        id: t.id,
+        name: t.name,
+        priceKobo: t.priceMinor,
+        days: t.days,
+        products: t.products,
+        bonusPoints: t.bonusPoints,
+        eventPass: {
+          id: t.eventPass.id,
+          name: t.eventPass.name,
+          ...(t.eventPass.benefits !== undefined
+            ? { benefits: t.eventPass.benefits }
+            : {}),
+        },
+        badge: { ...t.badge },
+        packBonusPercent: t.packBonusPercent,
+        firstVoiceIntroIncluded: t.firstVoiceIntroIncluded,
+        best: t.id === best,
+      })),
+    };
+  }
+
   // ---- register -----------------------------------------------------------
 
   /** POST /waitlist/registrations. */
@@ -276,6 +347,10 @@ export class WaitlistService {
       );
     const state = tidy(dto.state)?.slice(0, SHORT_TEXT_MAX) ?? null;
     const makes = tidy(dto.makes)?.slice(0, SHORT_TEXT_MAX) ?? null;
+    // The tier being bought (R-125); null from an older page, which then pays
+    // the offer's price for the offer's tier exactly as before.
+    const tier = this.chosenTier(dto.tier);
+    const standardKobo = tier?.priceKobo ?? offer.priceKobo;
 
     // Before any charge: this phone or email already paid for the offer.
     const paid = await this.prisma.waitlistRegistration.findFirst({
@@ -301,13 +376,14 @@ export class WaitlistService {
         referralCode,
         offer,
         { fullName, phone, email, state, makes, dto },
+        tier,
         now,
         address,
       );
 
     // The checkout needs the public key; without it the page could not pay.
     const charge = this.flutterwave.initCharge({
-      amount: offer.priceKobo / KOBO_PER_NAIRA,
+      amount: standardKobo / KOBO_PER_NAIRA,
       purpose: 'waitlist',
       wawuUserId: 'waitlist',
     });
@@ -353,7 +429,8 @@ export class WaitlistService {
             updatesOptIn: dto.updatesOptIn ?? null,
             consentAt: now,
             reference: newReference(this.random),
-            amountKobo: offer.priceKobo,
+            amountKobo: standardKobo,
+            ...(tier !== null ? { tier: tier.id } : {}),
           },
         });
       } catch (e) {
@@ -383,6 +460,7 @@ export class WaitlistService {
         customerEmail: row.email,
         customerPhone: row.phone,
       },
+      ...(row.tier !== null ? { tier: row.tier } : {}),
     };
   }
 
@@ -440,6 +518,7 @@ export class WaitlistService {
       makes: string | null;
       dto: CreateWaitlistRegistrationDto;
     },
+    tier: { id: string; priceKobo: number } | null,
     now: Date,
     address?: string,
   ): Promise<WaitlistRegistrationStartView> {
@@ -451,13 +530,22 @@ export class WaitlistService {
         const made = await this.prisma.$transaction(async (tx) => {
           const locked = await this.referrals.lock(tx, code);
           if (locked === null) throw this.referralUnknown(address, now);
-          const decision = await this.referrals.decide(tx, locked, now, {
+          const counted = await this.referrals.decide(tx, locked, now, {
             phone: person.phone,
             email: person.email,
           });
+          // A code prices one tier (R-125): for another it is not applied.
+          const decision: typeof counted = !this.codeFitsTier(
+            locked,
+            offer,
+            tier,
+          )
+            ? { applied: false, reason: 'other_tier' }
+            : counted;
+          const standardKobo = tier?.priceKobo ?? offer.priceKobo;
           const price = decision.applied
-            ? Math.min(locked.priceKobo, offer.priceKobo)
-            : offer.priceKobo;
+            ? Math.min(locked.priceKobo, standardKobo)
+            : standardKobo;
           // A free registration needs no checkout, so no public key either.
           let checkout: WaitlistCheckoutView | null = null;
           if (price > 0) {
@@ -495,6 +583,7 @@ export class WaitlistService {
               consentAt: now,
               reference: newReference(this.random),
               amountKobo: price,
+              ...(tier !== null ? { tier: tier.id } : {}),
               ...(decision.applied
                 ? {
                     referralCode: locked.code,
@@ -528,6 +617,7 @@ export class WaitlistService {
               accessCode: accessCodeLabel(row.accessCode),
             },
             referral,
+            ...(row.tier !== null ? { tier: row.tier } : {}),
           };
         }
         return {
@@ -536,6 +626,7 @@ export class WaitlistService {
           amountKobo: row.amountKobo,
           flutterwaveConfig: { ...checkout, txRef: row.reference },
           referral,
+          ...(row.tier !== null ? { tier: row.tier } : {}),
         };
       } catch (e) {
         if (!isUniqueViolation(e)) throw e;
@@ -575,6 +666,7 @@ export class WaitlistService {
     raw: string,
     now: Date = new Date(),
     address?: string,
+    tierId?: string,
   ): Promise<WaitlistReferralCheckView> {
     this.probes.assertOpen(address, now);
     const code = readReferralCode(raw);
@@ -586,6 +678,39 @@ export class WaitlistService {
         'no_open_offer',
         'There is no event registration open right now.',
       );
+    // With `?tier=` (R-125) the answer is for that tier: its price, and a code
+    // that prices another tier is not applied. Without it, as it always was.
+    if (tierId !== undefined && tierId !== '') {
+      const tier = this.chosenTier(tierId)!;
+      const forTier = row.tier ?? offer.tier;
+      if (!this.codeFitsTier(row, offer, tier))
+        return {
+          code,
+          applies: false,
+          reason: 'other_tier',
+          priceKobo: tier.priceKobo,
+          tier: tier.id,
+          forTier,
+          message: `This code is for the ${tierById(this.plans, forTier)?.name ?? forTier} plan only. ${tierById(this.plans, tier.id)?.name ?? tier.id} is full price.`,
+        };
+      const counted = await this.referrals.decide(this.prisma, row, now);
+      return counted.applied
+        ? {
+            code,
+            applies: true,
+            priceKobo: Math.min(row.priceKobo, tier.priceKobo),
+            tier: tier.id,
+            forTier,
+          }
+        : {
+            code,
+            applies: false,
+            reason: counted.reason,
+            priceKobo: tier.priceKobo,
+            tier: tier.id,
+            forTier,
+          };
+    }
     const decision = await this.referrals.decide(this.prisma, row, now);
     return decision.applied
       ? {
@@ -831,6 +956,8 @@ export class WaitlistService {
       createdAt: row.createdAt.toISOString(),
       referralCode: row.referralCode,
       referralCommunity: row.referralCommunity,
+      tier: row.tier,
+      claimedVia: row.claimedVia,
     };
   }
 
@@ -844,6 +971,7 @@ export class WaitlistService {
     status?: WaitlistStatus;
     referralCode?: string;
     noReferral?: boolean;
+    tier?: string;
   }): Prisma.WaitlistRegistrationWhereInput {
     if (filter.referralCode && filter.noReferral)
       throw new BadRequestException(
@@ -860,6 +988,9 @@ export class WaitlistService {
           }
         : {}),
       ...(filter.noReferral ? { referralCode: null } : {}),
+      ...(filter.tier
+        ? { tier: filter.tier === 'none' ? null : filter.tier }
+        : {}),
     };
   }
 
@@ -891,6 +1022,7 @@ export class WaitlistService {
     status?: WaitlistStatus;
     referralCode?: string;
     noReferral?: boolean;
+    tier?: string;
   }): AsyncGenerator<WaitlistRegistration> {
     const where = this.adminWhere(filter);
     let cursor: string | undefined;
@@ -920,31 +1052,62 @@ export class WaitlistService {
     now: Date = new Date(),
   ): Promise<AdminWaitlistSummaryView> {
     const offer = filter.offerId ? { offerId: filter.offerId } : {};
-    const [paid, failed, unpaid, byCode, codes] = await Promise.all([
-      this.prisma.waitlistRegistration.aggregate({
-        where: { ...offer, status: WaitlistStatus.paid },
-        _count: { _all: true },
-        _sum: { paidKobo: true },
-      }),
-      this.prisma.waitlistRegistration.aggregate({
-        where: { ...offer, status: WaitlistStatus.failed },
-        _count: { _all: true },
-        _sum: { paidKobo: true },
-      }),
-      this.prisma.waitlistRegistration.count({
-        where: { ...offer, status: WaitlistStatus.pending },
-      }),
-      this.prisma.waitlistRegistration.groupBy({
-        by: ['referralCode'],
-        where: { ...offer, status: WaitlistStatus.paid },
-        _count: { _all: true },
-        _sum: { paidKobo: true },
-      }),
-      this.prisma.referralCode.findMany({
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { code: true, community: true },
-      }),
-    ]);
+    const [paid, failed, unpaid, byCode, codes, byTierRows, claimedByTier] =
+      await Promise.all([
+        this.prisma.waitlistRegistration.aggregate({
+          where: { ...offer, status: WaitlistStatus.paid },
+          _count: { _all: true },
+          _sum: { paidKobo: true },
+        }),
+        this.prisma.waitlistRegistration.aggregate({
+          where: { ...offer, status: WaitlistStatus.failed },
+          _count: { _all: true },
+          _sum: { paidKobo: true },
+        }),
+        this.prisma.waitlistRegistration.count({
+          where: { ...offer, status: WaitlistStatus.pending },
+        }),
+        this.prisma.waitlistRegistration.groupBy({
+          by: ['referralCode'],
+          where: { ...offer, status: WaitlistStatus.paid },
+          _count: { _all: true },
+          _sum: { paidKobo: true },
+        }),
+        this.prisma.referralCode.findMany({
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { code: true, community: true },
+        }),
+        this.prisma.waitlistRegistration.groupBy({
+          by: ['tier'],
+          where: { ...offer, status: WaitlistStatus.paid },
+          _count: { _all: true },
+          _sum: { paidKobo: true },
+        }),
+        this.prisma.waitlistRegistration.groupBy({
+          by: ['tier'],
+          where: {
+            ...offer,
+            status: WaitlistStatus.paid,
+            claimedByWawuId: { not: null },
+          },
+          _count: { _all: true },
+        }),
+      ]);
+    const claimedBy = new Map(
+      claimedByTier.map((g) => [g.tier, g._count._all]),
+    );
+    const byTier: AdminWaitlistTierRowView[] = [
+      ...this.plans.tiers.map((t) => t.id),
+      null,
+    ].map((id) => {
+      const g = byTierRows.find((r) => r.tier === id);
+      return {
+        tier: id,
+        people: g?._count._all ?? 0,
+        kobo: g?._sum.paidKobo ?? 0,
+        claimed: claimedBy.get(id) ?? 0,
+      };
+    });
     const paidBy = new Map(byCode.map((g) => [g.referralCode, g]));
     const split: AdminWaitlistSplitRowView[] = codes.map((c) => ({
       code: c.code,
@@ -965,6 +1128,7 @@ export class WaitlistService {
       failed: { people: failed._count._all, kobo: failed._sum.paidKobo ?? 0 },
       unpaid,
       split,
+      byTier,
       generatedAt: now.toISOString(),
     };
   }

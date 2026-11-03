@@ -6,10 +6,12 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
+import { WaitlistAutoClaimInterceptor } from '../waitlist/waitlist-auto-claim.interceptor';
 import type { TierOfferSeenView, TierOfferView } from './plans-view.type';
 import { TierOfferService } from './tier-offer.service';
 
@@ -25,6 +27,7 @@ export class TierOfferController {
 
   /** Whether to draw the offer now, and whether it has its close X. `no-store`: the answer is the caller's own. */
   @Get()
+  @UseInterceptors(WaitlistAutoClaimInterceptor)
   @Header('Cache-Control', 'no-store')
   get(@CurrentUser() user: WawuJwtClaims): Promise<TierOfferView> {
     return this.offer.view(user.sub);

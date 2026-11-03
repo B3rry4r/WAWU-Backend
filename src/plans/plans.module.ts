@@ -12,6 +12,9 @@ import { PublishingAllowanceService } from './publishing-allowance.service';
 import { PublishingGate } from './publishing-gate.service';
 import { PublishingOffersInterceptor } from './publishing-offers.interceptor';
 import { TierGrantService } from './tier-grant.service';
+import { WaitlistAutoClaimInterceptor } from '../waitlist/waitlist-auto-claim.interceptor';
+import { WaitlistAutoClaimService } from '../waitlist/waitlist-auto-claim.service';
+import { WaitlistClaimCore } from '../waitlist/waitlist-claim-core';
 import { TierOfferController } from './tier-offer.controller';
 import { TierOfferService } from './tier-offer.service';
 
@@ -63,6 +66,10 @@ import { TierOfferService } from './tier-offer.service';
     PublishingOffersInterceptor,
     TierGrantService,
     TierOfferService,
+    // JOIN-TIERS-HUB: the automatic claim of a paid /join registration, run on the two tier reads.
+    WaitlistAutoClaimInterceptor,
+    WaitlistAutoClaimService,
+    WaitlistClaimCore,
   ],
   exports: [
     // Re-exports PLANS_CONFIG (the live plan) and PlanSettingsService.
@@ -75,6 +82,7 @@ import { TierOfferService } from './tier-offer.service';
     PublishingGate,
     PublishingOffersInterceptor,
     TierGrantService,
+    WaitlistClaimCore,
   ],
 })
 export class PlansModule {}
