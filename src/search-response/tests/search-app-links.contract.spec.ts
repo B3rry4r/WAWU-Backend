@@ -328,9 +328,16 @@ describe('GET /search serves signed links to the app and the stored values to th
 
   /** What the Hub answered for a piece before this task: the row as stored, with the lock decided. No coverKey. */
   async function asBefore(id: string, locked: boolean): Promise<string> {
-    const { coverKey: _coverKey, ...row } =
-      await prisma.contentPiece.findUniqueOrThrow({ where: { id } });
+    // WEB-HOLD (R-126): `uploadedVia` and `heldForWalletAt` are columns the Hub keeps and never serves, like `coverKey`.
+    const {
+      coverKey: _coverKey,
+      uploadedVia: _via,
+      heldForWalletAt: _held,
+      ...row
+    } = await prisma.contentPiece.findUniqueOrThrow({ where: { id } });
     void _coverKey;
+    void _via;
+    void _held;
     return JSON.stringify({
       ...row,
       fullAssetUrl: locked ? null : row.fullAssetUrl,

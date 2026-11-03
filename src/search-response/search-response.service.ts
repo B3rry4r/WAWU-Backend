@@ -361,14 +361,17 @@ export class SearchResponseService {
     // key or as a link that dies a week after upload. The web's answer keeps every byte, stored values included.
     const withApp = isAppRequest();
     return Promise.all(
-      items.map(async ({ coverKey, ...item }) => {
+      // WEB-HOLD (R-126): `uploadedVia` and `heldForWalletAt` are never served; the web's answer keeps every other byte.
+      items.map(async ({ coverKey, uploadedVia, heldForWalletAt, ...item }) => {
+        void uploadedVia;
+        void heldForWalletAt;
         const isFree = item.accessType === 'free';
         const locked = !isFree && !unlockedSet.has(item.id);
         const piece = {
           ...item,
           fullAssetUrl: locked ? null : item.fullAssetUrl,
           fullAssetLocked: locked,
-        };
+        } as ContentPieceResponse;
         if (!withApp) return piece;
         const [previewAssetUrl, fullAssetUrl, coverUrl] = await Promise.all([
           this.fresh(item.previewAssetUrl),
