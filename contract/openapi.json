@@ -45748,6 +45748,19 @@
             }
           },
           {
+            "name": "ended",
+            "required": false,
+            "in": "query",
+            "description": "`hide` or `only` the ended bookings. A draft never counts as ended.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hide",
+                "only"
+              ]
+            }
+          },
+          {
             "name": "from",
             "required": false,
             "in": "query",
@@ -45884,6 +45897,19 @@
               "type": "string",
               "enum": [
                 "missing"
+              ]
+            }
+          },
+          {
+            "name": "ended",
+            "required": false,
+            "in": "query",
+            "description": "`hide` or `only` the ended bookings. A draft never counts as ended.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hide",
+                "only"
               ]
             }
           },

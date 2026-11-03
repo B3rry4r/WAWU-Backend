@@ -41,6 +41,11 @@ const DESTINATIONS = Object.values(AdCtaDestination);
 const PHASES = ['upcoming', 'running', 'over'] as const;
 /** `missing`: the campaigns that still need artwork (saved before R-59 without any, not ended). */
 const ARTWORK_FILTERS = ['missing'] as const;
+/**
+ * `hide`: leave out the ended bookings (ended by hand, or on air once and past
+ * their window). `only`: just those. Left out: every booking, as before.
+ */
+const ENDED_FILTERS = ['hide', 'only'] as const;
 
 /**
  * Event ids are uuids, but the version is not pinned: ids already stored are
@@ -270,6 +275,11 @@ export class AdCampaignFilterDto {
   @IsIn(ARTWORK_FILTERS)
   artwork?: (typeof ARTWORK_FILTERS)[number];
 
+  /** `hide` or `only` the ended bookings. A draft never counts as ended. */
+  @IsOptional()
+  @IsIn(ENDED_FILTERS)
+  ended?: (typeof ENDED_FILTERS)[number];
+
   @IsOptional()
   @IsUtcInstant('from')
   from?: string;
@@ -300,6 +310,11 @@ export class AdCampaignListQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(ARTWORK_FILTERS)
   artwork?: (typeof ARTWORK_FILTERS)[number];
+
+  /** `hide` or `only` the ended bookings. A draft never counts as ended. */
+  @IsOptional()
+  @IsIn(ENDED_FILTERS)
+  ended?: (typeof ENDED_FILTERS)[number];
 
   @IsOptional()
   @IsUtcInstant('from')

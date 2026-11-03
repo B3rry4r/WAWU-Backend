@@ -1054,9 +1054,31 @@ export class AdminAdsService {
     }
     if (f.phase) and.push(this.phaseWhere(f.phase, now));
     if (f.artwork === 'missing') and.push(NEEDS_ARTWORK_WHERE);
+    if (f.ended) and.push(this.endedWhere(f.ended, now));
     if (from) and.push({ endsAt: { gt: from } });
     if (to) and.push({ startsAt: { lt: to } });
     return and.length === 0 ? {} : { AND: and };
+  }
+
+  /**
+   * Ended is the Hub's word: status `ended`, or a booking that was put on air
+   * (scheduled, live or paused) and whose window has closed on the server's
+   * clock. A draft never ran, so it is never ended and stays listed.
+   */
+  private endedWhere(
+    mode: 'hide' | 'only',
+    now: Date,
+  ): Prisma.AdCampaignWhereInput {
+    const ended: Prisma.AdCampaignWhereInput = {
+      OR: [
+        { status: 'ended' },
+        {
+          status: { in: ['scheduled', 'live', 'paused'] },
+          endsAt: { lte: now },
+        },
+      ],
+    };
+    return mode === 'only' ? ended : { NOT: ended };
   }
 
   private phaseWhere(phase: AdPhase, now: Date): Prisma.AdCampaignWhereInput {
