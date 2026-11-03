@@ -12,7 +12,7 @@ export type ContentPiece = ContentPieceModel;
  */
 export type ContentPieceResponse = Omit<
   ContentPiece,
-  'fullAssetUrl' | 'coverKey'
+  'fullAssetUrl' | 'coverKey' | 'uploadedVia' | 'heldForWalletAt'
 > & {
   fullAssetUrl: string | null;
   fullAssetLocked: boolean;

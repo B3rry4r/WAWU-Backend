@@ -22,6 +22,7 @@ import {
   type AdminContentDetailView,
   type AdminContentQueueItemView,
 } from './admin-content-view.type';
+import { approvalOutcome } from '../../content-piece/wallet-hold';
 import type { AdminContentQueueQueryDto } from './dto/admin-content-queue-query.dto';
 import type { RejectContentDto } from './dto/reject-content.dto';
 import type { TakeDownContentDto } from './dto/take-down-content.dto';
@@ -30,6 +31,10 @@ import type { TakeDownContentDto } from './dto/take-down-content.dto';
 const SIGNED_URL_TTL_SECONDS = 900;
 
 const MS_PER_HOUR = 3_600_000;
+
+/** WEB-HOLD (R-126): what the audit row says when an approval is held for the creator's wallet. */
+const HELD_FOR_WALLET_NOTE =
+  'Approved. Waiting for the creator to open their wallet.';
 
 /**
  * How many times a decision reads the piece again when its status moved
@@ -89,8 +94,11 @@ export class AdminContentReviewService {
     const creatorsInPlace =
       (await this.places?.idsInPlace(query.countryCode, query.regionCode)) ??
       null;
+    // WEB-HOLD (R-126): a piece a moderator approved that is waiting for its creator's wallet is not waiting on a human. The
+    // queue leaves it out; `held=only` lists exactly those, separately.
     const where = {
       status: 'pending' as const,
+      heldForWalletAt: query.held === 'only' ? { not: null } : null,
       ...(creatorsInPlace !== null
         ? { creatorWawuId: { in: creatorsInPlace } }
         : {}),
@@ -308,9 +316,24 @@ export class AdminContentReviewService {
         );
       }
 
+      // WEB-HOLD (R-126): a piece from the new web upload flow goes live on approval only when its creator has an open wallet;
+      // otherwise it is recorded as approved and waiting, and stays pending (in no public read) until the wallet opens.
+      const outcome =
+        decision === 'approved'
+          ? await approvalOutcome(tx, existing)
+          : ('live' as const);
+      if (outcome === 'held' && existing.heldForWalletAt !== null) {
+        throw new BadRequestException(
+          'This piece is already approved and is waiting for its creator to open their wallet.',
+        );
+      }
+      const held = outcome === 'held';
+
       const claimed = await tx.contentPiece.updateMany({
         where: { id, status: 'pending' },
-        data: { status: newStatus },
+        data: held
+          ? { heldForWalletAt: new Date() }
+          : { status: newStatus, heldForWalletAt: null },
       });
       if (claimed.count === 0) {
         throw new BadRequestException(
@@ -338,8 +361,8 @@ export class AdminContentReviewService {
           creatorWawuId: existing.creatorWawuId,
           decision,
           previousStatus: existing.status,
-          newStatus,
-          reason,
+          newStatus: held ? 'pending' : newStatus,
+          reason: held ? HELD_FOR_WALLET_NOTE : reason,
           slotReturned,
           // Email and role are snapshotted, not joined: "who approved this"
           // has to stay answerable after the admin is renamed or deleted.

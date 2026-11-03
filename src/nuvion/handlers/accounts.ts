@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import type { WalletReadyTeller } from '../../money/opening/wallet-ready-notice';
+import { releaseHeldPieces } from '../../content-piece/wallet-hold';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import {
   isNuvionId,
@@ -476,6 +477,8 @@ export class NuvionAccountRecorder {
           },
           data: { state: 'open', failure: null },
         });
+        // WEB-HOLD (R-126): pieces held for this person's wallet go live in the same transaction.
+        await releaseHeldPieces(tx, entity.wawuUserId);
         // WALLET-40: the number reaches the person here, after the opening
         // began, so they are told once. This is the only place a Nuvion
         // wallet row is created, inside the transaction that holds the

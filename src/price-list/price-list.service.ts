@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { MoneyError } from '../money/money-error';
-import { isAppRequest } from './app-client';
+import { isAppRequest, isSiteRequest } from './app-client';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import {
   PRICE_LIST_KEY,
@@ -84,7 +84,8 @@ export class PriceListService {
   forThisRequest(): {
     assertOnList(priceNaira: number, options?: { allowFree?: boolean }): void;
   } {
-    const app = isAppRequest();
+    // WEB-HOLD (R-126): the new web upload flow (`X-Wawu-Client: site`) is held to the same list as the app.
+    const app = isAppRequest() || isSiteRequest();
     return {
       assertOnList: (priceNaira, options = {}) => {
         if (app) this.assertOnList(priceNaira, options);
