@@ -15,6 +15,7 @@ import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filt
 import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { loadPlansConfig, PLANS_CONFIG } from '../../../plans/plans-config';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import { AdminMoneyController } from '../admin-money.controller';
 import { AdminMoneyRevenueService } from '../admin-money-revenue.service';
@@ -35,6 +36,7 @@ const BASE = '/api/hub/admin/money';
 /** The provider double: balances by wallet id, errors by wallet id, a counter. */
 const balances = new Map<string, bigint>();
 const failing = new Set<string>();
+const slow = new Set<string>();
 const asked: string[] = [];
 let platform: { available: bigint; booked: bigint } | 'down' = {
   available: 0n,
@@ -45,6 +47,7 @@ const providerDouble = {
   label: 'Nuvion',
   getBalance: ({ walletId }: { walletId: string }) => {
     asked.push(walletId);
+    if (slow.has(walletId)) return new Promise(() => undefined);
     if (failing.has(walletId)) return Promise.reject(new Error('timeout'));
     const v = balances.get(walletId);
     if (v === undefined) return Promise.reject(new Error('unknown wallet'));
@@ -68,6 +71,7 @@ const providerDouble = {
     AdminMoneyWalletsService,
     AdminMoneyRevenueService,
     { provide: WALLET_PROVIDER, useValue: providerDouble },
+    { provide: PLANS_CONFIG, useFactory: () => loadPlansConfig() },
   ],
 })
 class UnderTestModule {}
@@ -78,6 +82,7 @@ interface Json {
 
 describe('Admin: the app’s money (DASH-B-HUB)', () => {
   let app: INestApplication<App>;
+  let moduleRef: TestingModule;
   let prisma: PrismaService;
   const previous: Record<string, string | undefined> = {};
   const adminIds: string[] = [];
@@ -174,7 +179,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       previous[k] = process.env[k];
       process.env[k] = v;
     }
-    const moduleRef: TestingModule = await Test.createTestingModule({
+    moduleRef = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         PrismaModule,
@@ -250,6 +255,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
   beforeEach(() => {
     asked.length = 0;
     failing.clear();
+    slow.clear();
   });
 
   describe('who may read', () => {
@@ -389,6 +395,31 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       expect(byId[bad.id]).not.toHaveProperty('balance');
       expect(byId[bad.id].balanceUnavailable).toMatch(/did not answer/);
       expect(byId[bad.id].balanceUnavailable).not.toMatch(/—/);
+    });
+
+    it('withBalance: a row still waiting at the page deadline gets a reason and no figure', async () => {
+      const fast = await wallet('slowp', {
+        balance: 4_200n,
+        at: new Date(Date.now() - 1000),
+      });
+      const stuck = await wallet('slowp', { balance: 9_900n });
+      slow.add(stuck.walletId);
+      const svc = moduleRef.get(AdminMoneyWalletsService);
+      svc.balanceDeadlineMs = 300;
+      const t0 = Date.now();
+      const res = await get(
+        `${BASE}/wallets?q=slowp${RUN}&withBalance=true`,
+      ).expect(200);
+      svc.balanceDeadlineMs = 20_000;
+      expect(Date.now() - t0).toBeLessThan(3_000);
+      const byId = Object.fromEntries(
+        (res.body as Json).data.items.map((i: any) => [i.wawuId, i]),
+      );
+      expect(byId[fast.id].balance.availableKobo).toBe(4_200);
+      expect(byId[stuck.id]).not.toHaveProperty('balance');
+      expect(byId[stuck.id].balanceUnavailable).toBe(
+        'Nuvion did not answer in time',
+      );
     });
 
     it('withBalance caps the page at 25', async () => {
@@ -598,6 +629,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       // A tip with a stored split; a bill that is all WAWU's.
       await payment('tip', { price: 5_000n, completedAt: inside });
       await payment('bill', { price: 7_000n, payee: 0n, completedAt: inside });
+      await payment('paid_dm', { price: 10_000n, completedAt: inside });
       // A paid DM that was refunded: counted when paid, the refund shown beside it.
       const dm = await payment('paid_dm', {
         price: 15_000n,
@@ -628,14 +660,15 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       const mkProduct = async (
         platformName: 'ios' | 'android',
         kind: StoreProductKind,
+        grants: object = {},
       ) => {
         const p = await prisma.storeProduct.create({
           data: {
             platform: platformName,
-            storeProductId: `dashb.${RUN}.${platformName}.${kind}`,
+            storeProductId: `dashb.${RUN}.${platformName}.${kind}.${randomUUID().slice(0, 6)}`,
             kind,
             title: 'dashb',
-            grants: {},
+            grants,
           },
         });
         productIds.push(p.id);
@@ -648,7 +681,13 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
           kind: StoreProductKind;
           storeProductId: string;
         },
-        o: { ref: number | null; at: Date; status?: 'granted' | 'refunded' },
+        o: {
+          ref: number | null;
+          at: Date;
+          status?: 'granted' | 'refunded';
+          micros?: bigint;
+          currency?: string;
+        },
       ) =>
         prisma.storePurchase.create({
           data: {
@@ -661,18 +700,41 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
             environment: 'sandbox',
             grant: {},
             referenceKobo: o.ref,
+            priceMicros: o.micros ?? null,
+            currency: o.currency ?? null,
             storeFeeBps: 1500,
             purchasedAt: o.at,
           },
         });
       const iosBuy = await mkProduct('ios', 'buy');
-      const iosTier = await mkProduct('ios', 'tier');
+      const iosTier = await mkProduct('ios', 'tier', { tierId: 'plus' });
+      const iosPoints = await mkProduct('ios', 'points', { packId: 's' });
+      const iosCredits = await mkProduct('ios', 'credits');
       const andCredits = await mkProduct('android', 'credits');
-      await sale(iosBuy, { ref: 100_000, at: inside });
+      // One row of each basis. (a) the store's own naira charge wins over the recorded price.
+      await sale(iosBuy, {
+        ref: 100_000,
+        at: inside,
+        micros: 1_500_000_000n,
+        currency: 'NGN',
+      });
+      // (b) the recorded list price.
       await sale(iosBuy, { ref: 200_000, at: new Date(FROM) });
-      await sale(iosBuy, { ref: 900_000, at: new Date(TO) });
-      await sale(iosBuy, { ref: 800_000, at: inside, status: 'refunded' });
+      // (c) today's list price from the live plan (plus 599900) and plan-settings pack s (100000).
       await sale(iosTier, { ref: null, at: inside });
+      await sale(iosPoints, { ref: null, at: inside });
+      // None can price it.
+      await sale(iosCredits, { ref: null, at: inside });
+      // A charge in dollars is listed by currency, never added into naira; priced on its recorded list price.
+      await sale(iosBuy, {
+        ref: 110_000,
+        at: inside,
+        micros: 5_990_000n,
+        currency: 'USD',
+      });
+      // Refunded later: still taken, shown as refunded.
+      await sale(iosBuy, { ref: 800_000, at: inside, status: 'refunded' });
+      await sale(iosBuy, { ref: 900_000, at: new Date(TO) });
       await sale(andCredits, { ref: 50_000, at: inside });
 
       // /join: paid rows by tier; pending and edge rows do not count.
@@ -742,11 +804,16 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
         wawuKobo: 7_000,
         refundedKobo: 0,
       });
+      // A refunded held row keeps its gross, shows the refund, and contributes 0 to the shares.
       expect(s.wallet_paid_dm).toMatchObject({
-        count: 1,
-        grossKobo: 15_000,
+        count: 2,
+        grossKobo: 25_000,
         refundedKobo: 15_000,
+        keptKobo: 10_000,
+        creatorsKobo: 8_500,
+        wawuKobo: 1_500,
       });
+      expect(s.wallet_tip).toMatchObject({ keptKobo: 5_000 });
       // Streams with nothing in the window are still listed, at zero.
       expect(s.wallet_event_ticket).toMatchObject({ count: 0, grossKobo: 0 });
       expect(s.wallet_credit_pack).toMatchObject({ count: 0, grossKobo: 0 });
@@ -754,25 +821,60 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       expect(s.store_apple).toMatchObject({
         rail: 'Apple',
         source: 'StorePurchase',
-        statuses: ['granted'],
-        count: 3,
-        grossKobo: 300_000,
+        statuses: ['granted', 'refunded', 'revoked'],
+        count: 7,
+        // 150000 + 200000 + 599900 + 100000 + 0 + 110000 + 800000
+        grossKobo: 1_959_900,
         unpricedCount: 1,
+        refundedKobo: 800_000,
+        keptKobo: 1_159_900,
         wawuKobo: null,
       });
-      expect(s.store_apple.grossBasis).toMatch(/before the store/);
+      expect(s.store_apple.grossBasis).toMatch(/before its cut/);
+      expect(s.store_apple.bases).toEqual([
+        {
+          basis: 'store_charge',
+          label: 'As charged by the store, before its cut',
+          count: 1,
+          grossKobo: 150_000,
+        },
+        expect.objectContaining({
+          basis: 'recorded_list_price',
+          count: 3,
+          grossKobo: 1_110_000,
+        }),
+        expect.objectContaining({
+          basis: 'todays_list_price',
+          label: 'Today’s list price',
+          count: 2,
+          grossKobo: 699_900,
+        }),
+        expect.objectContaining({ basis: 'unpriced', count: 1, grossKobo: 0 }),
+      ]);
+      // The dollar charge is listed by currency and is in no naira figure.
+      expect(s.store_apple.foreignCharges).toEqual([
+        { currency: 'USD', count: 1, amountMinor: 599 },
+      ]);
       expect(s.store_apple.breakdown).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             key: 'buy',
-            count: 2,
-            grossKobo: 300_000,
-            unpricedCount: 0,
+            count: 4,
+            grossKobo: 1_260_000,
           }),
           expect.objectContaining({
             key: 'tier',
             count: 1,
-            grossKobo: 0,
+            grossKobo: 599_900,
+          }),
+          expect.objectContaining({
+            key: 'points',
+            count: 1,
+            grossKobo: 100_000,
+          }),
+          expect.objectContaining({
+            key: 'credits',
+            count: 1,
             unpricedCount: 1,
           }),
         ]),
@@ -781,7 +883,10 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
         rail: 'Google',
         count: 1,
         grossKobo: 50_000,
+        refundedKobo: 0,
+        keptKobo: 50_000,
       });
+      expect(d.note).toMatch(/refunded or revoked later/);
 
       expect(s.join_web).toMatchObject({
         rail: 'Flutterwave',

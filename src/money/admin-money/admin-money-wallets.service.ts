@@ -32,6 +32,8 @@ import type {
 const DEFAULT_LIMIT = 20;
 /** How many provider balance reads run at once on one page. */
 const BALANCE_PARALLEL = 5;
+/** One deadline for all the balance reads of a page. */
+export const BALANCE_PAGE_DEADLINE_MS = 20_000;
 
 export const BALANCE_NO_ANSWER =
   'The wallet provider did not answer for this wallet. Try again in a moment.';
@@ -82,6 +84,9 @@ type WalletRow = Prisma.FintavaWalletGetPayload<object>;
 export class AdminMoneyWalletsService {
   private readonly logger = new Logger(AdminMoneyWalletsService.name);
 
+  /** The whole page's time for the provider's answers (a spec shortens it). */
+  balanceDeadlineMs = BALANCE_PAGE_DEADLINE_MS;
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
@@ -111,6 +116,47 @@ export class AdminMoneyWalletsService {
     }
   }
 
+  /**
+   * Asks the provider for every row of a page, a few at a time, within one
+   * deadline for the whole page. A row still waiting when it passes gets a
+   * reason and no figure; the page answers on time whatever the provider does.
+   */
+  private async fillBalances(
+    page: WalletRow[],
+    items: AdminMoneyWalletView[],
+  ): Promise<void> {
+    const deadline = Date.now() + this.balanceDeadlineMs;
+    const timedOut = {
+      balanceUnavailable: `${this.provider.label} did not answer in time`,
+    };
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < page.length) {
+        const i = next++;
+        const left = deadline - Date.now();
+        if (left <= 0) {
+          Object.assign(items[i], timedOut);
+          continue;
+        }
+        let timer: NodeJS.Timeout | undefined;
+        const late = new Promise<typeof timedOut>((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), left);
+        });
+        try {
+          Object.assign(
+            items[i],
+            await Promise.race([this.askBalance(page[i].walletId), late]),
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(BALANCE_PARALLEL, page.length) }, worker),
+    );
+  }
+
   private async handlesOf(ids: string[]): Promise<Map<string, string | null>> {
     if (ids.length === 0) return new Map();
     const rows = await this.prisma.userProfile.findMany({
@@ -130,6 +176,7 @@ export class AdminMoneyWalletsService {
       displayName: row.accountName,
       provider: this.provider.name,
       openedAt: row.createdAt.toISOString(),
+      // A wallet row exists only once the wallet is open (WalletGate.requireOpen reads this row), so every row here is open.
       status: 'open',
       accountLast4: last4(row.accountNumber),
     };
@@ -175,15 +222,7 @@ export class AdminMoneyWalletsService {
     const items = page.map((r) =>
       this.toWallet(r, handles.get(r.wawuUserId) ?? null),
     );
-    if (withBalance) {
-      for (let i = 0; i < page.length; i += BALANCE_PARALLEL) {
-        const chunk = page.slice(i, i + BALANCE_PARALLEL);
-        const answers = await Promise.all(
-          chunk.map((r) => this.askBalance(r.walletId)),
-        );
-        answers.forEach((a, j) => Object.assign(items[i + j], a));
-      }
-    }
+    if (withBalance) await this.fillBalances(page, items);
     const last = page[page.length - 1];
     return {
       items,
