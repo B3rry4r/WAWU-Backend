@@ -81,10 +81,11 @@ export class WaitlistAdminController {
     @Query() query: AdminWaitlistExportQueryDto,
   ): Promise<AdminWaitlistExportView> {
     const generatedAt = new Date();
-    let content = CSV_BOM + waitlistHeaderLine();
+    const withTier = query.includeTier === true;
+    let content = CSV_BOM + waitlistHeaderLine(withTier);
     let rowCount = 0;
     for await (const row of this.waitlist.adminRows(query)) {
-      content += waitlistLine(row);
+      content += waitlistLine(row, withTier);
       rowCount += 1;
     }
     const day = generatedAt.toISOString().slice(0, 10);

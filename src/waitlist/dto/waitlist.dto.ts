@@ -102,6 +102,18 @@ export class CreateWaitlistRegistrationDto {
   @IsString()
   @MaxLength(60)
   referralCode?: string;
+
+  /**
+   * The tier the person is buying (optional, R-125): an id from
+   * `GET /waitlist/tiers` (verify, plus, founding). Leave it out, as an older
+   * page does, and the registration is exactly what it was before tiers: the
+   * offer's price and the offer's tier (Verify). An id the plans file does not
+   * sell is refused (`tier_invalid`).
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  tier?: string;
 }
 
 /** POST /waitlist/registrations/verify. */
@@ -172,6 +184,12 @@ export class AdminWaitlistListQueryDto extends PaginationQueryDto {
   )
   @IsBoolean()
   noReferral?: boolean;
+
+  /** Only registrations that paid for this tier (R-125). `none` is the older registrations with no tier. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  tier?: string;
 }
 
 /** GET /admin/waitlist/registrations/export. */
@@ -198,6 +216,19 @@ export class AdminWaitlistExportQueryDto {
   )
   @IsBoolean()
   noReferral?: boolean;
+
+  /** Only registrations that paid for this tier (R-125). `none` is the older registrations with no tier. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  tier?: string;
+  /** `true`: add the `Tier` and `Claimed how` columns at the end of the file (R-125). Left out, the file is exactly what it always was. */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  includeTier?: boolean;
 }
 
 /** GET /admin/waitlist/registrations/summary. */

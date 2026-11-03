@@ -43702,6 +43702,28 @@
         ]
       }
     },
+    "/api/hub/waitlist/tiers": {
+      "get": {
+        "operationId": "WaitlistPublicController_tiers",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistTiersView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The plans /join sells (R-125): Verify, Verify Plus and Founding Maker, each\nwith its price in kobo, days, products, bonus points, event pass, badge and\npack bonus, read live from the same plan settings the app's own plans read\nuses. `best` marks the one the page preselects. Public.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
     "/api/hub/waitlist/referral-codes/{code}": {
       "get": {
         "operationId": "WaitlistPublicController_referralCheck",
@@ -43710,6 +43732,14 @@
             "name": "code",
             "required": true,
             "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tier",
+            "required": false,
+            "in": "query",
             "schema": {
               "type": "string"
             }
@@ -43733,7 +43763,7 @@
             "description": "`reason.code` `referral_attempts_limited`: this address tried too many codes we do not have; wait a few minutes. (The plain rate limit has no `reason`.)"
           }
         },
-        "summary": "Before paying: does this referral code apply, and what would the person\npay. Never the limit, the count or the community. A code we do not have\nis a 404 `referral_unknown`. Advice only: the registration decides again.\nAn address that has tried too many codes we do not have is asked to wait\n(429 `referral_attempts_limited`).",
+        "summary": "Before paying: does this referral code apply, and what would the person\npay. Never the limit, the count or the community. A code we do not have\nis a 404 `referral_unknown`. Advice only: the registration decides again.\nAn address that has tried too many codes we do not have is asked to wait\n(429 `referral_attempts_limited`). With `?tier=verify|plus|founding`\n(R-125) the answer is for that tier: its price, and a code that prices\nanother tier answers `applies` false, `reason` `other_tier`, with a\nsentence in `message`. Without `?tier=` it answers exactly as before.",
         "tags": [
           "WaitlistPublic"
         ]
@@ -43765,7 +43795,7 @@
             }
           },
           "400": {
-            "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`."
+            "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid`, `consent_required` or `tier_invalid` (a tier the plans do not sell); a malformed body has no `reason`."
           },
           "404": {
             "description": "`reason.code` `no_open_offer` (no offer has this id) or `referral_unknown` (no such referral code)."
@@ -43973,6 +44003,16 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "tier",
+            "required": false,
+            "in": "query",
+            "description": "Only registrations that paid for this tier (R-125). `none` is the older registrations with no tier.",
+            "schema": {
+              "maxLength": 40,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -44070,6 +44110,25 @@
             "required": false,
             "in": "query",
             "description": "`true`: only registrations with no referral code. Not with `referralCode`.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "tier",
+            "required": false,
+            "in": "query",
+            "description": "Only registrations that paid for this tier (R-125). `none` is the older registrations with no tier.",
+            "schema": {
+              "maxLength": 40,
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeTier",
+            "required": false,
+            "in": "query",
+            "description": "`true`: add the `Tier` and `Claimed how` columns at the end of the file (R-125). Left out, the file is exactly what it always was.",
             "schema": {
               "type": "boolean"
             }
@@ -54180,6 +54239,11 @@
             "type": "string",
             "description": "A referral code (optional): 3 to 20 letters and numbers, in any case.\nLeave it out, or empty, to pay the standard price. A code we do not have\nis refused (`referral_unknown`); one that is switched off or full is not\nrefused: the person registers at the standard price and the answer's\n`referral` says the code was not applied.",
             "maxLength": 60
+          },
+          "tier": {
+            "type": "string",
+            "description": "The tier the person is buying (optional, R-125): an id from\n`GET /waitlist/tiers` (verify, plus, founding). Leave it out, as an older\npage does, and the registration is exactly what it was before tiers: the\noffer's price and the offer's tier (Verify). An id the plans file does not\nsell is refused (`tier_invalid`).",
+            "maxLength": 40
           }
         },
         "required": [
@@ -54254,6 +54318,11 @@
           "active": {
             "type": "boolean",
             "description": "Whether the code works. Defaults to true."
+          },
+          "tier": {
+            "type": "string",
+            "description": "The one tier the code prices (R-125), for example `verify`. The price\nceiling is that tier's price. Leave out for the old rule (the offer's\ntier, Verify, at the offer's price).",
+            "maxLength": 40
           }
         },
         "required": [
@@ -54284,6 +54353,11 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "tier": {
+            "type": "string",
+            "description": "The one tier the code prices; the price is checked against that tier's price.",
+            "maxLength": 40
           }
         }
       },
@@ -82080,6 +82154,14 @@
           "referralCommunity": {
             "type": "string",
             "nullable": true
+          },
+          "tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "claimedVia": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -82105,7 +82187,9 @@
           "claimedAt",
           "createdAt",
           "referralCode",
-          "referralCommunity"
+          "referralCommunity",
+          "tier",
+          "claimedVia"
         ]
       },
       "AdminWaitlistSplitRowView": {
@@ -82131,6 +82215,30 @@
           "community",
           "people",
           "kobo"
+        ]
+      },
+      "AdminWaitlistTierRowView": {
+        "type": "object",
+        "properties": {
+          "tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "people": {
+            "type": "number"
+          },
+          "kobo": {
+            "type": "number"
+          },
+          "claimed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tier",
+          "people",
+          "kobo",
+          "claimed"
         ]
       },
       "AdminWaitlistSummaryView": {
@@ -82179,6 +82287,12 @@
               "$ref": "#/components/schemas/AdminWaitlistSplitRowView"
             }
           },
+          "byTier": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminWaitlistTierRowView"
+            }
+          },
           "generatedAt": {
             "type": "string"
           }
@@ -82189,6 +82303,7 @@
           "failed",
           "unpaid",
           "split",
+          "byTier",
           "generatedAt"
         ]
       },
@@ -82286,6 +82401,10 @@
           "paidKobo": {
             "type": "integer"
           },
+          "tier": {
+            "type": "string",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           },
@@ -82303,6 +82422,7 @@
           "paidCount",
           "heldCount",
           "paidKobo",
+          "tier",
           "createdAt",
           "updatedAt"
         ]
@@ -82343,6 +82463,114 @@
           "closesAt"
         ]
       },
+      "WaitlistTierView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "days": {
+            "type": "number"
+          },
+          "products": {
+            "type": "number"
+          },
+          "bonusPoints": {
+            "type": "number"
+          },
+          "eventPass": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "benefits": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "badge": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "numbered": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "numbered"
+            ]
+          },
+          "packBonusPercent": {
+            "type": "number"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "best": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "priceKobo",
+          "days",
+          "products",
+          "bonusPoints",
+          "eventPass",
+          "badge",
+          "packBonusPercent",
+          "firstVoiceIntroIncluded",
+          "best"
+        ]
+      },
+      "WaitlistTiersView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitlistTierView"
+            }
+          },
+          "bestTier": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "currency",
+          "tiers",
+          "bestTier"
+        ]
+      },
       "WaitlistReferralCheckView": {
         "type": "object",
         "properties": {
@@ -82356,12 +82584,25 @@
             "type": "string",
             "enum": [
               "full",
-              "inactive"
+              "inactive",
+              "other_tier"
             ],
             "nullable": true
           },
           "priceKobo": {
             "type": "integer"
+          },
+          "tier": {
+            "type": "string",
+            "nullable": true
+          },
+          "forTier": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -82443,7 +82684,8 @@
             "type": "string",
             "enum": [
               "full",
-              "inactive"
+              "inactive",
+              "other_tier"
             ],
             "nullable": true
           }
@@ -82475,6 +82717,10 @@
           },
           "referral": {
             "$ref": "#/components/schemas/WaitlistReferralOutcomeView",
+            "nullable": true
+          },
+          "tier": {
+            "type": "string",
             "nullable": true
           }
         },

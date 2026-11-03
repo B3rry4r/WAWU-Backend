@@ -36,10 +36,22 @@ export const WAITLIST_EXPORT_COLUMNS = [
   'Community',
 ] as const;
 
+/**
+ * Two more columns (R-125), appended only when the team asks for them
+ * (`includeTier=true`), so the file the team already downloads stays
+ * byte for byte what it was.
+ */
+export const WAITLIST_EXPORT_TIER_COLUMNS = ['Tier', 'Claimed how'] as const;
+
 export const WAITLIST_EXPORT_CONTENT_TYPE = 'text/csv; charset=utf-8';
 
-export function waitlistHeaderLine(): string {
-  return csvLine(WAITLIST_EXPORT_COLUMNS.map((c) => textCell(c)));
+export function waitlistHeaderLine(includeTier = false): string {
+  return csvLine(
+    [
+      ...WAITLIST_EXPORT_COLUMNS,
+      ...(includeTier ? WAITLIST_EXPORT_TIER_COLUMNS : []),
+    ].map((c) => textCell(c)),
+  );
 }
 
 /**
@@ -55,8 +67,16 @@ export function waitlistHeaderLine(): string {
  * only. "Claimed" is `yes` once an account has claimed the plan in the app,
  * with the time beside it.
  */
-export function waitlistLine(r: WaitlistRegistration): string {
-  return csvLine(WAITLIST_EXPORT_COLUMNS.map((column) => CELLS[column](r)));
+export function waitlistLine(
+  r: WaitlistRegistration,
+  includeTier = false,
+): string {
+  return csvLine([
+    ...WAITLIST_EXPORT_COLUMNS.map((column) => CELLS[column](r)),
+    ...(includeTier
+      ? WAITLIST_EXPORT_TIER_COLUMNS.map((column) => TIER_CELLS[column](r))
+      : []),
+  ]);
 }
 
 type Column = (typeof WAITLIST_EXPORT_COLUMNS)[number];
@@ -92,4 +112,12 @@ const CELLS: Record<Column, (r: WaitlistRegistration) => string> = {
     r.updatesOptIn === null ? '' : r.updatesOptIn ? 'yes' : 'no',
   'Referral code': (r) => textCell(r.referralCode),
   Community: (r) => textCell(r.referralCommunity),
+};
+
+const TIER_CELLS: Record<
+  (typeof WAITLIST_EXPORT_TIER_COLUMNS)[number],
+  (r: WaitlistRegistration) => string
+> = {
+  Tier: (r) => textCell(r.tier),
+  'Claimed how': (r) => textCell(r.claimedVia),
 };

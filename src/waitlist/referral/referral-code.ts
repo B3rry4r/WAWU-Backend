@@ -12,4 +12,4 @@ export function readReferralCode(raw: string): string | null {
 }
 
 /** Why a code that exists did not apply. */
-export type ReferralNotApplied = 'full' | 'inactive';
+export type ReferralNotApplied = 'full' | 'inactive' | 'other_tier';

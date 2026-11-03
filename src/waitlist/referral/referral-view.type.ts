@@ -14,7 +14,7 @@ export interface WaitlistReferralOutcomeView {
   /** The code, upper case. */
   code: string;
   applied: boolean;
-  /** Present only when `applied` is false: `full` (the limit is reached) or `inactive` (switched off). */
+  /** Present only when `applied` is false: `full` (the limit is reached), `inactive` (switched off) or `other_tier` (the code prices a different tier, R-125). */
   reason?: ReferralNotApplied;
 }
 
@@ -31,6 +31,14 @@ export interface WaitlistReferralCheckView {
   reason?: ReferralNotApplied;
   /** What the person would pay, in whole kobo: the code's price when it applies, the standard price when it does not. 0 means free. */
   priceKobo: number;
+  /**
+   * Only when the check was asked with `?tier=` (R-125): the tier the answer
+   * is for, and the one tier the code prices.
+   */
+  tier?: string;
+  forTier?: string;
+  /** Only with `?tier=` and `reason` `other_tier`: a plain sentence the page may show as it is. */
+  message?: string;
 }
 
 /** One referral code in the team's list (admin). */
@@ -51,6 +59,8 @@ export interface AdminReferralCodeView {
   heldCount: number;
   /** What those paid registrations paid in all, in whole kobo. */
   paidKobo: number;
+  /** The one tier the code prices (R-125); null is the old rule: the offer's tier (Verify). */
+  tier: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -65,6 +75,17 @@ export interface AdminWaitlistSplitRowView {
   people: number;
   /** What they paid, in whole kobo. */
   kobo: number;
+}
+
+/** One row of the split by tier (R-125). `tier` null is a registration from before tiers (the old offer's Verify). */
+export interface AdminWaitlistTierRowView {
+  tier: string | null;
+  /** People who paid. */
+  people: number;
+  /** What they paid, in whole kobo. */
+  kobo: number;
+  /** Of those, how many have been claimed (by code or automatically). */
+  claimed: number;
 }
 
 /**
@@ -82,5 +103,7 @@ export interface AdminWaitlistSummaryView {
   unpaid: number;
   /** One row per referral code (even with nobody yet), then the "No code" row last. */
   split: AdminWaitlistSplitRowView[];
+  /** The paid registrations split by tier, then the old no-tier row (R-125). */
+  byTier: AdminWaitlistTierRowView[];
   generatedAt: string;
 }
