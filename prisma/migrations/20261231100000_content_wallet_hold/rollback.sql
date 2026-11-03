@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261231100000_content_wallet_hold. Refuses while a piece still carries either value, because dropping the
 -- columns would silently turn a held piece back into an ordinary pending one (and lose which pieces came from the web flow).
 DO $$
