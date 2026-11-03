@@ -39,7 +39,6 @@ import { assertWorldResidence } from '../world/world-residence';
 import { worldViewOf, WorldWalletService } from '../world/world-wallet.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
 import { ReviewedOpening } from './reviewed-opening';
-import { releaseHeldPieces } from '../../content-piece/wallet-hold';
 import { tellWalletReady } from './wallet-ready-notice';
 import { accountOnItsWay } from './review-stage';
 import {
@@ -972,8 +971,6 @@ export class WalletOpeningService {
             provider: this.provider.name,
           },
         });
-        // WEB-HOLD (R-126): pieces held for this person's wallet go live in the same transaction.
-        await releaseHeldPieces(tx, wawuUserId);
         if (announce) {
           if (this.notifications) {
             await tellWalletReady(this.notifications, tx, wawuUserId);
