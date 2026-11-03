@@ -38,11 +38,11 @@ export const BALANCE_PAGE_DEADLINE_MS = 20_000;
 export const BALANCE_NO_ANSWER =
   'The wallet provider did not answer for this wallet. Try again in a moment.';
 export const BALANCE_TOO_LARGE =
-  'The provider gave a figure too large to show exactly.';
+  'The wallet provider gave a figure too large to show exactly.';
 export const RECORDS_NOTE =
-  'These rows are our records of movements. They are not a balance. The balance is the wallet provider’s own answer.';
+  'These rows are our records of movements. They are not a balance. The balance shown is the wallet provider’s own answer.';
 export const HELD_NOTE =
-  'The holds below are our records of money waiting in WAWU’s account. They are not a balance. The balance above is the provider’s own answer.';
+  'The holds below are our records of money waiting in WAWU’s account. They are not a balance. The balance above is the wallet provider’s own answer.';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

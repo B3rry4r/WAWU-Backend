@@ -36,7 +36,7 @@ const STORE_KIND_LABEL: Record<string, string> = {
 };
 
 const STORE_BASIS =
-  'Each sale is priced once, in this order: what the store charged in naira, before its cut; else the list price recorded at purchase; else today’s list price. Charges in other currencies are listed by currency and never converted. Sales no basis can price are counted in unpricedCount. Not what the store paid out.';
+  'Each sale is priced one way only, in this order: what the store charged in naira, before its cut; else the list price recorded when it was bought; else today’s list price. Charges in other currencies are listed by currency and are never converted to naira. Sales that none of these can price are counted as unpriced. This is not what the store paid out.';
 
 const BASIS_LABEL: Record<string, string> = {
   store_charge: 'As charged by the store, before its cut',
@@ -55,7 +55,7 @@ const BASIS_ORDER = [
 const STORE_GIVEN_BACK = ['refunded', 'revoked'];
 
 const REVENUE_NOTE =
-  'Each stream is read from its own table on its own rail, so the streams are not added into one total here. Gross is the money taken; refundedKobo is refunded to payers; keptKobo is gross less refunded, and the 85/15 shares are worked on the money kept. Store sales are shown before the store’s cut. A store sale refunded or revoked later is shown in the window it was bought in, as refunded there, not in the window of the refund.';
+  'Each line is read from its own records and its own payment route, so the lines are not added into one total. Money taken is what was paid. Refunded to payers is shown beside it, and what was kept is the money taken less the refunds. WAWU’s 15% and the creators’ 85% are worked out on the money kept. Store sales are shown before the store’s cut. A store sale that is refunded or revoked later stays in the period it was bought in and is shown as refunded there, not in the period of the refund.';
 
 type Bases = Map<string, { count: number; grossKobo: number }>;
 
@@ -138,11 +138,13 @@ function resolveWindow(
   const from = q.from ? new Date(q.from) : monthStart;
   const to = q.to ? new Date(q.to) : q.from ? now : nextMonth;
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    throw new BadRequestException('from and to have to be ISO 8601 dates.');
+    throw new BadRequestException(
+      'The start and end times have to be dates, for example 2026-11-01.',
+    );
   }
   if (to.getTime() <= from.getTime()) {
     throw new BadRequestException(
-      '`to` has to be after `from`. The window is [from, to): inclusive at the start, exclusive at the end.',
+      'The end time has to be after the start time. The period includes the start time and stops just before the end time.',
     );
   }
   return { from, to };
@@ -202,7 +204,7 @@ export class AdminMoneyRevenueService {
       period: {
         from: from.toISOString(),
         to: to.toISOString(),
-        window: '[from, to): inclusive at the start, exclusive at the end',
+        window: 'From the start time up to, but not including, the end time',
       },
       split: { creatorsPercent: CREATORS_PERCENT, wawuPercent: WAWU_PERCENT },
       streams: [...wallet, ...store, join],
@@ -375,7 +377,7 @@ export class AdminMoneyRevenueService {
       grossKobo: breakdown.reduce((a, b) => a + b.grossKobo, 0),
       unpricedCount: 0,
       grossBasis:
-        'What Flutterwave confirmed on the website’s /join page, by tier. The only money Flutterwave still takes.',
+        'What Flutterwave confirmed on the website’s /join page, by tier. This is the only money Flutterwave still takes.',
       wawuKobo: null,
       creatorsKobo: null,
       refundedKobo: null,
@@ -393,24 +395,50 @@ export class AdminMoneyRevenueService {
       provider: this.provider.name,
       completedAt: { gte: from, lt: to },
     };
-    const [groups, refunds] = await Promise.all([
+    const [groups, refundedHolds] = await Promise.all([
       this.prisma.walletPayment.groupBy({
         by: ['kind'],
         where,
         _count: { _all: true },
         _sum: { priceKobo: true, payeeShareKobo: true, wawuShareKobo: true },
       }),
-      this.prisma.walletHold.groupBy({
-        by: ['kind'],
+      // Each refunded hold with the payment it belongs to: the payment's own
+      // kind and shares say what was taken, so a hold row can never push a
+      // stream's shares below zero or above what was kept.
+      this.prisma.walletHold.findMany({
         where: { status: 'refunded', payment: where },
-        _sum: {
+        select: {
           refundedKobo: true,
-          payeeShareKobo: true,
-          wawuShareKobo: true,
+          payment: {
+            select: {
+              kind: true,
+              priceKobo: true,
+              payeeShareKobo: true,
+              wawuShareKobo: true,
+            },
+          },
         },
       }),
     ]);
-    const refundOf = new Map(refunds.map((r) => [r.kind, r]));
+    const refundOf = new Map<
+      string,
+      { refunded: bigint; payee: bigint; wawu: bigint }
+    >();
+    for (const h of refundedHolds) {
+      const e = refundOf.get(h.payment.kind) ?? {
+        refunded: 0n,
+        payee: 0n,
+        wawu: 0n,
+      };
+      // A refund gives the price back in full and never more than the payment took.
+      e.refunded +=
+        h.refundedKobo !== null && h.refundedKobo < h.payment.priceKobo
+          ? h.refundedKobo
+          : h.payment.priceKobo;
+      e.payee += h.payment.payeeShareKobo;
+      e.wawu += h.payment.wawuShareKobo;
+      refundOf.set(h.payment.kind, e);
+    }
     const rank = (k: string) => {
       const i = WALLET_KIND_ORDER.indexOf(k);
       return i === -1 ? WALLET_KIND_ORDER.length : i;
@@ -425,7 +453,17 @@ export class AdminMoneyRevenueService {
       const gross = big(g?._sum.priceKobo);
       // A refunded hold gave the whole price back, so its shares are not kept.
       const back = refundOf.get(kind);
-      const refunded = big(back?._sum.refundedKobo);
+      const refunded = Math.min(big(back?.refunded), gross);
+      const kept = gross - refunded;
+      // Shares on the money kept: never below zero, never above what was kept.
+      const creators = Math.min(
+        Math.max(big(g?._sum.payeeShareKobo) - big(back?.payee), 0),
+        kept,
+      );
+      const wawu = Math.min(
+        Math.max(big(g?._sum.wawuShareKobo) - big(back?.wawu), 0),
+        kept - creators,
+      );
       return {
         key: `wallet_${kind}`,
         label: WALLET_KIND_LABEL[kind] ?? kind,
@@ -436,12 +474,11 @@ export class AdminMoneyRevenueService {
         grossKobo: gross,
         unpricedCount: 0,
         grossBasis:
-          'The price paid from the wallet, before the provider’s own charge on it. Gross is the money taken; the shares are worked on the money kept.',
-        wawuKobo: big(g?._sum.wawuShareKobo) - big(back?._sum.wawuShareKobo),
-        creatorsKobo:
-          big(g?._sum.payeeShareKobo) - big(back?._sum.payeeShareKobo),
+          'The price paid from the wallet, before the wallet provider’s own charge on it. Refunds are taken off the money kept, and the shares are worked out on that.',
+        wawuKobo: wawu,
+        creatorsKobo: creators,
         refundedKobo: HELD_KINDS.includes(kind) ? refunded : null,
-        keptKobo: gross - refunded,
+        keptKobo: kept,
       };
     });
   }

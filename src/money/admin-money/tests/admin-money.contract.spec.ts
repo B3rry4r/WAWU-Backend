@@ -139,6 +139,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
     o: {
       price: bigint;
       payee?: bigint;
+      wawu?: bigint;
       completedAt: Date;
       status?: string;
       provider?: string;
@@ -160,7 +161,7 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
         wawuFeeKobo: 0n,
         totalKobo: o.price,
         payeeShareKobo: payeeShare,
-        wawuShareKobo: o.price - payeeShare,
+        wawuShareKobo: o.wawu ?? o.price - payeeShare,
         customerReference: `dashb-${RUN}-${id}`,
         merchantAccountNumber: '9000000123',
         provider: o.provider ?? 'nuvion',
@@ -910,6 +911,99 @@ describe('Admin: the app’s money (DASH-B-HUB)', () => {
       ]);
       // No Shop stream (R-2).
       expect(d.streams.map((x: any) => x.key).join(',')).not.toMatch(/shop/i);
+    });
+
+    it('shares on the money kept are never negative and never above what was kept', async () => {
+      // Real flows copy the payment's own price and shares onto its hold in the
+      // same transaction (wallet-payment.service.ts, walletHold.create) and a
+      // refund is always the whole price (WalletHold_outcome_check). Rows that
+      // do not look like that still must not push a share below zero.
+      const f = '2018-05-01T00:00:00.000Z';
+      const t = '2018-06-01T00:00:00.000Z';
+      const at = new Date('2018-05-10T10:00:00Z');
+      const refundedHold = async (
+        paymentId: string,
+        o: { kind: string; price: bigint; payee: bigint; wawu: bigint },
+      ) =>
+        prisma.walletHold.create({
+          data: {
+            paymentId,
+            kind: o.kind,
+            targetId: randomUUID(),
+            title: 'q',
+            releaseCondition: 'dm_answered',
+            amountKobo: o.price,
+            payeeShareKobo: o.payee,
+            wawuShareKobo: o.wawu,
+            merchantAccountNumber: '9000000123',
+            provider: 'nuvion',
+            status: 'refunded',
+            action: 'refund',
+            settledAt: at,
+            transferKobo: o.price,
+            refundedKobo: o.price,
+            heldAt: at,
+          },
+        });
+      // 1. As a real flow writes it: the hold copies the payment's shares.
+      const a = await payment('paid_dm', { price: 30_000n, completedAt: at });
+      await refundedHold(a, {
+        kind: 'paid_dm',
+        price: 30_000n,
+        payee: 25_500n,
+        wawu: 4_500n,
+      });
+      // 2. A payment whose shares were never stored, with a real hold on it (the database
+      //    makes a hold's shares add up to its price, so a hold cannot be the one without).
+      const b = await payment('paid_dm', {
+        price: 20_000n,
+        payee: 0n,
+        wawu: 0n,
+        completedAt: at,
+      });
+      await refundedHold(b, {
+        kind: 'paid_dm',
+        price: 20_000n,
+        payee: 17_000n,
+        wawu: 3_000n,
+      });
+      // 3. A hold that carries shares its payment does not, under another kind.
+      const c = await payment('paid_dm', {
+        price: 40_000n,
+        payee: 0n,
+        wawu: 0n,
+        completedAt: at,
+      });
+      await refundedHold(c, {
+        kind: 'tip',
+        price: 40_000n,
+        payee: 34_000n,
+        wawu: 6_000n,
+      });
+      // 4. One that was never refunded.
+      await payment('paid_dm', { price: 10_000n, completedAt: at });
+
+      const res = await get(`${BASE}/revenue?from=${f}&to=${t}`).expect(200);
+      const streams = (res.body as Json).data.streams as any[];
+      const dm = streams.find((x) => x.key === 'wallet_paid_dm');
+      expect(dm).toMatchObject({
+        count: 4,
+        grossKobo: 100_000,
+        refundedKobo: 90_000,
+        keptKobo: 10_000,
+        creatorsKobo: 8_500,
+        wawuKobo: 1_500,
+      });
+      for (const x of streams.filter((y) => y.creatorsKobo !== null)) {
+        expect(x.creatorsKobo).toBeGreaterThanOrEqual(0);
+        expect(x.wawuKobo).toBeGreaterThanOrEqual(0);
+        expect(x.creatorsKobo + x.wawuKobo).toBeLessThanOrEqual(x.keptKobo);
+      }
+      expect(streams.find((x) => x.key === 'wallet_tip')).toMatchObject({
+        creatorsKobo: 0,
+        wawuKobo: 0,
+        keptKobo: 0,
+      });
     });
 
     it('rejects a window that runs backwards and answers the current month with no bounds', async () => {
