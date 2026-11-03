@@ -47,6 +47,16 @@ export class CreateReferralCodeDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  /**
+   * The one tier the code prices (R-125), for example `verify`. The price
+   * ceiling is that tier's price. Leave out for the old rule (the offer's
+   * tier, Verify, at the offer's price).
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  tier?: string;
 }
 
 /**
@@ -81,4 +91,10 @@ export class UpdateReferralCodeDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  /** The one tier the code prices; the price is checked against that tier's price. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  tier?: string;
 }

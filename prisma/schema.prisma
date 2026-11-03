@@ -7687,6 +7687,15 @@ model WaitlistRegistration {
   referralCode      String?
   /// The code's community name at that moment (REF-01); NULL with `referralCode`.
   referralCommunity String?
+  /// The tier this registration paid for (JOIN-TIERS-HUB, R-125): a plans-file
+  /// tier id (verify, plus, founding). NULL on every row made before tiers
+  /// were sold on /join and on a registration from an older page: the claim
+  /// reads NULL as the offer's own tier (Verify).
+  tier            String?
+  /// How the claim was made (JOIN-TIERS-HUB): `code` (the access code typed in
+  /// the app) or `auto` (the server matched the signed-in person's proven
+  /// email or phone). NULL until claimed, and on rows claimed before this column.
+  claimedVia      String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -7714,6 +7723,11 @@ model ReferralCode {
   priceKobo  Int
   /// How many people may use the code; NULL means no limit.
   usageLimit Int?
+  /// The one tier this code prices (JOIN-TIERS-HUB, R-125): `verify` for LOGOART.
+  /// For any other tier the code answers "not applied" and the tier's full price
+  /// is charged. NULL means the code is not bound to a tier and behaves as it
+  /// always did (the offer's price is its ceiling).
+  tier       String?
   active     Boolean  @default(true)
   /// The admin who created it (admin id); NULL for the code the migration inserted.
   createdBy  String?

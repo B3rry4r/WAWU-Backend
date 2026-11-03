@@ -1,7 +1,14 @@
-import { Controller, Get, Header, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
+import { WaitlistAutoClaimInterceptor } from '../waitlist/waitlist-auto-claim.interceptor';
 import { PlansService } from './plans.service';
 import type { MyTierView } from './plans-view.type';
 
@@ -21,6 +28,7 @@ export class MeTierController {
    * `no-store`: the answer is the caller's own.
    */
   @Get('tier')
+  @UseInterceptors(WaitlistAutoClaimInterceptor)
   @Header('Cache-Control', 'no-store')
   get(@CurrentUser() user: WawuJwtClaims): Promise<MyTierView> {
     return this.plans.myTier(user.sub);

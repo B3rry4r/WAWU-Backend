@@ -2,7 +2,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Prisma, ReferralCode } from '../../../generated/prisma/client';
 import { WaitlistStatus } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { PLANS_CONFIG, type PlansConfig } from '../../plans/plans-config';
+import {
+  PLANS_CONFIG,
+  priceIn,
+  tierById,
+  type PlansConfig,
+} from '../../plans/plans-config';
 import { WaitlistError } from '../waitlist-error';
 import { readReferralCode } from './referral-code';
 import { ReferralService } from './referral.service';
@@ -43,7 +48,13 @@ export class ReferralAdminService {
    * The most a code may charge: the price of the offer open now, or, when none
    * is open, of the dearest offer in the plans file.
    */
-  private ceilingKobo(now: Date): number {
+  private ceilingKobo(now: Date, tier: string | null = null): number {
+    // A code bound to a tier may charge up to that tier's own live price (R-125).
+    if (tier !== null) {
+      const t = tierById(this.plans, tier);
+      if (t === null) throw this.tierUnknown();
+      return priceIn(t.price, 'NGN');
+    }
     const offers = this.plans.eventOffers;
     const open = offers.filter(
       (o) => o.openFrom <= now && (o.openUntil === null || now <= o.openUntil),
@@ -64,8 +75,19 @@ export class ReferralAdminService {
     return t;
   }
 
-  private checkPrice(priceKobo: number, now: Date): void {
-    const ceiling = this.ceilingKobo(now);
+  private tierUnknown(): WaitlistError {
+    return new WaitlistError(
+      'referral_invalid',
+      'Choose a plan the app sells: verify, plus or founding.',
+    );
+  }
+
+  private checkPrice(
+    priceKobo: number,
+    now: Date,
+    tier: string | null = null,
+  ): void {
+    const ceiling = this.ceilingKobo(now, tier);
     if (priceKobo < 0 || priceKobo > ceiling)
       throw new WaitlistError(
         'referral_invalid',
@@ -88,6 +110,7 @@ export class ReferralAdminService {
       paidCount: paid.count,
       heldCount: held,
       paidKobo: paid.kobo,
+      tier: row.tier,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -153,7 +176,8 @@ export class ReferralAdminService {
         'A referral code is 3 to 20 letters and numbers.',
       );
     const community = this.tidyCommunity(dto.community);
-    this.checkPrice(dto.priceKobo, now);
+    const tier = dto.tier === undefined || dto.tier === '' ? null : dto.tier;
+    this.checkPrice(dto.priceKobo, now, tier);
     let row: ReferralCode;
     try {
       row = await this.prisma.referralCode.create({
@@ -162,6 +186,7 @@ export class ReferralAdminService {
           community,
           priceKobo: dto.priceKobo,
           usageLimit: dto.limit ?? null,
+          tier,
           active: dto.active ?? true,
           createdBy: adminId,
         },
@@ -186,9 +211,21 @@ export class ReferralAdminService {
     const data: Prisma.ReferralCodeUpdateInput = {};
     if (dto.community !== undefined)
       data.community = this.tidyCommunity(dto.community);
-    if (dto.priceKobo !== undefined) {
-      this.checkPrice(dto.priceKobo, now);
-      data.priceKobo = dto.priceKobo;
+    const tierChange =
+      dto.tier === undefined ? undefined : dto.tier === '' ? null : dto.tier;
+    if (dto.priceKobo !== undefined || tierChange !== undefined) {
+      // The price is checked against the tier it will be charged for, whichever
+      // of the two changed (the other is read from the code as it is now).
+      const current = await this.prisma.referralCode.findUnique({
+        where: { id },
+        select: { priceKobo: true, tier: true },
+      });
+      if (current === null) throw this.notFound();
+      const tier = tierChange === undefined ? current.tier : tierChange;
+      const price = dto.priceKobo ?? current.priceKobo;
+      this.checkPrice(price, now, tier);
+      if (dto.priceKobo !== undefined) data.priceKobo = dto.priceKobo;
+      if (tierChange !== undefined) data.tier = tierChange;
     }
     if (dto.limit !== undefined) data.usageLimit = dto.limit;
     if (dto.active !== undefined) data.active = dto.active;

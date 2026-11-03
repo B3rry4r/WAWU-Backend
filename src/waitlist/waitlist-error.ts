@@ -26,6 +26,8 @@ export const WAITLIST_ERROR_STATUS = {
   payment_check_unavailable: 503,
   /** Payments are not set up on this server. */
   payments_unavailable: 503,
+  /** The tier asked for is not one the plans file sells (R-125). */
+  tier_invalid: 400,
   phone_invalid: 400,
   email_invalid: 400,
   name_invalid: 400,

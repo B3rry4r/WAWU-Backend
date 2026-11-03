@@ -73,6 +73,8 @@ const registration = (
   claimResult: null,
   referralCode: null,
   referralCommunity: null,
+  tier: null,
+  claimedVia: null,
   createdAt: new Date('2026-10-01T10:05:00.000Z'),
   updatedAt: new Date('2026-10-02T11:30:00.000Z'),
   ...over,

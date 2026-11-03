@@ -8,6 +8,7 @@ import {
   Ip,
   Param,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -25,6 +26,7 @@ import type {
   WaitlistOfferView,
   WaitlistRegistrationStartView,
   WaitlistRegistrationStatusView,
+  WaitlistTiersView,
 } from './waitlist-view.type';
 
 /**
@@ -57,11 +59,26 @@ export class WaitlistPublicController {
   }
 
   /**
+   * The plans /join sells (R-125): Verify, Verify Plus and Founding Maker, each
+   * with its price in kobo, days, products, bonus points, event pass, badge and
+   * pack bonus, read live from the same plan settings the app's own plans read
+   * uses. `best` marks the one the page preselects. Public.
+   */
+  @Get('tiers')
+  @Header('Cache-Control', 'no-store')
+  tiers(): WaitlistTiersView {
+    return this.waitlist.tiers();
+  }
+
+  /**
    * Before paying: does this referral code apply, and what would the person
    * pay. Never the limit, the count or the community. A code we do not have
    * is a 404 `referral_unknown`. Advice only: the registration decides again.
    * An address that has tried too many codes we do not have is asked to wait
-   * (429 `referral_attempts_limited`).
+   * (429 `referral_attempts_limited`). With `?tier=verify|plus|founding`
+   * (R-125) the answer is for that tier: its price, and a code that prices
+   * another tier answers `applies` false, `reason` `other_tier`, with a
+   * sentence in `message`. Without `?tier=` it answers exactly as before.
    */
   @Get('referral-codes/:code')
   @Throttle(WAITLIST_THROTTLE_READ)
@@ -79,8 +96,9 @@ export class WaitlistPublicController {
   referralCheck(
     @Param('code') code: string,
     @Ip() address: string,
+    @Query('tier') tier?: string,
   ): Promise<WaitlistReferralCheckView> {
-    return this.waitlist.referralCheck(code, new Date(), address);
+    return this.waitlist.referralCheck(code, new Date(), address, tier);
   }
 
   /**
@@ -107,7 +125,7 @@ export class WaitlistPublicController {
   @ApiResponse({
     status: 400,
     description:
-      '`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`.',
+      '`reason.code` `phone_invalid`, `email_invalid`, `name_invalid`, `consent_required` or `tier_invalid` (a tier the plans do not sell); a malformed body has no `reason`.',
   })
   @ApiResponse({
     status: 404,
