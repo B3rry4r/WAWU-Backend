@@ -2369,6 +2369,70 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(o.body.data.every((x: Json) => x.phase === 'over')).toBe(true);
     });
 
+    it('ended=hide leaves out ended bookings, ended=only shows just them, and a draft is never ended', async () => {
+      const mk = async (name: string) =>
+        create({
+          advertiser: `${TAG} ${name}`,
+          startsAt: iso(hoursFromNow(-2)),
+          endsAt: iso(hoursFromNow(2)),
+        });
+      const running = await mk('e-run');
+      const byHand = await mk('e-hand');
+      const pastWindow = await mk('e-past');
+      const pastDraft = await mk('e-draft');
+      await prisma.adCampaign.update({
+        where: { id: running.id },
+        data: { status: 'live' },
+      });
+      await prisma.adCampaign.update({
+        where: { id: byHand.id },
+        data: { status: 'ended' },
+      });
+      await prisma.adCampaign.update({
+        where: { id: pastWindow.id },
+        data: { status: 'live', endsAt: hoursFromNow(-1) },
+      });
+      await prisma.adCampaign.update({
+        where: { id: pastDraft.id },
+        data: { endsAt: hoursFromNow(-1) },
+      });
+      const ids = async (ended?: string) =>
+        (
+          await http()
+            .get(BASE)
+            .query({ perPage: 100, ...(ended ? { ended } : {}) })
+            .set(asSuper())
+        ).body.data.map((x: Json) => x.id);
+      const all = await ids();
+      expect(all).toEqual(
+        expect.arrayContaining([
+          running.id,
+          byHand.id,
+          pastWindow.id,
+          pastDraft.id,
+        ]),
+      );
+      const hidden = await ids('hide');
+      expect(hidden).toEqual(expect.arrayContaining([running.id, pastDraft.id]));
+      expect(hidden).not.toContain(byHand.id);
+      expect(hidden).not.toContain(pastWindow.id);
+      const only = await ids('only');
+      expect(only).toContain(byHand.id);
+      expect(only).toContain(pastWindow.id);
+      expect(only).not.toContain(running.id);
+      expect(only).not.toContain(pastDraft.id);
+      const sum = await http()
+        .get(`${BASE}/report`)
+        .query({ ended: 'hide' })
+        .set(asSuper());
+      expect(sum.status).toBe(200);
+      const bad = await http()
+        .get(BASE)
+        .query({ ended: 'maybe' })
+        .set(asSuper());
+      expect(bad.status).toBe(400);
+    });
+
     it('refuses bad query values', async () => {
       const bad: Json[] = [
         { status: 'archived' },
