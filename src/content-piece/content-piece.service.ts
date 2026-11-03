@@ -122,6 +122,7 @@ class PlaceNotClaimed extends Error {
 
 // Imported here, after the exported types, so they stay where they were.
 import {
+  COURSES_IN_APP_ONLY,
   UPLOADED_VIA_SITE,
   WAITING_FOR_WALLET,
   waitingForOf,
@@ -1219,6 +1220,9 @@ export class ContentPieceService {
     dto: UpdateContentDto,
   ): Promise<MyContentItem> {
     const existing = await this.ownPieceOrThrow(id, creatorWawuId);
+    if (isSiteRequest() && existing.contentType === 'course') {
+      throw new BadRequestException(COURSES_IN_APP_ONLY);
+    }
     if (existing.status === 'live') {
       throw new ConflictException(
         'A live piece cannot be edited. Take it down to change it.',

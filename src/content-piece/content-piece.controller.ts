@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -31,6 +32,7 @@ import { MyContentQueryDto } from './dto/my-content-query.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
 import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
 import { isSiteRequest } from '../price-list/app-client';
+import { COURSES_IN_APP_ONLY } from './wallet-hold';
 import { PreviewCutService } from './preview-cut.service';
 
 /**
@@ -161,6 +163,9 @@ export class ContentPieceController {
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: CreateContentDto,
   ) {
+    if (isSiteRequest() && dto.contentType === 'course') {
+      throw new BadRequestException(COURSES_IN_APP_ONLY);
+    }
     // A file whose upload outlasted the Hub's wait is counted first, outside
     // any lock (SWEEP-APP-5, ME-04 R4-5).
     await this.contentPieceService.settleSlowUploads(user.sub, dto);

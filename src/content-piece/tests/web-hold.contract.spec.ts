@@ -575,4 +575,47 @@ describe('A piece from the new web flow waits for its creator wallet (WEB-HOLD, 
     expect(viaApp.status).toBe(402);
     expect(viaSite.status).toBe(viaApp.status);
   });
+
+  it('the site never makes or edits a course (400), while the app and no marker are unchanged', async () => {
+    const course = async (headers: Record<string, string>) => {
+      const full = await landed(APP_MAKER, 'content/full', 'video/mp4');
+      return request(server())
+        .post('/content')
+        .set('Authorization', bearer(APP_MAKER))
+        .set(headers)
+        .send({
+          contentType: 'course',
+          title: 'WEB-HOLD course',
+          description: 'WEB-HOLD spec',
+          category: 'business_entrepreneurship',
+          tags: [],
+          accessType: 'free',
+          price: 0,
+          fullAsset: full.fileUrl,
+        });
+    };
+    const viaSite = await course(SITE);
+    expect(viaSite.status).toBe(400);
+    expect(JSON.stringify(viaSite.body)).toContain(
+      'Courses are made in the WAWU app.',
+    );
+    const viaApp = await course(APP);
+    const viaNone = await course({});
+    expect(viaApp.status).toBe(201);
+    expect(viaNone.status).toBe(201);
+    const appId = data<Piece>(viaApp).id;
+    const edit = (headers: Record<string, string>) =>
+      request(server())
+        .patch(`/content/${appId}`)
+        .set('Authorization', bearer(APP_MAKER))
+        .set(headers)
+        .send({ title: 'WEB-HOLD course edited' });
+    const editSite = await edit(SITE);
+    expect(editSite.status).toBe(400);
+    expect(JSON.stringify(editSite.body)).toContain(
+      'Courses are made in the WAWU app.',
+    );
+    expect((await edit(APP)).status).toBe(200);
+    expect((await edit({})).status).toBe(200);
+  });
 });

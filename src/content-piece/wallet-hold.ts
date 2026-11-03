@@ -13,6 +13,9 @@ import type { Prisma } from '../../generated/prisma/client';
 /** What `uploadedVia` holds for a piece from the new web upload flow. */
 export const UPLOADED_VIA_SITE = 'site';
 
+/** The site never makes or edits a course; the app does (R-126 ruling, 3 Nov 2026). Sent as a 400 in the one error shape. */
+export const COURSES_IN_APP_ONLY = 'Courses are made in the WAWU app.';
+
 /** The one word the creator's own reads carry in `waitingFor` while a piece is held. */
 export const WAITING_FOR_WALLET = 'wallet';
 
