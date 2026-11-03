@@ -39,4 +39,12 @@ export class AdminContentQueueQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(100)
   regionCode?: string;
+
+  /**
+   * WEB-HOLD (R-126): `only` lists the pieces a moderator already approved that are waiting for their creator to open a wallet.
+   * Left out, the queue lists what waits on a human and leaves those out.
+   */
+  @IsOptional()
+  @IsIn(['only'])
+  held?: 'only';
 }

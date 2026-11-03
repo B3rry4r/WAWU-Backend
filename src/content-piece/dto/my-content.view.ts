@@ -14,6 +14,12 @@ export type MyContentItem = ContentPieceResponse & {
   salesCount: number;
   rejectionReason: string | null;
   rejectedAt: Date | null;
+  /**
+   * WEB-HOLD (R-126): `'wallet'` while a moderator has approved the piece and it waits for its creator to open their wallet in
+   * the app, then goes live by itself; null otherwise. Only pieces made by the new web upload flow can wait. `status` stays
+   * `pending` meanwhile. Added; no existing field changed.
+   */
+  waitingFor: 'wallet' | null;
 };
 
 /** Filter tab counts for the My content screen: All, Live, In review, Rejected. */

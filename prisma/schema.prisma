@@ -806,6 +806,12 @@ model ContentPiece {
   /// CONTENT-COVER (R-114): the storage key of the piece's own cover picture (`content/cover/<creator>/<uuid>.<jpg|png|webp>`),
   /// never a link. Null: no cover. Each view signs a fresh link and serves it as `coverUrl`; this column is never served as it is.
   coverKey               String?
+  /// WEB-HOLD (R-126): which client made the piece, when the Hub was told. 'site' = the new web upload flow (it sends
+  /// `X-Wawu-Client: site`). Null for the app and today's web: those pieces behave exactly as before.
+  uploadedVia            String?
+  /// WEB-HOLD (R-126): set when a moderator approved a 'site' piece but its creator has no open wallet. The piece stays
+  /// `pending` (non-public everywhere) and goes live the moment the creator's wallet opens. Null: not held.
+  heldForWalletAt        DateTime?
   /// True for a creator's first piece, free or paid (R-8 removed the rule that
   /// it must be free). Old name kept: renaming it would break clients.
   creatorFirstUploadFree Boolean       @default(false)

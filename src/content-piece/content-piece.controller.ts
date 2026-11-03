@@ -30,6 +30,7 @@ import { UpdateContentDto } from './dto/update-content.dto';
 import { MyContentQueryDto } from './dto/my-content-query.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
 import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
+import { isSiteRequest } from '../price-list/app-client';
 import { PreviewCutService } from './preview-cut.service';
 
 /**
@@ -165,7 +166,13 @@ export class ContentPieceController {
     await this.contentPieceService.settleSlowUploads(user.sub, dto);
     // PREVIEW-AUTO: the preview a piece goes out with. A clip sent is used as it is; a free piece with none is its own file; a
     // paid audio or video piece asking for it has its preview cut from the full file, after that file is stored.
-    const preview = await this.previews.resolve(user.sub, dto);
+    // WEB-HOLD (R-126): the new web upload flow (`X-Wawu-Client: site`) never uploads a preview; the Hub cuts it, as for the app.
+    const preview = await this.previews.resolve(
+      user.sub,
+      isSiteRequest() && dto.previewAsset === undefined
+        ? { ...dto, previewFromFile: true }
+        : dto,
+    );
     const piece = { ...dto, previewAsset: preview.previewAsset };
     try {
       // The files it names must still be the person's: checked inside the

@@ -6850,6 +6850,18 @@
               "maxLength": 100,
               "type": "string"
             }
+          },
+          {
+            "name": "held",
+            "required": false,
+            "in": "query",
+            "description": "WEB-HOLD (R-126): `only` lists the pieces a moderator already approved that are waiting for their creator to open a wallet.\nLeft out, the queue lists what waits on a human and leaves those out.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "only"
+              ]
+            }
           }
         ],
         "responses": {
@@ -63311,6 +63323,13 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "waitingFor": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -63340,7 +63359,8 @@
           "coverUrl",
           "salesCount",
           "rejectionReason",
-          "rejectedAt"
+          "rejectedAt",
+          "waitingFor"
         ]
       },
       "MyContentCounts": {

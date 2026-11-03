@@ -30,7 +30,7 @@ import {
   StorageService,
   objectKeyFrom,
 } from '../storage/storage.service';
-import { isAppRequest } from '../price-list/app-client';
+import { isAppRequest, isSiteRequest } from '../price-list/app-client';
 import { COVER_NOT_USABLE, coverKeyOf } from './content-cover';
 import {
   LOCKED_TX,
@@ -101,6 +101,9 @@ interface ContentRow {
   fullAssetUrl: string | null;
   /** CONTENT-COVER: the cover's storage key; never served as it is (`coverUrl` is the signed link). */
   coverKey?: string | null;
+  /** WEB-HOLD (R-126): the Hub's own bookkeeping; never served as it is. */
+  uploadedVia?: string | null;
+  heldForWalletAt?: Date | null;
   creatorFirstUploadFree: boolean;
   status: string;
   views: number;
@@ -118,6 +121,11 @@ class PlaceNotClaimed extends Error {
 }
 
 // Imported here, after the exported types, so they stay where they were.
+import {
+  UPLOADED_VIA_SITE,
+  WAITING_FOR_WALLET,
+  waitingForOf,
+} from './wallet-hold';
 import { Optional, ServiceUnavailableException } from '@nestjs/common';
 import { PriceListService } from '../price-list/price-list.service';
 import { PreviewCutService } from './preview-cut.service';
@@ -191,7 +199,11 @@ export class ContentPieceService {
     // answer, so on a request without the header the field is absent, as is `coverKey` on every answer.
     opts: { cover?: boolean } = {},
   ): Promise<ContentPieceResponse> {
-    const { coverKey, ...row } = content;
+    // WEB-HOLD (R-126): `uploadedVia` and `heldForWalletAt` are the Hub's own bookkeeping and are never served as they are
+    // (the owner's reads say `waitingFor`), so the protected routes keep every byte of their answer.
+    const { coverKey, uploadedVia, heldForWalletAt, ...row } = content;
+    void uploadedVia;
+    void heldForWalletAt;
     const isFree = row.accessType === 'free';
     const locked = !isFree && !unlocked;
     const withCover = opts.cover ?? isAppRequest();
@@ -496,7 +508,32 @@ export class ContentPieceService {
     page: number,
     perPage: number,
   ): Promise<Paginated<ContentPieceResponse>> {
-    return this.list(creatorWawuId, 'mine', undefined, page, perPage);
+    const shelf = await this.list(
+      creatorWawuId,
+      'mine',
+      undefined,
+      page,
+      perPage,
+    );
+    // WEB-HOLD (R-126): a piece approved and waiting for its creator's wallet says so. The key is added to those pieces only,
+    // so every other piece (and every caller that has none) reads byte for byte as it always did.
+    if (shelf.items.length === 0) return shelf;
+    const held = await this.prisma.contentPiece.findMany({
+      where: {
+        id: { in: shelf.items.map((i) => i.id) },
+        status: 'pending',
+        heldForWalletAt: { not: null },
+      },
+      select: { id: true },
+    });
+    if (held.length === 0) return shelf;
+    const heldIds = new Set(held.map((h) => h.id));
+    return {
+      ...shelf,
+      items: shelf.items.map((i) =>
+        heldIds.has(i.id) ? { ...i, waitingFor: WAITING_FOR_WALLET } : i,
+      ),
+    };
   }
 
   /**
@@ -890,6 +927,7 @@ export class ContentPieceService {
     // first upload or any other, and takes a place exactly like a paid one
     // (R-8).
     const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
+    const fromSite = isSiteRequest();
     // PREVIEW-AUTO: the routes that publish resolve the preview (a cut file, or the full file of a free piece) before they call
     // `create`, so it is set by here; a caller that did not is refused rather than stored with no preview.
     const previewAsset = dto.previewAsset;
@@ -1011,6 +1049,8 @@ export class ContentPieceService {
               previewAssetUrl: previewAsset,
               fullAssetUrl: dto.fullAsset,
               coverKey,
+              // WEB-HOLD (R-126): the new web upload flow marks its pieces; everything else stays null, as before.
+              uploadedVia: fromSite ? UPLOADED_VIA_SITE : null,
               creatorFirstUploadFree: isFirstUpload,
               status: 'pending',
             },
@@ -1091,6 +1131,7 @@ export class ContentPieceService {
           salesCount: salesById.get(row.id) ?? 0,
           rejectionReason: rejection?.reason ?? null,
           rejectedAt: rejection?.reviewedAt ?? null,
+          waitingFor: waitingForOf(row),
         };
       }),
     );
@@ -1227,6 +1268,8 @@ export class ContentPieceService {
     if (Object.keys(changes).length === 1 && dto.price === undefined) {
       throw new BadRequestException('Send at least one field to change.');
     }
+    // WEB-HOLD (R-126): an edit after approval sends the piece back to a full review, so it is no longer "approved, waiting".
+    changes.heldForWalletAt = null;
     if (accessType === 'free' && price !== 0) {
       throw new BadRequestException('Free content must be priced at ₦0.');
     }
