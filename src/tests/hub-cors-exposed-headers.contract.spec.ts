@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import { Controller, Get, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -35,7 +36,7 @@ describe('Hub CORS: Retry-After is exposed to a browser page', () => {
   });
 
   it('answers a listed origin with Access-Control-Expose-Headers: Retry-After', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await request(app.getHttpServer() as Server)
       .get('/api/hub/cors-probe')
       .set('Origin', 'https://web.example.test');
     expect(res.status).toBe(200);
@@ -47,7 +48,7 @@ describe('Hub CORS: Retry-After is exposed to a browser page', () => {
   });
 
   it('still refuses to reflect an origin that is not listed', async () => {
-    const res = await request(app.getHttpServer())
+    const res = await request(app.getHttpServer() as Server)
       .get('/api/hub/cors-probe')
       .set('Origin', 'https://other.example.test');
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
