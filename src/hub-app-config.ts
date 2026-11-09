@@ -44,7 +44,11 @@ export function configureHubApp(app: INestApplication): void {
     );
   }
   // `Retry-After` is a response header a browser hides from a page unless it is exposed (WEBAPP-03): the web app reads it on a 429.
-  app.enableCors({ origin: corsOrigin ?? true, credentials: true, exposedHeaders: ['Retry-After'] });
+  app.enableCors({
+    origin: corsOrigin ?? true,
+    credentials: true,
+    exposedHeaders: ['Retry-After'],
+  });
 
   app.setGlobalPrefix('api/hub');
 
