@@ -1508,19 +1508,27 @@ export class StorageService {
    */
   async sweepVideoPrivacy(limit = 20): Promise<number> {
     if (!this.client) return 0;
+    const since = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const rows = await this.prisma.storageObject.findMany({
       where: {
-        status: 'confirmed',
         releasedAt: null,
         removingAt: null,
-        confirmedAt: { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+        // Confirmed lately, or still pending from lately (a web upload is never confirmed by the app).
         OR: [
-          { key: { endsWith: '.mp4' } },
-          { key: { endsWith: '.mov' } },
-          { key: { endsWith: '.webm' } },
+          { status: 'confirmed', confirmedAt: { gte: since } },
+          { status: 'pending', createdAt: { gte: since } },
+        ],
+        AND: [
+          {
+            OR: [
+              { key: { endsWith: '.mp4' } },
+              { key: { endsWith: '.mov' } },
+              { key: { endsWith: '.webm' } },
+            ],
+          },
         ],
       },
-      orderBy: { confirmedAt: 'desc' },
+      orderBy: { createdAt: 'desc' },
       select: { key: true },
       take: limit,
     });
@@ -1865,13 +1873,17 @@ export class StorageService {
           const held = await this.bucketHolds(row.key, 'reconcile');
           if (held === 'unknown') return;
           // Guarded on `pending`: a confirm that landed since the read wins.
-          await this.prisma.storageObject.updateMany({
+          const settled = await this.prisma.storageObject.updateMany({
             where: { id: row.id, status: 'pending' },
             data:
               held === 'present'
                 ? { status: 'confirmed', confirmedAt: new Date() }
                 : { status: 'abandoned' },
           });
+          // VIDEO-PRIVACY: a web upload settles here, never through /uploads/confirm.
+          // In the background: an allowance read does not wait for a rewrite.
+          if (held === 'present' && settled.count > 0)
+            void this.ensureVideoClean(row.key, { background: true });
         }),
       );
       if (stale.length < RECONCILE_BATCH) return;

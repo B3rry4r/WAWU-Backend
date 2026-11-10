@@ -31,7 +31,9 @@ const MAX_INFO_ELEMENTS = 1000;
 const ID_TAGS = 0x1254c367;
 const ID_ATTACHMENTS = 0x1941a469;
 const ID_CLUSTER = 0x1f43b675;
-const MAX_ELEMENTS = 2000;
+const MAX_ELEMENTS = 1000;
+/** The same planning budget as the MP4 walk: past it the file is left as it is. */
+const PLAN_BUDGET_MS = 1500;
 const MAX_INFO = 1024 * 1024;
 
 interface El {
@@ -107,8 +109,11 @@ export async function planWebm(source: VideoSource): Promise<CleanPlan> {
   if (!seg || seg.id !== ID_SEGMENT) throw new Unreadable('no segment');
   const segEnd = seg.end ?? source.length;
 
+  const started = Date.now();
   let p = seg.body;
   for (let seen = 0; p < segEnd && seen < MAX_ELEMENTS; seen += 1) {
+    if (Date.now() - started > PLAN_BUDGET_MS)
+      throw new Unreadable('planning took too long');
     const el = await at(p, segEnd);
     if (!el) break;
     if (el.end === null) {

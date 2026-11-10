@@ -11,6 +11,7 @@ import {
 import { Readable } from 'node:stream';
 import {
   cleanStoredVideo,
+  COOL_DOWN_MS,
   forgetCleanedVideos,
 } from '../video-privacy/clean-stored';
 
@@ -299,5 +300,35 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
     expect(store.puts).toEqual([]);
     await new Promise((r) => setTimeout(r, 600));
     expect(store.puts).toHaveLength(1);
+  });
+
+  it('after the cool-down a key that failed three times is tried again, and a missing file costs no try', async () => {
+    const key = 'profile/work/u1/cool.mp4';
+    const store = bucket({ [key]: { body: tagged(), type: 'video/mp4' } });
+    const orig = store.client.send.bind(store.client);
+    let down = true;
+    (store.client as { send: unknown }).send = (c: unknown, o?: unknown) =>
+      c instanceof PutObjectCommand && down
+        ? Promise.reject(new Error('503'))
+        : orig(c as never, o as never);
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(now);
+      for (let i = 0; i < 3; i += 1) await cleanStoredVideo(deps(store), key);
+      const stuck = store.heads();
+      await cleanStoredVideo(deps(store), key);
+      expect(store.heads()).toBe(stuck);
+      down = false; // the outage is over
+      clock.mockReturnValue(now + COOL_DOWN_MS + 1000);
+      expect((await cleanStoredVideo(deps(store), key)).result).toBe('cleaned');
+    } finally {
+      clock.mockRestore();
+    }
+    const absent = await cleanStoredVideo(
+      deps(store),
+      'profile/work/u1/none.mp4',
+    );
+    expect(absent.result).toBe('left');
   });
 });

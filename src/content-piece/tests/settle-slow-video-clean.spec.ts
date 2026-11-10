@@ -24,10 +24,11 @@ describe('settleSlowUploads: video privacy hook', () => {
     };
     expect(ownQuery.where).toMatchObject({
       wawuUserId: 'me',
-      status: 'confirmed',
       releasedAt: null,
       removingAt: null,
     });
+    // Whatever the status: a web upload is still `pending` when its piece is published.
+    expect(ownQuery.where).not.toHaveProperty('status');
     expect(ensureVideoClean).toHaveBeenCalledTimes(1);
     expect(ensureVideoClean).toHaveBeenCalledWith('content/full/me/a.mp4');
   });

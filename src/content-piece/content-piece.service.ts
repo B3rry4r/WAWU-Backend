@@ -755,12 +755,12 @@ export class ContentPieceService {
     // VIDEO-PRIVACY (R-127): a video named here has no location or device tags
     // by the time the piece can be played (a no-op for anything but a video, and
     // for one already clean; it never refuses the listing).
-    // Only the caller's own uploads: another person's key named here is not touched.
+    // Only the caller's own uploads, whatever their status: the web never calls
+    // /uploads/confirm, so its rows are still `pending` when the piece is published.
     const own = await this.prisma.storageObject.findMany({
       where: {
         key: { in: keys },
         wawuUserId: creatorWawuId,
-        status: 'confirmed',
         releasedAt: null,
         removingAt: null,
       },

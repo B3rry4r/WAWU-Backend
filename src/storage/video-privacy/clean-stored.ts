@@ -45,13 +45,17 @@ const MAX_CLEAN_BYTES = 1024 * 1024 * 1024;
 const STREAM_TIMEOUT_MS = 10 * 60_000;
 const AT_ONCE = 2;
 const REMEMBER = 5000;
+/** After the tries, a key is tried again once this long has passed: a bucket outage heals, no storm. */
+export const COOL_DOWN_MS = 30 * 60_000;
+/** A file that cannot be read will not change by itself: it waits this long before one more look. */
+export const UNREADABLE_COOL_DOWN_MS = 6 * 60 * 60_000;
 /** A file that cannot be read is tried once (it will not change); a failed read or write, this many times. */
 export const MAX_TRIES = 3;
 /** The confirm waits for a file up to this size; above it the clean runs right after. */
 export const INLINE_MAX_BYTES = 100 * 1024 * 1024;
 
 const cleaned = new Set<string>();
-const failed = new Map<string, number>();
+const failed = new Map<string, { tries: number; until: number }>();
 const inFlight = new Map<string, Promise<CleanOutcome>>();
 let running = 0;
 const waiting: (() => void)[] = [];
@@ -88,7 +92,8 @@ export function cleanStoredVideo(
   if (!cleanableKind(key) || !deps.client)
     return Promise.resolve({ result: 'not-video' });
   if (cleaned.has(key)) return Promise.resolve({ result: 'already-clean' });
-  if ((failed.get(key) ?? 0) >= MAX_TRIES)
+  const fell = failed.get(key);
+  if (fell && fell.tries >= MAX_TRIES && Date.now() < fell.until)
     return Promise.resolve({
       result: 'left',
       why: 'given up after earlier tries',
@@ -109,9 +114,12 @@ const isPrecondition = (err: unknown): boolean => {
 
 async function run(deps: CleanDeps, key: string): Promise<CleanOutcome> {
   const { client, bucket, logger } = deps;
-  const left = (why: string, tries = 1): CleanOutcome => {
+  const left = (why: string, tries = 1, wait = COOL_DOWN_MS): CleanOutcome => {
     if (failed.size >= REMEMBER) failed.clear();
-    failed.set(key, (failed.get(key) ?? 0) + tries);
+    const old = failed.get(key);
+    // A key whose cool-down has passed starts its tries again.
+    const base = old && Date.now() >= old.until ? 0 : (old?.tries ?? 0);
+    failed.set(key, { tries: base + tries, until: Date.now() + wait });
     logger.warn(`Video privacy: left ${key} as it is: ${why}`);
     return { result: 'left', why };
   };
@@ -222,10 +230,19 @@ async function run(deps: CleanDeps, key: string): Promise<CleanOutcome> {
     return { result: 'cleaned', removed: plan.removed };
   } catch (err) {
     if (isPrecondition(err)) return changed();
+    // Not in the bucket (yet): a pending upload whose file has not landed. Nothing to count.
+    const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+    if (
+      e?.name === 'NotFound' ||
+      e?.name === 'NoSuchKey' ||
+      e?.$metadata?.httpStatusCode === 404
+    )
+      return { result: 'left', why: 'not in the bucket yet' };
     const unreadable = err instanceof Unreadable;
     return left(
       err instanceof Error ? err.message : String(err),
       unreadable ? MAX_TRIES : 1,
+      unreadable ? UNREADABLE_COOL_DOWN_MS : COOL_DOWN_MS,
     );
   }
 }
@@ -233,4 +250,5 @@ async function run(deps: CleanDeps, key: string): Promise<CleanOutcome> {
 function remember(key: string): void {
   if (cleaned.size >= REMEMBER) cleaned.clear();
   cleaned.add(key);
+  failed.delete(key);
 }

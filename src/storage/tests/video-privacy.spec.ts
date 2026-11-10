@@ -453,3 +453,42 @@ describe('VIDEO-PRIVACY round 1: crafted tables, leftovers and cut-short files',
     );
   });
 });
+
+describe('VIDEO-PRIVACY round 2: the WebM walk has a budget', () => {
+  it('gives up (the file is left) when the reads are slow, instead of walking on for minutes', async () => {
+    const el = (id: string, payload: Buffer) =>
+      Buffer.concat([
+        Buffer.from(id, 'hex'),
+        Buffer.from([0x80 | payload.length]),
+        payload,
+      ]);
+    const clusters = Array.from({ length: 900 }, () =>
+      el('1f43b675', Buffer.from('xx')),
+    );
+    const body = Buffer.concat([el('1549a966', Buffer.from('')), ...clusters]);
+    const seg = Buffer.concat([
+      Buffer.from('18538067', 'hex'),
+      Buffer.from([0x01, 0, 0, 0, 0, 0, 0, 0]).fill(0, 1),
+    ]);
+    // A segment of known size: 8-byte size field.
+    const sizeField = Buffer.alloc(8);
+    sizeField[0] = 0x01;
+    sizeField.writeUIntBE(body.length, 2, 6);
+    const file = Buffer.concat([
+      el('1a45dfa3', Buffer.from('webm')),
+      seg.subarray(0, 4),
+      sizeField,
+      body,
+    ]);
+    const slow: VideoSource = {
+      length: file.length,
+      read: async (a, b) => {
+        await new Promise((r) => setTimeout(r, 5));
+        return file.subarray(a, Math.min(b, file.length));
+      },
+    };
+    const t = Date.now();
+    await expect(planClean('v.webm', slow)).rejects.toBeInstanceOf(Unreadable);
+    expect(Date.now() - t).toBeLessThan(4000);
+  });
+});
