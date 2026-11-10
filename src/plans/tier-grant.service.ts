@@ -281,7 +281,10 @@ export class TierGrantService {
 
   /**
    * An upgrade (TIER-03): the person's running tier becomes a bigger one,
-   * starting now (never at a later date) for the new tier's own days. Unused
+   * starting now (never at a later date). It ends at the later of the end
+   * the person already holds and now plus the new tier's own days
+   * (`upgradeActiveUntil`), so an upgrade never shortens time already paid
+   * for, a renewal included (TIER-UPGRADE-FIX). Unused
    * points stay where they are. What the new tier gives is copied onto the
    * row, and the points it adds are the DIFFERENCE between the two tiers'
    * bonuses (the person already holds the smaller one's lot), as one lot with
@@ -345,7 +348,7 @@ export class TierGrantService {
     if (held.tierId === tier.id)
       throw new TierGrantRefusal('An upgrade moves to a different tier.');
 
-    const activeUntil = new Date(now.getTime() + goods.days * DAY_MS);
+    const activeUntil = upgradeActiveUntil(held.activeUntil, now, goods.days);
     assertDate(activeUntil);
     await tx.makerTier.update({
       where: { wawuUserId: input.wawuUserId },
@@ -392,6 +395,19 @@ export class TierGrantService {
       pointsExpireAt,
     };
   }
+}
+
+/**
+ * The end date an upgrade sets: the later of the end the person holds and now
+ * plus the new tier's days. The grant and the upgrade quote both use it, so
+ * they cannot disagree.
+ */
+export function upgradeActiveUntil(
+  heldUntil: Date,
+  now: Date,
+  days: number,
+): Date {
+  return new Date(Math.max(heldUntil.getTime(), now.getTime() + days * DAY_MS));
 }
 
 /** A date JavaScript cannot read back is never written. */
