@@ -104,6 +104,8 @@ interface ContentRow {
   /** WEB-HOLD (R-126): the Hub's own bookkeeping; never served as it is. */
   uploadedVia?: string | null;
   heldForWalletAt?: Date | null;
+  /** CREATOR-TAKEDOWN (R-130): the Hub's own bookkeeping; never served. */
+  ownerRemovedAt?: Date | null;
   creatorFirstUploadFree: boolean;
   status: string;
   views: number;
@@ -202,9 +204,11 @@ export class ContentPieceService {
   ): Promise<ContentPieceResponse> {
     // WEB-HOLD (R-126): `uploadedVia` and `heldForWalletAt` are the Hub's own bookkeeping and are never served as they are
     // (the owner's reads say `waitingFor`), so the protected routes keep every byte of their answer.
-    const { coverKey, uploadedVia, heldForWalletAt, ...row } = content;
+    const { coverKey, uploadedVia, heldForWalletAt, ownerRemovedAt, ...row } =
+      content;
     void uploadedVia;
     void heldForWalletAt;
+    void ownerRemovedAt;
     const isFree = row.accessType === 'free';
     const locked = !isFree && !unlocked;
     const withCover = opts.cover ?? isAppRequest();
@@ -656,7 +660,7 @@ export class ContentPieceService {
             creatorWawuId: requesterWawuId,
             status: existing.status,
           },
-          data: { status: 'removed' },
+          data: { status: 'removed', ownerRemovedAt: new Date() },
         });
         if (flipped.count === 0) continue;
 

@@ -439,6 +439,8 @@ export class AccountPurgeService {
    *     the deletion started (the mark's `priorStatus`; with no mark, the
    *     piece's status now). Also the storage keys of their files: preview,
    *     full file and photo frames.
+   *     A piece its creator took down (`ownerRemovedAt`, R-130) counts as live
+   *     here: its buyers keep it.
    *   - STRIPPED: every other piece a Purchase points at. A deletion never
    *     undoes a takedown, so a piece that was removed, rejected or pending
    *     before it is treated like an unsold one: its files go with the
@@ -453,6 +455,7 @@ export class AccountPurgeService {
         select: {
           id: true,
           status: true,
+          ownerRemovedAt: true,
           title: true,
           description: true,
           previewAssetUrl: true,
@@ -482,7 +485,12 @@ export class AccountPurgeService {
     for (const r of rows) {
       const prior = markOf.get(r.id) ?? r.status;
       priors[r.id] = prior;
-      if (r.purchases.length === 0 || prior !== 'live') {
+      // CREATOR-TAKEDOWN (R-130): a piece its creator took down is the buyers'
+      // too, so a later deletion of the account keeps it for them.
+      if (
+        r.purchases.length === 0 ||
+        (prior !== 'live' && r.ownerRemovedAt === null)
+      ) {
         stripIds.push(r.id);
         continue;
       }
