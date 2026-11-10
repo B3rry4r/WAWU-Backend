@@ -362,29 +362,38 @@ export class SearchResponseService {
     const withApp = isAppRequest();
     return Promise.all(
       // WEB-HOLD (R-126): `uploadedVia` and `heldForWalletAt` are never served; the web's answer keeps every other byte.
-      items.map(async ({ coverKey, uploadedVia, heldForWalletAt, ...item }) => {
-        void uploadedVia;
-        void heldForWalletAt;
-        const isFree = item.accessType === 'free';
-        const locked = !isFree && !unlockedSet.has(item.id);
-        const piece = {
-          ...item,
-          fullAssetUrl: locked ? null : item.fullAssetUrl,
-          fullAssetLocked: locked,
-        } as ContentPieceResponse;
-        if (!withApp) return piece;
-        const [previewAssetUrl, fullAssetUrl, coverUrl] = await Promise.all([
-          this.fresh(item.previewAssetUrl),
-          this.fresh(piece.fullAssetUrl),
-          this.storage?.coverUrlFor(coverKey),
-        ]);
-        return {
-          ...piece,
-          previewAssetUrl: previewAssetUrl ?? item.previewAssetUrl,
-          fullAssetUrl,
-          coverUrl: coverUrl ?? null,
-        };
-      }),
+      items.map(
+        async ({
+          coverKey,
+          uploadedVia,
+          heldForWalletAt,
+          ownerRemovedAt,
+          ...item
+        }) => {
+          void uploadedVia;
+          void heldForWalletAt;
+          void ownerRemovedAt; // CREATOR-TAKEDOWN: bookkeeping, never served
+          const isFree = item.accessType === 'free';
+          const locked = !isFree && !unlockedSet.has(item.id);
+          const piece = {
+            ...item,
+            fullAssetUrl: locked ? null : item.fullAssetUrl,
+            fullAssetLocked: locked,
+          } as ContentPieceResponse;
+          if (!withApp) return piece;
+          const [previewAssetUrl, fullAssetUrl, coverUrl] = await Promise.all([
+            this.fresh(item.previewAssetUrl),
+            this.fresh(piece.fullAssetUrl),
+            this.storage?.coverUrlFor(coverKey),
+          ]);
+          return {
+            ...piece,
+            previewAssetUrl: previewAssetUrl ?? item.previewAssetUrl,
+            fullAssetUrl,
+            coverUrl: coverUrl ?? null,
+          };
+        },
+      ),
     );
   }
 

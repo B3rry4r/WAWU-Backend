@@ -816,6 +816,9 @@ model ContentPiece {
   /// it must be free). Old name kept: renaming it would break clients.
   creatorFirstUploadFree Boolean       @default(false)
   status                 ContentStatus @default(pending)
+  /// CREATOR-TAKEDOWN (R-130): set only by DELETE /content/:id, when the creator took their own piece down. A removed piece with
+  /// this set stays readable to the people who paid for it; an admin's removal and an account deletion never set it. Null: not so.
+  ownerRemovedAt         DateTime?
   views                  Int           @default(0)
   ratingPct              Int?
   commentCount           Int           @default(0)

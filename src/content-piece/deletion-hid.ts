@@ -9,7 +9,13 @@ type Db = Pick<
 >;
 
 /** What the three checks below need to know about a piece. */
-type PieceRef = { id: string; status: string; creatorWawuId: string };
+type PieceRef = {
+  id: string;
+  status: string;
+  creatorWawuId: string;
+  /** CREATOR-TAKEDOWN: left out by a caller that did not select it; it is then read here. */
+  ownerRemovedAt?: Date | null;
+};
 
 /**
  * SETTINGS-06 rounds 8 and 9 (lead rulings, 17 Oct 2026). "Buyers keep what
@@ -33,6 +39,10 @@ type PieceRef = { id: string; status: string; creatorWawuId: string };
  *     with a status other than `live`, so it never gets here);
  *   - anything else: a piece taken down by its creator or an admin, which
  *     stays gone for everyone, as it always was.
+ * CREATOR-TAKEDOWN (R-130, owner, 10 Nov 2026): a piece its creator took down
+ * (`ownerRemovedAt` set by DELETE /content/:id) is kept for its buyers the
+ * same way, whatever else is on file for it.
+ *
  * A piece that was removed, rejected or pending before the deletion has a row
  * (or none) whose `priorStatus` is not `live`: a deletion never undoes a
  * takedown.
@@ -42,6 +52,10 @@ export async function readHidden(
   piece: ContentPiece,
 ): Promise<{ piece: ContentPiece | null; hidden: boolean }> {
   if (piece.status !== 'removed') return { piece, hidden: false };
+  // CREATOR-TAKEDOWN (R-130): a piece its own creator took down stays with
+  // the people who paid for it. The column is written only by DELETE
+  // /content/:id, so an admin's removal and a deletion's hiding never match.
+  if (piece.ownerRemovedAt) return { piece, hidden: true };
   const marker = await db.accountDeletionContent.findFirst({
     where: { contentPieceId: piece.id },
     select: { priorStatus: true },
@@ -80,6 +94,16 @@ export async function hiddenByDeletion(
   piece: PieceRef,
 ): Promise<boolean> {
   if (piece.status !== 'removed') return false;
+  const takenDown =
+    piece.ownerRemovedAt === undefined
+      ? (
+          await db.contentPiece.findUnique({
+            where: { id: piece.id },
+            select: { ownerRemovedAt: true },
+          })
+        )?.ownerRemovedAt
+      : piece.ownerRemovedAt;
+  if (takenDown) return true;
   const marker = await db.accountDeletionContent.findFirst({
     where: { contentPieceId: piece.id },
     select: { priorStatus: true },

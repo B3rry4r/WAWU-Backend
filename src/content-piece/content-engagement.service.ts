@@ -4,6 +4,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import { ContentPieceService } from './content-piece.service';
+import { hasBoughtContent, hiddenByDeletion } from './deletion-hid';
 import {
   ContentMediaService,
   type MediaDetails,
@@ -337,16 +338,32 @@ export class ContentEngagementService {
         commentCount: true,
       },
     });
+    // CREATOR-TAKEDOWN (R-130): the page of a piece its creator took down
+    // still opens for the people who paid for it, and it reads this too.
+    const keptForBuyer =
+      piece?.status === 'removed' &&
+      (await hiddenByDeletion(this.prisma, piece)) &&
+      (await hasBoughtContent(this.prisma, piece.id, viewerWawuId));
     const visible =
       piece &&
-      piece.status !== 'removed' &&
-      (piece.status === 'live' || piece.creatorWawuId === viewerWawuId);
+      (keptForBuyer ||
+        (piece.status !== 'removed' &&
+          (piece.status === 'live' || piece.creatorWawuId === viewerWawuId)));
     if (!piece || !visible) throw new NotFoundException('Content not found');
-    await this.blockedAccounts.assertVisible(
-      viewerWawuId,
-      piece.creatorWawuId,
-      'Content not found',
-    );
+    // A block keeps what a person bought, as on the detail; a suspension does not.
+    if (keptForBuyer) {
+      await this.blockedAccounts.assertNotSuspended(
+        viewerWawuId,
+        piece.creatorWawuId,
+        'Content not found',
+      );
+    } else {
+      await this.blockedAccounts.assertVisible(
+        viewerWawuId,
+        piece.creatorWawuId,
+        'Content not found',
+      );
+    }
 
     const state = await this.stateFor(viewerWawuId, [piece]);
     return {

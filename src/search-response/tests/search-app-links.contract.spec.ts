@@ -333,11 +333,13 @@ describe('GET /search serves signed links to the app and the stored values to th
       coverKey: _coverKey,
       uploadedVia: _via,
       heldForWalletAt: _held,
+      ownerRemovedAt: _removed, // CREATOR-TAKEDOWN (R-130): kept and never served, like the two above
       ...row
     } = await prisma.contentPiece.findUniqueOrThrow({ where: { id } });
     void _coverKey;
     void _via;
     void _held;
+    void _removed;
     return JSON.stringify({
       ...row,
       fullAssetUrl: locked ? null : row.fullAssetUrl,
