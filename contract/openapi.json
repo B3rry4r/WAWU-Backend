@@ -78783,6 +78783,10 @@
           "bumpPoints": {
             "type": "integer"
           },
+          "newActiveUntil": {
+            "type": "string",
+            "nullable": true
+          },
           "paymentKind": {
             "type": "string",
             "enum": [
@@ -78803,6 +78807,7 @@
           "planMinor",
           "bumpMinor",
           "bumpPoints",
+          "newActiveUntil",
           "paymentKind",
           "payment"
         ]

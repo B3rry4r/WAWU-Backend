@@ -157,6 +157,12 @@ export interface PlanPurchaseQuoteView {
   bumpMinor: number;
   /** The checkout bump's points when it is bought, else 0. */
   bumpPoints: number;
+  /**
+   * An upgrade only (null for the other kinds): when the tier will end if the
+   * upgrade is paid now (ISO 8601). It is the later of the end the person
+   * holds and today plus the new tier's days, the same rule the grant applies.
+   */
+  newActiveUntil: string | null;
   /** The wallet payment's kind to send with the quote token. */
   paymentKind: PlanPaymentKind;
   /** The wallet payment quote: price, the provider's charge, total, balance, shortfall and its token. */
