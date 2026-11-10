@@ -37,6 +37,8 @@
  * small reads.
  */
 import { ConfigService } from '@nestjs/config';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import type { Readable } from 'node:stream';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, type Prisma } from '../generated/prisma/client';
 import { createStorageClient } from '../src/storage/storage-client';
@@ -118,6 +120,24 @@ async function main() {
         warn: (m: string) => console.warn(m),
       },
       dryRun: mode === 'plan',
+      putObject: async (put: {
+        key: string;
+        body: Readable;
+        contentType: string | undefined;
+        contentLength: number;
+        timeoutMs: number;
+      }) => {
+        await storage.client.send(
+          new PutObjectCommand({
+            Bucket: storage.bucket,
+            Key: put.key,
+            Body: put.body,
+            ContentType: put.contentType,
+            ContentLength: put.contentLength,
+          }),
+          { requestTimeout: put.timeoutMs },
+        );
+      },
       stillWanted: async (k: string) => {
         const r = await prisma.storageObject.findUnique({
           where: { key: k },

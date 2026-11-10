@@ -3,7 +3,6 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
-  PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
 import { pipeline, type Readable } from 'node:stream';
@@ -30,6 +29,18 @@ export interface CleanDeps {
   logger: Pick<Logger, 'log' | 'warn'>;
   /** Whether the upload row for `key` is still wanted (not released, not removed). */
   stillWanted: (key: string) => Promise<boolean>;
+  /**
+   * Puts `body` back at `key` (same type, same length). Supplied by StorageService, the one file
+   * that writes objects to the bucket (the account purge's guard, FIX-65); this file imports no
+   * write command.
+   */
+  putObject: (put: {
+    key: string;
+    body: Readable;
+    contentType: string | undefined;
+    contentLength: number;
+    timeoutMs: number;
+  }) => Promise<void>;
   /** The one-off sweep's plan mode: read and plan, write nothing. */
   dryRun?: boolean;
   /**
@@ -206,16 +217,13 @@ async function run(deps: CleanDeps, key: string): Promise<CleanOutcome> {
     }
     const patched = patchStream(plan.patches);
     pipeline(body, patched, () => undefined);
-    await client!.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: patched,
-        ContentType: head.ContentType,
-        ContentLength: length,
-      }),
-      { requestTimeout: STREAM_TIMEOUT_MS },
-    );
+    await deps.putObject({
+      key,
+      body: patched,
+      contentType: head.ContentType,
+      contentLength: length,
+      timeoutMs: STREAM_TIMEOUT_MS,
+    });
 
     // A release that ran while the file was rewritten must not leave the file behind.
     if (!(await deps.stillWanted(key))) {

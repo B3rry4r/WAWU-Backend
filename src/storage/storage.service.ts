@@ -1493,6 +1493,19 @@ export class StorageService {
           });
           return !!r && !r.releasedAt && !r.removingAt;
         },
+        // The rewrite is put back through this class: the one file that writes to the bucket.
+        putObject: async (put) => {
+          await this.client!.send(
+            new PutObjectCommand({
+              Bucket: this.bucket,
+              Key: put.key,
+              Body: put.body,
+              ContentType: put.contentType,
+              ContentLength: put.contentLength,
+            }),
+            { requestTimeout: put.timeoutMs },
+          );
+        },
         // A person waiting on a confirm is not kept for a big file (see INLINE_MAX_BYTES).
         inlineMaxBytes: opts.background ? undefined : INLINE_MAX_BYTES,
       },

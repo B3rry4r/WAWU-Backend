@@ -105,6 +105,25 @@ function bucket(
   return { client, puts, deletes, calls, hooks, heads: () => heads };
 }
 const logger = { log: jest.fn(), warn: jest.fn() };
+/** What StorageService supplies: the write goes through the client as it is when called. */
+const putVia =
+  (client: S3Client) =>
+  async (put: {
+    key: string;
+    body: Readable;
+    contentType: string | undefined;
+    contentLength: number;
+  }) => {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: 'b',
+        Key: put.key,
+        Body: put.body,
+        ContentType: put.contentType,
+        ContentLength: put.contentLength,
+      }),
+    );
+  };
 
 describe('VIDEO-PRIVACY: cleaning a stored video', () => {
   beforeEach(() => {
@@ -121,6 +140,7 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
       client: store.client,
       bucket: 'b',
       logger,
+      putObject: putVia(store.client),
       stillWanted: () => Promise.resolve(true),
     };
     const first = await cleanStoredVideo(deps, key);
@@ -160,6 +180,7 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
         client: store.client,
         bucket: 'b',
         logger,
+        putObject: putVia(store.client),
         stillWanted: () => Promise.resolve(true),
       },
       key,
@@ -189,6 +210,7 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
         client: store.client,
         bucket: 'b',
         logger,
+        putObject: putVia(store.client),
         stillWanted: () => Promise.resolve(true),
       },
       key,
@@ -201,6 +223,7 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
             client: store.client,
             bucket: 'b',
             logger,
+            putObject: putVia(store.client),
             stillWanted: () => Promise.resolve(true),
           },
           'avatars/u/a.png',
@@ -217,6 +240,7 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
         client: store.client,
         bucket: 'b',
         logger,
+        putObject: putVia(store.client),
         stillWanted: () => Promise.resolve(false),
       },
       key,
@@ -228,6 +252,7 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
     client: store.client,
     bucket: 'b',
     logger,
+    putObject: putVia(store.client),
     stillWanted: () => Promise.resolve(true),
     ...more,
   });
