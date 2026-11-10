@@ -229,7 +229,13 @@ export class AdminContentReviewService {
         if (!existing) {
           throw new NotFoundException('Content not found.');
         }
-        if (existing.status === 'removed') {
+        // CREATOR-TAKEDOWN (R-130): a piece its creator took down is still open
+        // to its buyers, so an admin removal must be able to close it. It
+        // clears the creator's mark; the place went back at the take-down.
+        // Every other removed piece answers as it always did.
+        const ownerRemoved =
+          existing.status === 'removed' && Boolean(existing.ownerRemovedAt);
+        if (existing.status === 'removed' && !ownerRemoved) {
           throw new BadRequestException('This piece has already been removed.');
         }
 
@@ -238,15 +244,19 @@ export class AdminContentReviewService {
         // removed never matches: one piece gives its place back once and
         // writes one audit row, however many requests remove it.
         const claimed = await tx.contentPiece.updateMany({
-          where: { id, status: existing.status },
-          data: { status: 'removed' },
+          where: {
+            id,
+            status: existing.status,
+            ...(ownerRemoved ? { ownerRemovedAt: { not: null } } : {}),
+          },
+          data: { status: 'removed', ownerRemovedAt: null },
         });
         if (claimed.count === 0) continue;
 
         // A rejected piece's place went back at the rejection. Any other
         // piece holds one. The status here is the one this write changed.
         let slotReturned = false;
-        if (existing.status !== 'rejected') {
+        if (existing.status !== 'rejected' && !ownerRemoved) {
           const returned = await tx.creatorState.updateMany({
             where: {
               wawuUserId: existing.creatorWawuId,

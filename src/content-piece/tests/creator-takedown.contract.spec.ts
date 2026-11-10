@@ -17,6 +17,7 @@ import { ContentEngagementService } from '../content-engagement.service';
 import { ContentMediaService } from '../content-media.service';
 import { CourseLessonsService } from '../course-lessons.service';
 import { StorageService } from '../../storage/storage.service';
+import { AdminContentReviewService } from '../../admin/content-review/admin-content-review.service';
 import { hiddenByDeletion } from '../deletion-hid';
 
 /**
@@ -216,5 +217,29 @@ describe('CREATOR-TAKEDOWN: buyers keep a piece its creator took down', () => {
     const found = await (purge as any).findSoldContent(w.creator);
     expect(found.ids).toContain(w.sold.id);
     expect(found.stripIds).not.toContain(w.sold.id);
+  });
+
+  it('an admin can still remove a piece its creator took down: the buyer is then shut out, the place is not returned twice, and a second removal is refused as before', async () => {
+    const w = await world('video');
+    await content.delete(w.sold.id, w.creator);
+    await expect(content.findOne(w.sold.id, w.buyer)).resolves.toBeTruthy();
+    const slots = async () => (await prisma.creatorState.findUniqueOrThrow({ where: { wawuUserId: w.creator } })).slotsUsed;
+    const before = await slots();
+    const admin = { id: randomUUID(), email: 'ct@admin.test.wawu.dev', name: 'CT', role: 'superadmin', status: 'active', lastLoginAt: null, createdAt: new Date() } as never;
+    const stub = { signedUrlFor: async () => null, readUrlFor: async (k: string) => k, coverUrlFor: async () => null } as never;
+    const service = new AdminContentReviewService(prisma, {} as never, stub, {} as never);
+    jest.spyOn(service as any, 'toDetail').mockResolvedValue({} as never);
+    const out = await service.takeDown(w.sold.id, { reason: 'Breaks the rules.' }, admin);
+    expect(out.review.decision).toBe('removed');
+    expect(out.review.slotReturned).toBe(false);
+    expect(await slots()).toBe(before);
+    const row = await prisma.contentPiece.findUniqueOrThrow({ where: { id: w.sold.id } });
+    expect(row.status).toBe('removed');
+    expect(row.ownerRemovedAt).toBeNull();
+    await gone(content.findOne(w.sold.id, w.buyer));
+    await gone(detail.detail(w.sold.id, w.buyer));
+    await gone(media.get(w.sold.id, w.buyer));
+    await gone(engagement.engagement(w.sold.id, w.buyer));
+    await expect(service.takeDown(w.sold.id, { reason: 'Again.' }, admin)).rejects.toThrow('already been removed');
   });
 });
