@@ -5,7 +5,8 @@ import { deriveVerificationState } from '../common/verification/verification-sta
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { ContentStatus } from '../../generated/prisma/enums';
 import { Prisma } from '../../generated/prisma/client';
-import { StorageService, objectKeyFrom } from '../storage/storage.service';
+import { StorageService } from '../storage/storage.service';
+import { freshOwnImage } from '../storage/own-image';
 import type { VerificationState } from '../common/verification/verification-state';
 import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
 import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
@@ -129,16 +130,7 @@ export class ExploreService {
     folder: string,
     ownerId: string,
   ): Promise<string | null> {
-    if (!stored) return null;
-    const key = objectKeyFrom(stored);
-    if (key === stored) {
-      return /^https?:\/\//i.test(stored) ? stored : null;
-    }
-    const prefix = `${folder}/${ownerId}/`;
-    if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) {
-      return null;
-    }
-    return this.storage.freshUrlFor(stored);
+    return freshOwnImage(this.storage, stored, folder, ownerId);
   }
 
   private async cards(

@@ -4,6 +4,8 @@ import {
   deriveVerificationState,
   type VerificationState,
 } from '../common/verification/verification-state';
+import { StorageService } from '../storage/storage.service';
+import { freshOwnImage } from '../storage/own-image';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { AccountType, ContentStatus } from '../../generated/prisma/enums';
@@ -70,6 +72,7 @@ export class CreatorDiscoveryService {
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly storage: StorageService,
   ) {}
 
   async list(query: ListCreatorsQueryDto, requesterWawuId: string | null) {
@@ -167,7 +170,21 @@ export class CreatorDiscoveryService {
 
     const followingSet = new Set(following.map((f) => f.followingWawuId));
 
-    const items: CreatorDiscoveryItem[] = profiles.map((p) => {
+    // The stored avatar link is a 7-day signed link: signed again like Explore's (same helper, same day-stable link), so
+    // it never goes dead. A stored value that is not this creator's own key is left exactly as stored, as it always was
+    // here (Explore drops it; this list never did, and a spec holds it).
+    const avatars = await Promise.all(
+      profiles.map(
+        async (p) =>
+          (await freshOwnImage(
+            this.storage,
+            p.avatarUrl,
+            'avatars',
+            p.wawuUserId,
+          )) ?? p.avatarUrl,
+      ),
+    );
+    const items: CreatorDiscoveryItem[] = profiles.map((p, idx) => {
       const identity = identities.get(p.wawuUserId);
       const fullName = [identity?.firstName, identity?.lastName]
         .filter(Boolean)
@@ -184,7 +201,7 @@ export class CreatorDiscoveryService {
         // than either, and such a row is dropped below instead.
         name: fullName || p.handle || '',
         handle: p.handle,
-        avatarUrl: p.avatarUrl,
+        avatarUrl: avatars[idx],
         field: p.interests[0] ?? null,
         pieceCount: pieceCountBy.get(p.wawuUserId) ?? 0,
         // Read off the row already loaded for this page. No extra query, and

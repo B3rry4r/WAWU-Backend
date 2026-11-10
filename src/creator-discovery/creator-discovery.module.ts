@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
+import { StorageModule } from '../storage/storage.module';
 import { CreatorDiscoveryController } from './creator-discovery.controller';
 import { CreatorDiscoveryService } from './creator-discovery.service';
 
@@ -10,7 +11,7 @@ import { CreatorDiscoveryService } from './creator-discovery.service';
  * verification the optional guard needs.
  */
 @Module({
-  imports: [WawuAuthModule, BlockedAccountModule],
+  imports: [WawuAuthModule, BlockedAccountModule, StorageModule],
   controllers: [CreatorDiscoveryController],
   providers: [CreatorDiscoveryService],
 })

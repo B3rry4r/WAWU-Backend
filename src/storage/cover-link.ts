@@ -1,12 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { S3Client } from '@aws-sdk/client-s3';
 import { createStorageClient } from './storage-client';
-import { serveAs } from './dto/presign-upload.dto';
-
-/** The same seven days `StorageService.readUrlFor` gives a read link. */
-const READ_URL_SECONDS = 604800;
+import { signReadLink } from './read-link';
 
 /**
  * CONTENT-COVER (R-114): signs a read link for a piece's cover from its stored key, for the views that live in a module
@@ -26,18 +22,11 @@ export class CoverLinkService {
 
   async linkFor(key: string | null | undefined): Promise<string | null> {
     if (!key || !this.made) return null;
-    const { contentType, inline } = serveAs(key);
     try {
-      return await getSignedUrl(
-        this.made.client,
-        new GetObjectCommand({
-          Bucket: this.made.bucket,
-          Key: key,
-          ResponseContentType: contentType,
-          ResponseContentDisposition: inline ? 'inline' : 'attachment',
-        }),
-        { expiresIn: READ_URL_SECONDS },
-      );
+      return await signReadLink(this.made.client, {
+        bucket: this.made.bucket,
+        key,
+      });
     } catch (err) {
       this.logger.warn(`Could not sign the cover ${key}: ${String(err)}`);
       return null;
