@@ -34,6 +34,7 @@ import { nuvionWalletId } from '../../../nuvion/areas/accounts';
 import { NuvionCardsHandler } from '../../../nuvion/handlers/cards.handler';
 import { NuvionHandlerRegistry } from '../../../nuvion/handlers/nuvion-handler-registry';
 import { NuvionWebhookDispatcher } from '../../../nuvion/webhook/nuvion-webhook-dispatcher.service';
+import { LedgerService } from '../../ledger/ledger.service';
 import { MoneyError } from '../../money-error';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
 import { NuvionBookArea } from '../../../nuvion/areas/book';
@@ -131,6 +132,10 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
   let lostCreateStatus = 'active';
   /** `refuseFee`: the next create is refused as Nuvion refuses a funding account that cannot pay its fee. */
   let refuseFee = false;
+  /** `failCreate`: the next create is a plain server failure at Nuvion (nothing made, the fee not taken). */
+  let failCreate = false;
+  /** `takeIssuerFee`: a card made takes Nuvion's fee out of the account, as Nuvion does (CARD-FEE-HISTORY). */
+  let takeIssuerFee = false;
 
   interface Person {
     id: string;
@@ -179,6 +184,21 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
             type: 'error_card_creation_fee_required',
           },
         };
+      }
+      if (failCreate) {
+        failCreate = false;
+        return {
+          status: 400,
+          body: {
+            status: 'error',
+            message: 'The card could not be made.',
+            type: 'error_operation_invalid_for_state',
+          },
+        };
+      }
+      if (takeIssuerFee) {
+        const taken = accounts.accounts.get(b.account_id)!;
+        taken.balance.available = Number(taken.balance.available) - FEE;
       }
       cardSeq += 1;
       const c: FakeCard = {
@@ -2164,6 +2184,216 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     }
     // Safe to run again.
     await purge.beforeErase(p.id);
+  });
+
+  describe('CARD-FEE-HISTORY: the fee a card costs is a row in the history', () => {
+    const FEE_WAWU = 1_000;
+    const ISSUER = (reference: string) => `${reference}-issuer`;
+    beforeEach(() => {
+      takeIssuerFee = true;
+    });
+    afterEach(() => {
+      takeIssuerFee = false;
+      failCreate = false;
+      refuseFee = false;
+      (settings as { wawuFeeKobo: number }).wawuFeeKobo = 0;
+    });
+
+    const history = async (p: Person) =>
+      asEnvelope<{
+        items: Array<{
+          id: string;
+          direction: string;
+          category: string;
+          status: string;
+          amountKobo: number;
+          totalKobo: number;
+          description: string;
+          reference: string;
+          counterparty: { kind: string; name: string } | null;
+        }>;
+        nextCursor: string | null;
+      }>(
+        await http()
+          .get('/api/hub/money/transactions')
+          .set('Authorization', p.auth)
+          .expect(200),
+      ).data!;
+
+    const feeRows = (p: Person) =>
+      prisma.fintavaLedgerEntry.findMany({
+        where: { wawuUserId: p.id, walletKind: 'user' },
+        orderBy: { createdAt: 'asc' },
+      });
+
+    it('getting a card writes one fee row, an out row of the debit, drawn as a send fee row is', async () => {
+      const p = await person();
+      const res = await makeCard(p);
+      expect(res.status).toBe(201);
+      const card = asEnvelope<CardView>(res).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      const page = await history(p);
+      expect(page.items).toHaveLength(1);
+      const item = page.items[0];
+      expect(item).toMatchObject({
+        direction: 'out',
+        category: 'transfer',
+        status: 'completed',
+        amountKobo: FEE,
+        totalKobo: FEE,
+        reference: ISSUER(row.reference),
+        counterparty: { kind: 'wawu', name: "WAWU's fee" },
+      });
+      expect(item.description).not.toMatch(/—/);
+      // The row's own amount is what the provider took: the stand-in's balance fell by it.
+      expect(book.availableOf(p.account)).toBe(5_000_000 - item.amountKobo);
+      expect(BigInt(item.amountKobo)).toBe(row.providerFeeKobo);
+    });
+
+    it("the history adds up to the stand-in balance after two cards, one with WAWU's fee on top", async () => {
+      const p = await person();
+      expect((await makeCard(p)).status).toBe(201);
+      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+      expect((await makeCard(p, 'single_use')).status).toBe(201);
+      const page = await history(p);
+      expect(page.items).toHaveLength(3);
+      expect(page.items.every((i) => i.direction === 'out')).toBe(true);
+      const sum = page.items.reduce((n, i) => n + i.totalKobo, 0);
+      expect(sum).toBe(FEE + FEE + FEE_WAWU);
+      expect(book.availableOf(p.account)).toBe(5_000_000 - sum);
+    });
+
+    it('a refused issue (the fee cannot be paid) leaves no row and no charge', async () => {
+      const p = await person();
+      refuseFee = true;
+      const res = await makeCard(p);
+      expect(res.status).toBe(402);
+      expect(await feeRows(p)).toHaveLength(0);
+      expect((await history(p)).items).toHaveLength(0);
+      expect(book.availableOf(p.account)).toBe(5_000_000);
+    });
+
+    it('a failed issue (Nuvion cannot make it) leaves no row and no charge, and the key tried again makes one row', async () => {
+      const p = await person();
+      const key = randomUUID();
+      failCreate = true;
+      const res = await makeCard(p, 'virtual', key);
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(await feeRows(p)).toHaveLength(0);
+      expect(book.availableOf(p.account)).toBe(5_000_000);
+      const retry = await makeCard(p, 'virtual', key);
+      expect(retry.status).toBe(201);
+      expect(await feeRows(p)).toHaveLength(1);
+      expect(book.availableOf(p.account)).toBe(5_000_000 - FEE);
+    });
+
+    it('a replay with the same Idempotency-Key writes one row and charges once', async () => {
+      const p = await person();
+      const key = randomUUID();
+      const first = await makeCard(p, 'virtual', key);
+      const again = await makeCard(p, 'virtual', key);
+      expect(first.status).toBe(201);
+      expect(again.status).toBe(201);
+      expect(asEnvelope<CardView>(again).data!.id).toBe(
+        asEnvelope<CardView>(first).data!.id,
+      );
+      expect(await feeRows(p)).toHaveLength(1);
+      expect(book.availableOf(p.account)).toBe(5_000_000 - FEE);
+    });
+
+    it('two requests at once with one key make one card, one row and one charge', async () => {
+      const p = await person();
+      const key = randomUUID();
+      const both = await Promise.all([
+        makeCard(p, 'virtual', key),
+        makeCard(p, 'virtual', key),
+      ]);
+      expect(both.some((r) => r.status === 201)).toBe(true);
+      expect(
+        await prisma.walletCard.count({
+          where: { wawuUserId: p.id, state: { not: 'failed' } },
+        }),
+      ).toBe(1);
+      expect(await feeRows(p)).toHaveLength(1);
+      expect(book.availableOf(p.account)).toBe(5_000_000 - FEE);
+    });
+
+    it('a card whose answer was lost and then found by its reference has its fee row once', async () => {
+      const p = await person();
+      loseCreate = true;
+      const res = await makeCard(p);
+      expect(res.status).toBe(201);
+      expect(await feeRows(p)).toHaveLength(1);
+      // Looking at the card again (the list reads, the fee is owed to nobody) adds nothing.
+      await http().get(BASE).set('Authorization', p.auth).expect(200);
+      expect(await feeRows(p)).toHaveLength(1);
+    });
+
+    it("WAWU's fee is its own row, the amount that left the wallet for it, written once even when the transfer is asked again", async () => {
+      const p = await person();
+      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+      const card = asEnvelope<CardView>(await makeCard(p)).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      const rows = await feeRows(p);
+      const wawu = rows.find(
+        (r) => r.customerReference === `${row.reference}-wawu`,
+      );
+      expect(wawu).toBeDefined();
+      expect(Number(wawu!.totalKobo)).toBe(FEE_WAWU);
+      await prisma.walletCard.update({
+        where: { id: card.id },
+        data: { feeCollectedAt: null },
+      });
+      await http().get(BASE).set('Authorization', p.auth).expect(200);
+      expect(await feeRows(p)).toHaveLength(2);
+    });
+
+    it("Nuvion's cards.created for a card whose answer was never seen writes the fee row once, with the card made", async () => {
+      const p = await person();
+      const reference = `wawu-card-${randomUUID().slice(0, 12)}`;
+      const created = await prisma.walletCard.create({
+        data: {
+          wawuUserId: p.id,
+          provider: 'nuvion',
+          reference,
+          type: 'virtual',
+          name: 'Virtual card',
+          state: 'unknown',
+          providerFeeKobo: BigInt(FEE),
+          wawuFeeKobo: 0n,
+        },
+      });
+      const wired = new NuvionCardsHandler(prisma, {
+        get: (token: unknown) =>
+          token === LedgerService
+            ? app.get(LedgerService)
+            : app.get<NuvionWalletProvider>(WALLET_PROVIDER),
+      } as never);
+      const event = {
+        id: randomUUID(),
+        eventId: randomUUID(),
+        event: 'cards.created' as const,
+        resourceId: '01CARDHANDLER00000000000001',
+        entityId: p.entity,
+        data: { id: '01CARDHANDLER00000000000001', name: reference },
+        receivedAt: new Date(),
+        attempts: 1,
+      };
+      expect((await wired.handle(event)).outcome).toBe('done');
+      expect((await wired.handle(event)).outcome).toBe('done');
+      const after = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: created.id },
+      });
+      expect(after.state).toBe('active');
+      const rows = await feeRows(p);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].customerReference).toBe(ISSUER(reference));
+      expect(Number(rows[0].totalKobo)).toBe(FEE);
+    });
   });
 });
 

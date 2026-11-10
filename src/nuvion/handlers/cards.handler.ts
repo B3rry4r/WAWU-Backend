@@ -2,7 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { WalletCard } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { recordIssuerFeeRow } from '../../money/cards/card-fee-row';
 import { followCardStatus, stepWords } from '../../money/cards/card-status';
+import { LedgerService } from '../../money/ledger/ledger.service';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -138,9 +140,34 @@ export class NuvionCardsHandler implements NuvionEventHandler {
         };
       }
       if (['creating', 'unknown'].includes(row.state)) {
-        await this.prisma.walletCard.updateMany({
-          where: { id: row.id, state: { in: ['creating', 'unknown'] } },
-          data: { providerCardId: cardId, state: 'active', failure: null },
+        // The card is made and the issuer's fee is in the person's history in
+        // one transaction (CARD-FEE-HISTORY), as the Hub's own adoption does.
+        const ledger = this.find<LedgerService>(LedgerService);
+        const wallet = await this.prisma.fintavaWallet.findUnique({
+          where: { wawuUserId: row.wawuUserId },
+          select: { accountNumber: true },
+        });
+        if (!ledger || !wallet) {
+          return {
+            outcome: 'wait',
+            note: "the ledger or the card owner's wallet is not there yet",
+          };
+        }
+        await this.prisma.$transaction(async (tx) => {
+          await tx.walletCard.updateMany({
+            where: { id: row.id, state: { in: ['creating', 'unknown'] } },
+            data: { providerCardId: cardId, state: 'active', failure: null },
+          });
+          const made = await tx.walletCard.findUnique({
+            where: { id: row.id },
+          });
+          if (
+            made &&
+            made.providerCardId === cardId &&
+            made.state !== 'failed'
+          ) {
+            await recordIssuerFeeRow(ledger, tx, made, wallet.accountNumber);
+          }
         });
       } else if (!row.providerCardId && row.state !== 'failed') {
         await this.prisma.walletCard.updateMany({

@@ -25,6 +25,11 @@ import {
 } from '../payments/idempotency';
 import { successBody } from '../payments/wallet-payment.service';
 import { CARDS_ENABLED_SETTING, CardSettings } from './card-config';
+import {
+  recordCardFeeRow,
+  recordIssuerFeeRow,
+  WAWU_FEE_ROW_SUFFIX,
+} from './card-fee-row';
 import { cleanCardName, CreateCardDto } from './card-request.dto';
 import { cardTargetFor, followCardStatus, stepWords } from './card-status';
 import type {
@@ -354,6 +359,17 @@ export class WalletCardService implements OnModuleInit {
           reference,
           narration: CARD_FEE_NARRATION,
         });
+        // The person's side first, and not swallowed: a failure leaves the fee
+        // "not collected" so the next read asks the provider again (it answers
+        // with the original transfer) and writes the row then.
+        await recordCardFeeRow(
+          this.ledger,
+          undefined,
+          row,
+          wallet.accountNumber,
+          `${row.reference}${WAWU_FEE_ROW_SUFFIX}`,
+          Number(receipt.amountKobo) + Number(receipt.feeKobo),
+        );
         await this.recordFee(
           row,
           wallet,
@@ -622,7 +638,7 @@ export class WalletCardService implements OnModuleInit {
     }
 
     // 3. Record it.
-    const saved = await this.adopt(row, card);
+    const saved = await this.adopt(row, card, wallet);
     await this.collectFee(wallet, saved);
     const view = cardView(saved, card.last4);
     await this.keys.finish(scope, 201, successBody(view));
@@ -647,7 +663,7 @@ export class WalletCardService implements OnModuleInit {
         found = null;
       }
       if (found) {
-        const saved = await this.adopt(row, found);
+        const saved = await this.adopt(row, found, wallet);
         await this.collectFee(wallet, saved);
         const view = cardView(saved, found.last4);
         await this.keys.finish(scope, 201, successBody(view));
@@ -685,6 +701,7 @@ export class WalletCardService implements OnModuleInit {
   private async adopt(
     row: WalletCard,
     card: ProviderCard,
+    wallet: Pick<OpenWallet, 'accountNumber'>,
   ): Promise<WalletCard> {
     const to = cardTargetFor(row, card.status);
     if (to.state === 'frozen' && to.frozenBy === 'admin') {
@@ -693,14 +710,22 @@ export class WalletCardService implements OnModuleInit {
       );
     }
     try {
-      return await this.prisma.walletCard.update({
-        where: { id: row.id, state: { in: PENDING_STATES } },
-        data: {
-          providerCardId: card.id,
-          state: to.state,
-          frozenBy: to.frozenBy,
-          failure: null,
-        },
+      // The card is made and the issuer's fee is in the person's history in
+      // one transaction (CARD-FEE-HISTORY): the provider has already taken the
+      // fee, and a row that cannot be written leaves the card pending, to be
+      // adopted again (the ledger keeps one row per reference).
+      return await this.prisma.$transaction(async (tx) => {
+        const made = await tx.walletCard.update({
+          where: { id: row.id, state: { in: PENDING_STATES } },
+          data: {
+            providerCardId: card.id,
+            state: to.state,
+            frozenBy: to.frozenBy,
+            failure: null,
+          },
+        });
+        await recordIssuerFeeRow(this.ledger, tx, made, wallet.accountNumber);
+        return made;
       });
     } catch (e) {
       // The delivery of `cards.created` may have adopted it a moment ago.
@@ -729,7 +754,7 @@ export class WalletCardService implements OnModuleInit {
         { walletId: wallet.walletId },
         row.reference,
       );
-      if (found) return await this.adopt(row, found);
+      if (found) return await this.adopt(row, found, wallet);
       if (age >= GIVE_UP_AFTER_MS) {
         return await this.prisma.walletCard.update({
           where: { id: row.id },
