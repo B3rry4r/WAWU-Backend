@@ -94,7 +94,9 @@ export async function withFreshMedia<T extends MessageMediaRow>(
     location ??= await storage.bucketLocation();
     if (ownMediaKey(stored, field, row.senderWawuId, location) === null)
       continue;
-    fresh[field] = await storage.freshUrlFor(stored);
+    fresh[field] = await storage.freshUrlFor(stored, {
+      atCurrentSecond: true,
+    });
   }
   return Object.keys(fresh).length === 0 ? row : { ...row, ...fresh };
 }

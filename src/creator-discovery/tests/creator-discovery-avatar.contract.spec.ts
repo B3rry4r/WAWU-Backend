@@ -123,9 +123,7 @@ describe('CreatorDiscovery avatar (HUB-IMG-LINKS)', () => {
     expect(first).not.toContain('Signature=expired');
     const q = new URL(first).searchParams;
     expect(q.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256');
-    expect(q.get('response-cache-control')).toBe(
-      'private, max-age=31536000, immutable',
-    );
+    expect(q.get('response-cache-control')).toBeNull();
     // Signed at the start of the UTC day, valid for more than the 8 days the stale link failed at is not possible
     // (7 days is the most a link can live), so it is signed again on every day instead.
     expect(q.get('X-Amz-Date')).toMatch(/^\d{8}T000000Z$/);

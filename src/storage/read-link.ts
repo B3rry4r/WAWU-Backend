@@ -20,10 +20,16 @@ import { serveAs } from './dto/presign-upload.dto';
  * minus up to a window).
  *
  * A link that asks for a short life (a window or less: a chat attachment, an hour) is signed at the current second,
- * with no cache header, exactly as before: rounding it down would shorten or lengthen the life someone asked for.
+ * exactly as before: rounding it down would shorten or lengthen the life someone asked for.
  *
- * The browser is told (`ResponseCacheControl`, signed into the GET) it may keep the picture: private, a year,
- * immutable. Never set on an upload: a changed upload signature would break the phones in the field
+ * No cache header is added to the link (an earlier draft signed `ResponseCacheControl` in, which made every link about 70
+ * characters longer and broke clients that send a link back to the Hub under a length limit). Every link keeps exactly
+ * the length and the query parameter names it had before; only the values of X-Amz-Date, X-Amz-Expires (same digit
+ * count) and X-Amz-Signature differ. The stable address alone lets the browser revalidate and the web picture worker keep it.
+ *
+ * A caller that needs the moment of signing to be NOW (community message media, FIX-71: the link is shown straight away
+ * and its signed time is checked) passes `atCurrentSecond: true`: signed at the current second with the asked life,
+ * exactly as before this task. Never set on an upload: a changed upload signature would break the phones in the field
  * (`StorageService.presignUpload` does not use this file).
  */
 export const LINK_WINDOW_SECONDS = 86_400;
@@ -31,7 +37,6 @@ export const LINK_WINDOW_SECONDS = 86_400;
 export const LINK_MAX_SECONDS = 604_800;
 /** The default life of a read link (`StorageService.readUrlFor`): seven days. */
 export const READ_URL_SECONDS = LINK_MAX_SECONDS;
-export const READ_CACHE_CONTROL = 'private, max-age=31536000, immutable';
 
 /** The start of the window `now` falls in. */
 export function windowStart(
@@ -42,14 +47,27 @@ export function windowStart(
   return new Date(Math.floor(now.getTime() / ms) * ms);
 }
 
-/** The shortest life, in seconds, a link signed with `expiresInSeconds` can have when handed out. */
-export function shortestLife(expiresInSeconds = READ_URL_SECONDS): number {
-  if (expiresInSeconds <= LINK_WINDOW_SECONDS) return expiresInSeconds;
+/**
+ * The expiry to sign a day-start link with, or null when the link is not day-start signed (a short ask, or an ask
+ * whose lengthened expiry would have more digits than the ask: the X-Amz-Expires value keeps its digit count).
+ */
+function windowedExpiry(expiresInSeconds: number): number | null {
+  if (expiresInSeconds <= LINK_WINDOW_SECONDS) return null;
   const signedFor = Math.min(
     LINK_MAX_SECONDS,
     expiresInSeconds + LINK_WINDOW_SECONDS,
   );
-  return signedFor - (LINK_WINDOW_SECONDS - 1);
+  return String(signedFor).length === String(expiresInSeconds).length
+    ? signedFor
+    : null;
+}
+
+/** The shortest life, in seconds, a link signed with `expiresInSeconds` can have when handed out. */
+export function shortestLife(expiresInSeconds = READ_URL_SECONDS): number {
+  const signedFor = windowedExpiry(expiresInSeconds);
+  return signedFor === null
+    ? expiresInSeconds
+    : signedFor - (LINK_WINDOW_SECONDS - 1);
 }
 
 export interface ReadLinkArgs {
@@ -58,16 +76,24 @@ export interface ReadLinkArgs {
   expiresInSeconds?: number;
   /** The clock; specs pass their own. */
   now?: Date;
+  /** Sign at the current second, with the life asked, as links were before the day window. */
+  atCurrentSecond?: boolean;
 }
 
 export function signReadLink(
   client: S3Client,
-  { bucket, key, expiresInSeconds = READ_URL_SECONDS, now }: ReadLinkArgs,
+  {
+    bucket,
+    key,
+    expiresInSeconds = READ_URL_SECONDS,
+    now,
+    atCurrentSecond = false,
+  }: ReadLinkArgs,
 ): Promise<string> {
   // Force both the type and the disposition on the way out. The uploader cannot influence either, so bytes that were
   // smuggled in under a false Content-Type are still served as the kind of file the key says.
   const { contentType, inline } = serveAs(key);
-  const kept = expiresInSeconds > LINK_WINDOW_SECONDS;
+  const signedFor = atCurrentSecond ? null : windowedExpiry(expiresInSeconds);
   return getSignedUrl(
     client,
     new GetObjectCommand({
@@ -75,16 +101,9 @@ export function signReadLink(
       Key: key,
       ResponseContentType: contentType,
       ResponseContentDisposition: inline ? 'inline' : 'attachment',
-      ...(kept ? { ResponseCacheControl: READ_CACHE_CONTROL } : {}),
     }),
-    kept
-      ? {
-          signingDate: windowStart(now ?? new Date()),
-          expiresIn: Math.min(
-            LINK_MAX_SECONDS,
-            expiresInSeconds + LINK_WINDOW_SECONDS,
-          ),
-        }
+    signedFor !== null
+      ? { signingDate: windowStart(now ?? new Date()), expiresIn: signedFor }
       : { expiresIn: expiresInSeconds },
   );
 }

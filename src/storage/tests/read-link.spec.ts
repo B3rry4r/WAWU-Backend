@@ -1,7 +1,12 @@
-import { PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  type S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '@nestjs/config';
 import { StorageService } from '../storage.service';
+import { serveAs } from '../dto/presign-upload.dto';
 import { CoverLinkService } from '../cover-link';
 import {
   LINK_MAX_SECONDS,
@@ -134,7 +139,7 @@ describe('HUB-IMG-LINKS read links', () => {
     expect(shortestLife(ask)).toBe(ask + 1);
   });
 
-  it('a short-lived link (a chat attachment) is signed at the second, as before, with no cache header', async () => {
+  it('a short-lived link (a chat attachment) is signed at the second, as before, ', async () => {
     at(D0 + 5_000);
     const url = await service.readUrlFor(KEY, 900);
     expect(signedAt(url)).toBe(D0 + 5_000);
@@ -142,15 +147,75 @@ describe('HUB-IMG-LINKS read links', () => {
     expect(q(url).get('response-cache-control')).toBeNull();
   });
 
-  it('asks the browser to keep a read link: private, long, immutable', async () => {
+  it('adds no cache parameter: the same parameter names as the unwindowed link', async () => {
     const url = await service.readUrlFor(KEY);
-    expect(q(url).get('response-cache-control')).toBe(
-      'private, max-age=31536000, immutable',
-    );
+    expect(q(url).get('response-cache-control')).toBeNull();
     expect(q(url).get('response-content-disposition')).toBe('inline');
   });
 
-  it('freshUrlFor and coverUrlFor give the same link inside a window and keep the cache header', async () => {
+  // The lead's proof: for every ask and every caller, the link has exactly the length and the parameter names of the
+  // link signed the old way (current second, asked life); only X-Amz-Date, X-Amz-Expires (digit count) and
+  // X-Amz-Signature values differ.
+  it('is the same length, with the same parameter names, as the link signed at the current second, for every ask', async () => {
+    const { client, bucket } = service as unknown as {
+      client: S3Client;
+      bucket: string;
+    };
+    const old = (key: string, ask: number) =>
+      getSignedUrl(
+        client,
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          ResponseContentType: serveAs(key).contentType,
+          ResponseContentDisposition: serveAs(key).inline
+            ? 'inline'
+            : 'attachment',
+        }),
+        { expiresIn: ask },
+      );
+    const asks = [
+      60, 900, 3600, 86_400, 86_401, 90_000, 99_999, 100_000, 259_200, 518_400,
+      604_799, 604_800,
+    ];
+    const keys = [KEY, 'content/full/user-1/clip.mp4', 'kyc/user-1/id.pdf'];
+    for (const key of keys) {
+      for (const ask of asks) {
+        at(D0 + 77_000);
+        const now = await old(key, ask);
+        const ours = await service.readUrlFor(key, ask);
+        expect(ours.length).toBe(now.length);
+        expect([...q(ours).keys()]).toEqual([...q(now).keys()]);
+        expect(String(seconds(ours)).length).toBe(String(seconds(now)).length);
+        const strip = (u: string) => {
+          const p = q(u);
+          for (const k of ['X-Amz-Date', 'X-Amz-Expires', 'X-Amz-Signature']) {
+            p.set(k, 'x');
+          }
+          const c = p.get('X-Amz-Credential') as string;
+          p.set('X-Amz-Credential', c.replace(/\/\d{8}\//, '/D/'));
+          return p.toString();
+        };
+        expect(strip(ours)).toBe(strip(now));
+        expect(new URL(ours).origin + new URL(ours).pathname).toBe(
+          new URL(now).origin + new URL(now).pathname,
+        );
+      }
+    }
+  });
+
+  it('atCurrentSecond signs at the second with the asked life, byte for byte as before the window', async () => {
+    at(D0 + 123_000);
+    const ours = await service.readUrlFor(KEY, undefined, {
+      atCurrentSecond: true,
+    });
+    expect(signedAt(ours)).toBe(D0 + 123_000);
+    expect(seconds(ours)).toBe(604_800);
+    const fresh = await service.freshUrlFor(ours, { atCurrentSecond: true });
+    expect(fresh).toBe(ours);
+  });
+
+  it('freshUrlFor and coverUrlFor give the same link inside a window', async () => {
     at(D0 + 1_000);
     const stored = await service.readUrlFor(KEY);
     at(D0 + 50_000);
@@ -159,7 +224,6 @@ describe('HUB-IMG-LINKS read links', () => {
     at(D0 + DAY + 50_000);
     const next = (await service.coverUrlFor(KEY)) as string;
     expect(next).not.toBe(stored);
-    expect(q(next).get('response-cache-control')).toContain('immutable');
   });
 
   it('the cover link service (money rows) gives the very same link as the storage service', async () => {
@@ -177,7 +241,7 @@ describe('HUB-IMG-LINKS read links', () => {
     expect(await covers.linkFor(KEY)).toBe(await service.readUrlFor(KEY));
   });
 
-  it('an avatar goes through the same signing: stable inside a window, signed again, cacheable', async () => {
+  it('an avatar goes through the same signing: stable inside a window, signed again', async () => {
     const old = `https://example-bucket.t3.storageapi.dev/avatars/user-1/a.png?X-Amz-Expires=604800&X-Amz-Signature=dead`;
     at(D0 + 1_000);
     const a = await freshOwnImage(service, old, 'avatars', 'user-1');
@@ -185,7 +249,6 @@ describe('HUB-IMG-LINKS read links', () => {
     const b = await freshOwnImage(service, old, 'avatars', 'user-1');
     expect(a).toBe(b);
     expect(a).not.toContain('Signature=dead');
-    expect(q(a as string).get('response-cache-control')).toContain('immutable');
     // someone else's picture is never signed
     expect(await freshOwnImage(service, old, 'avatars', 'user-2')).toBeNull();
   });

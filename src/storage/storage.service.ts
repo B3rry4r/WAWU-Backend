@@ -733,6 +733,7 @@ export class StorageService {
   async readUrlFor(
     key: string,
     expiresInSeconds = READ_URL_SECONDS,
+    options: { atCurrentSecond?: boolean } = {},
   ): Promise<string> {
     if (key.startsWith('http://') || key.startsWith('https://')) return key;
     if (!this.client) {
@@ -740,11 +741,12 @@ export class StorageService {
         'File uploads are not available on this environment yet.',
       );
     }
-    // The one signing helper (read-link.ts): a link is the same for the whole day, and says the browser may keep it.
+    // The one signing helper (read-link.ts): a link is the same for the whole day.
     return signReadLink(this.client, {
       bucket: this.bucket,
       key,
       expiresInSeconds,
+      atCurrentSecond: options.atCurrentSecond,
     });
   }
 
@@ -759,14 +761,20 @@ export class StorageService {
    * service's own URLs): a possibly-stale link is still a link, and a public
    * feed rendering nothing beats it 500ing because storage hiccuped.
    */
-  async freshUrlFor(stored: string | null): Promise<string | null> {
+  async freshUrlFor(
+    stored: string | null,
+    options: { atCurrentSecond?: boolean } = {},
+  ): Promise<string | null> {
     if (!stored) return stored;
     if (!this.client) return stored;
     const key = objectKeyFrom(stored);
     try {
       // A profile picture's position (R-96) rides on the link as a fragment:
       // signing gives a fresh link without it, so it is put back.
-      return keepPhotoPosition(stored, await this.readUrlFor(key));
+      return keepPhotoPosition(
+        stored,
+        await this.readUrlFor(key, undefined, options),
+      );
     } catch (e) {
       this.logger.warn(
         `Could not refresh storage URL for ${key}: ${String(e)}`,
