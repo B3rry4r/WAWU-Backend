@@ -48,6 +48,12 @@ export class StorageSweepService {
           `Late-file sweep: ${removed} removed, ${counted} counted, ${left} left for the next pass.`,
         );
       }
+      // VIDEO-PRIVACY (R-127): any video confirmed lately that still carries tags.
+      await this.storage
+        .sweepVideoPrivacy()
+        .catch((err) =>
+          this.logger.warn(`Video privacy sweep failed: ${String(err)}`),
+        );
       // FIX-104 round 2: chat files that landed and no message carries, a day on.
       if (Date.now() - this.lastUnsentChatSweep >= UNSENT_CHAT_SWEEP_EVERY_MS) {
         this.lastUnsentChatSweep = Date.now();

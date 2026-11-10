@@ -752,6 +752,10 @@ export class ContentPieceService {
         throw err;
       }
     }
+    // VIDEO-PRIVACY (R-127): a video named here has no location or device tags
+    // by the time the piece can be played (a no-op for anything but a video, and
+    // for one already clean; it never refuses the listing).
+    for (const key of keys) await this.storage.ensureVideoClean(key);
   }
 
   /**
