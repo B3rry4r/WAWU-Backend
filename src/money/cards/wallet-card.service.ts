@@ -25,8 +25,18 @@ import {
 } from '../payments/idempotency';
 import { successBody } from '../payments/wallet-payment.service';
 import { CARDS_ENABLED_SETTING, CardSettings } from './card-config';
+import {
+  recordCardFeeRow,
+  recordIssuerFeeRow,
+  WAWU_FEE_ROW_SUFFIX,
+} from './card-fee-row';
 import { cleanCardName, CreateCardDto } from './card-request.dto';
-import { cardTargetFor, followCardStatus, stepWords } from './card-status';
+import {
+  cardTargetFor,
+  followCardStatus,
+  GIVE_UP_FAILURE,
+  stepWords,
+} from './card-status';
 import type {
   CardDetailsView,
   CardKind,
@@ -43,6 +53,10 @@ export const CARD_CREATE_ROUTE = 'POST money/cards';
 /** States that count as a card the person holds (and so against the limit). */
 export const HELD_STATES = ['creating', 'unknown', 'active', 'frozen'];
 const PENDING_STATES = ['creating', 'unknown'];
+
+/** WAWU's fee on a card: the most tries after a failure, and the rest between them. */
+const FEE_TRIES_MAX = 5;
+const FEE_RETRY_EVERY_MS = 30_000;
 
 /** How often one card is read from the issuer when its screen is opened. */
 const READ_THROUGH_EVERY_MS = 60_000;
@@ -146,6 +160,8 @@ export class WalletCardService implements OnModuleInit {
   private readonly readThrough = new Map<string, number>();
   /** When a screen read of a card first answered "not found" and no read has found it since: per process, so a restart forgets it. */
   private readonly missingSince = new Map<string, number>();
+  /** How often WAWU's fee on each card was asked after a failure (CARD-FEE-HISTORY, L3): per process, so a restart forgets it. */
+  private readonly feeTries = new Map<string, { n: number; at: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -341,6 +357,15 @@ export class WalletCardService implements OnModuleInit {
     ) {
       return;
     }
+    // Bounded retry: at most FEE_TRIES_MAX asks per card per process, at
+    // least FEE_RETRY_EVERY_MS apart. The provider's transfer is keyed by the
+    // card's reference plus `-fee` and answers a repeat with the original, so
+    // an ask can never debit twice; the bound only stops the asking.
+    const tried = this.feeTries.get(row.id);
+    if (tried) {
+      if (tried.n >= FEE_TRIES_MAX) return;
+      if (Date.now() - tried.at < FEE_RETRY_EVERY_MS) return;
+    }
     const fee = Number(row.wawuFeeKobo);
     const leg = this.feeLegKobo(fee);
     try {
@@ -354,6 +379,17 @@ export class WalletCardService implements OnModuleInit {
           reference,
           narration: CARD_FEE_NARRATION,
         });
+        // The person's side first, and not swallowed: a failure leaves the fee
+        // "not collected" so the next read asks the provider again (it answers
+        // with the original transfer) and writes the row then.
+        await recordCardFeeRow(
+          this.ledger,
+          undefined,
+          row,
+          wallet.accountNumber,
+          `${row.reference}${WAWU_FEE_ROW_SUFFIX}`,
+          Number(receipt.amountKobo) + Number(receipt.feeKobo),
+        );
         await this.recordFee(
           row,
           wallet,
@@ -371,7 +407,15 @@ export class WalletCardService implements OnModuleInit {
         data: { feeCollectedAt: new Date() },
       });
       row.feeCollectedAt = new Date();
+      this.feeTries.delete(row.id);
     } catch (e) {
+      const n = (tried?.n ?? 0) + 1;
+      this.feeTries.set(row.id, { n, at: Date.now() });
+      if (n >= FEE_TRIES_MAX) {
+        this.logger.error(
+          `card ${row.id}: WAWU's fee is still not booked after ${n} tries; not asked again until this server restarts (the transfer, if it moved, moved once)`,
+        );
+      }
       this.logger.warn(
         `card ${row.id}: WAWU's fee is not collected yet (${e instanceof WalletProviderError ? e.kind : 'error'}); tried again when the card is read`,
       );
@@ -622,7 +666,40 @@ export class WalletCardService implements OnModuleInit {
     }
 
     // 3. Record it.
-    const saved = await this.adopt(row, card);
+    return this.record(wallet, row, card, scope);
+  }
+
+  /**
+   * The provider has made the card (and taken its fee): adopt it with its fee
+   * row, collect WAWU's fee and finish the key. If the adoption cannot be
+   * written (the ledger or the database failed), the card is NOT lost and the
+   * key is not left open: the card is held `unknown`, the person is told it is
+   * being confirmed (the same answer as a lost reply, 201 with PENDING_MESSAGE),
+   * and the next read of the card (after 20 seconds) looks it up by its
+   * reference and adopts it, with its fee row, exactly once. A replay of the key
+   * returns the same answer.
+   */
+  private async record(
+    wallet: OpenWallet,
+    row: WalletCard,
+    card: ProviderCard,
+    scope: IdempotencyScope,
+  ): Promise<CardView> {
+    let saved: WalletCard;
+    try {
+      saved = await this.adopt(row, card, wallet);
+    } catch (e) {
+      this.logger.error(
+        `card ${row.id}: the provider made it but it could not be recorded (${e instanceof Error ? e.name : 'error'}); held for the lookup by reference`,
+      );
+      const held = await this.prisma.walletCard.update({
+        where: { id: row.id },
+        data: { state: 'unknown' },
+      });
+      const view = cardView(held);
+      await this.keys.finish(scope, 201, successBody(view));
+      return view;
+    }
     await this.collectFee(wallet, saved);
     const view = cardView(saved, card.last4);
     await this.keys.finish(scope, 201, successBody(view));
@@ -646,13 +723,7 @@ export class WalletCardService implements OnModuleInit {
       } catch {
         found = null;
       }
-      if (found) {
-        const saved = await this.adopt(row, found);
-        await this.collectFee(wallet, saved);
-        const view = cardView(saved, found.last4);
-        await this.keys.finish(scope, 201, successBody(view));
-        return view;
-      }
+      if (found) return this.record(wallet, row, found, scope);
       const unknown = await this.prisma.walletCard.update({
         where: { id: row.id },
         data: { state: 'unknown' },
@@ -685,6 +756,7 @@ export class WalletCardService implements OnModuleInit {
   private async adopt(
     row: WalletCard,
     card: ProviderCard,
+    wallet: Pick<OpenWallet, 'accountNumber'>,
   ): Promise<WalletCard> {
     const to = cardTargetFor(row, card.status);
     if (to.state === 'frozen' && to.frozenBy === 'admin') {
@@ -693,14 +765,22 @@ export class WalletCardService implements OnModuleInit {
       );
     }
     try {
-      return await this.prisma.walletCard.update({
-        where: { id: row.id, state: { in: PENDING_STATES } },
-        data: {
-          providerCardId: card.id,
-          state: to.state,
-          frozenBy: to.frozenBy,
-          failure: null,
-        },
+      // The card is made and the issuer's fee is in the person's history in
+      // one transaction (CARD-FEE-HISTORY): the provider has already taken the
+      // fee, and a row that cannot be written leaves the card pending, to be
+      // adopted again (the ledger keeps one row per reference).
+      return await this.prisma.$transaction(async (tx) => {
+        const made = await tx.walletCard.update({
+          where: { id: row.id, state: { in: PENDING_STATES } },
+          data: {
+            providerCardId: card.id,
+            state: to.state,
+            frozenBy: to.frozenBy,
+            failure: null,
+          },
+        });
+        await recordIssuerFeeRow(this.ledger, tx, made, wallet.accountNumber);
+        return made;
       });
     } catch (e) {
       // The delivery of `cards.created` may have adopted it a moment ago.
@@ -729,13 +809,13 @@ export class WalletCardService implements OnModuleInit {
         { walletId: wallet.walletId },
         row.reference,
       );
-      if (found) return await this.adopt(row, found);
+      if (found) return await this.adopt(row, found, wallet);
       if (age >= GIVE_UP_AFTER_MS) {
         return await this.prisma.walletCard.update({
           where: { id: row.id },
           data: {
             state: 'failed',
-            failure: 'The issuer never confirmed this card.',
+            failure: GIVE_UP_FAILURE,
           },
         });
       }
