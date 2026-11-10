@@ -16,9 +16,13 @@ import { FEE_ROW_NAME } from '../transfers/wallet-transfer.service';
  *   (`<card reference>-wawu`), written when that transfer is confirmed.
  *
  * Both rows are drawn as a send's fee row is: category `transfer`, the other
- * side `wawu`, named `FEE_ROW_NAME`. The references are the ledger's key
+ * side `wawu`; the issuer's row is named `ISSUER_ROW_NAME` (R-53) and WAWU's
+ * `FEE_ROW_NAME`. The references are the ledger's key
  * (account, direction, reference), so writing one twice is one row.
  */
+
+/** The issuer's fee row names the provider's part of a fee as the owner ruled (R-53, 16 Oct 2026): "Bank charge". */
+export const ISSUER_ROW_NAME = 'Bank charge';
 
 /** Added to the card's reference for the issuer's fee row. */
 export const ISSUER_FEE_SUFFIX = '-issuer';
@@ -39,6 +43,7 @@ export function recordCardFeeRow(
   accountNumber: string,
   reference: string,
   kobo: number,
+  name: string = FEE_ROW_NAME,
 ): Promise<LedgerRecordResult | null> {
   if (!Number.isSafeInteger(kobo) || kobo <= 0) return Promise.resolve(null);
   return ledger.record(
@@ -53,7 +58,7 @@ export function recordCardFeeRow(
       narration: CARD_FEE_ROW_NARRATION,
       note: CARD_FEE_ROW_NOTE,
       references: { customerReference: reference },
-      counterparty: { kind: 'wawu', name: FEE_ROW_NAME },
+      counterparty: { kind: 'wawu', name },
       source: 'send',
     },
     db,
@@ -79,5 +84,6 @@ export function recordIssuerFeeRow(
     accountNumber,
     `${card.reference}${ISSUER_FEE_SUFFIX}`,
     Number(card.providerFeeKobo ?? 0n),
+    ISSUER_ROW_NAME,
   );
 }

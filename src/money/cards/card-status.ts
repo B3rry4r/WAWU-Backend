@@ -104,3 +104,6 @@ export function stepWords(step: Pick<CardStep, 'state' | 'frozenBy'>): string {
   }
   return step.state;
 }
+
+/** Why a card the issuer never confirmed within ten minutes was given up on; a later `cards.created` for it is adopted (CARD-FEE-HISTORY, L2). */
+export const GIVE_UP_FAILURE = 'The issuer never confirmed this card.';

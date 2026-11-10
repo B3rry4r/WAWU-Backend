@@ -3,7 +3,11 @@ import { ModuleRef } from '@nestjs/core';
 import type { WalletCard } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { recordIssuerFeeRow } from '../../money/cards/card-fee-row';
-import { followCardStatus, stepWords } from '../../money/cards/card-status';
+import {
+  followCardStatus,
+  GIVE_UP_FAILURE,
+  stepWords,
+} from '../../money/cards/card-status';
 import { LedgerService } from '../../money/ledger/ledger.service';
 import {
   WALLET_PROVIDER,
@@ -32,6 +36,9 @@ export const NUVION_CARDS_EVENTS: readonly NuvionWebhookEventName[] = [
   'outflows.completed',
   'outflows.failed',
 ];
+
+/** How many tries a `cards.created` for a card with no wallet row to book against waits before a final answer. */
+const WAIT_FOR_WALLET_ATTEMPTS = 8;
 
 /** The `payment_type` of a card being charged (a reversal or a refund is a credit and changes no card). */
 const CARD_DEBIT_TYPES = ['card-debit', 'card-debit-recoup'];
@@ -139,7 +146,19 @@ export class NuvionCardsHandler implements NuvionEventHandler {
           note: 'the card name belongs to another card',
         };
       }
-      if (['creating', 'unknown'].includes(row.state)) {
+      // A card given up on after ten minutes (`failed` with the give-up
+      // words) that the issuer made late is adopted here, with its fee row,
+      // once. A refusal's `failed` row is never adopted: nothing was made.
+      const lateMade =
+        row.state === 'failed' &&
+        row.failure === GIVE_UP_FAILURE &&
+        row.providerCardId === null;
+      const adoptable = [
+        'creating',
+        'unknown',
+        ...(lateMade ? ['failed'] : []),
+      ];
+      if (adoptable.includes(row.state)) {
         // The card is made and the issuer's fee is in the person's history in
         // one transaction (CARD-FEE-HISTORY), as the Hub's own adoption does.
         const ledger = this.find<LedgerService>(LedgerService);
@@ -148,6 +167,19 @@ export class NuvionCardsHandler implements NuvionEventHandler {
           select: { accountNumber: true },
         });
         if (!ledger || !wallet) {
+          // Bounded: a delivery waits for the wallet a few times, then ends
+          // with a final answer and a log line. The row stays as it was, so
+          // the lookup by reference (a list or a read) adopts it, with its
+          // fee row, the moment the owner has a wallet.
+          if (d.attempts >= WAIT_FOR_WALLET_ATTEMPTS) {
+            this.logger.error(
+              `card ${row.id}: cards.created ended after ${d.attempts} tries; the owner has no wallet row (or the ledger is not mounted); the card is adopted, with its fee row, by the lookup once there is one`,
+            );
+            return {
+              outcome: 'failed',
+              note: `the card owner has no wallet row after ${d.attempts} tries; left for the lookup by reference`,
+            };
+          }
           return {
             outcome: 'wait',
             note: "the ledger or the card owner's wallet is not there yet",
@@ -155,7 +187,7 @@ export class NuvionCardsHandler implements NuvionEventHandler {
         }
         await this.prisma.$transaction(async (tx) => {
           await tx.walletCard.updateMany({
-            where: { id: row.id, state: { in: ['creating', 'unknown'] } },
+            where: { id: row.id, state: { in: adoptable } },
             data: { providerCardId: cardId, state: 'active', failure: null },
           });
           const made = await tx.walletCard.findUnique({
