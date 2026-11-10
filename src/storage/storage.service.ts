@@ -30,6 +30,10 @@ import {
 import { deleteFromBucket } from './bucket-delete';
 import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
+import {
+  cleanStoredVideo,
+  INLINE_MAX_BYTES,
+} from './video-privacy/clean-stored';
 import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import {
@@ -1450,7 +1454,10 @@ export class StorageService {
     status: string;
     key: string;
   }): Promise<boolean> {
-    if (row.status === 'confirmed') return true;
+    if (row.status === 'confirmed') {
+      await this.ensureVideoClean(row.key);
+      return true;
+    }
     if (row.status !== 'pending' || !this.client) return false;
     const held = await this.bucketHolds(row.key, 'confirm');
     if (held === 'absent') return false;
@@ -1459,7 +1466,88 @@ export class StorageService {
       where: { id: row.id, status: 'pending' },
       data: { status: 'confirmed', confirmedAt: new Date() },
     });
+    await this.ensureVideoClean(row.key);
     return true;
+  }
+
+  /**
+   * VIDEO-PRIVACY (R-127): a video that has landed loses its location, device
+   * and time tags before anyone can play it. Called where an upload becomes
+   * confirmed (this file's `confirmUpload` and `settleUpload`) and by the sweep
+   * for any that slipped past. Never throws and never refuses a file: one that
+   * cannot be read is left as it is and logged. See video-privacy/clean-stored.ts.
+   */
+  async ensureVideoClean(
+    key: string,
+    opts: { background?: boolean } = {},
+  ): Promise<void> {
+    await cleanStoredVideo(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        logger: this.logger,
+        stillWanted: async (k) => {
+          const r = await this.prisma.storageObject.findUnique({
+            where: { key: k },
+            select: { releasedAt: true, removingAt: true },
+          });
+          return !!r && !r.releasedAt && !r.removingAt;
+        },
+        // The rewrite is put back through this class: the one file that writes to the bucket.
+        putObject: async (put) => {
+          await this.client!.send(
+            new PutObjectCommand({
+              Bucket: this.bucket,
+              Key: put.key,
+              Body: put.body,
+              ContentType: put.contentType,
+              ContentLength: put.contentLength,
+            }),
+            { requestTimeout: put.timeoutMs },
+          );
+        },
+        // A person waiting on a confirm is not kept for a big file (see INLINE_MAX_BYTES).
+        inlineMaxBytes: opts.background ? undefined : INLINE_MAX_BYTES,
+      },
+      key,
+    ).catch(() => undefined);
+  }
+
+  /**
+   * VIDEO-PRIVACY: the safety net behind `ensureVideoClean`. Looks at the
+   * videos confirmed in the last two hours (most recent first, at most
+   * `limit`) and cleans any still carrying tags; a clean one costs a few small
+   * reads and writes nothing. Run on a timer by StorageSweepService.
+   */
+  async sweepVideoPrivacy(limit = 20): Promise<number> {
+    if (!this.client) return 0;
+    const since = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const rows = await this.prisma.storageObject.findMany({
+      where: {
+        releasedAt: null,
+        removingAt: null,
+        // Confirmed lately, or still pending from lately (a web upload is never confirmed by the app).
+        OR: [
+          { status: 'confirmed', confirmedAt: { gte: since } },
+          { status: 'pending', createdAt: { gte: since } },
+        ],
+        AND: [
+          {
+            OR: [
+              { key: { endsWith: '.mp4' } },
+              { key: { endsWith: '.mov' } },
+              { key: { endsWith: '.webm' } },
+            ],
+          },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { key: true },
+      take: limit,
+    });
+    for (const r of rows)
+      await this.ensureVideoClean(r.key, { background: true });
+    return rows.length;
   }
 
   /**
@@ -1505,7 +1593,10 @@ export class StorageService {
     if (!row || row.wawuUserId !== wawuId) {
       throw new NotFoundException('We could not find that upload.');
     }
-    if (row.status === 'confirmed') return { key, status: 'confirmed' };
+    if (row.status === 'confirmed') {
+      await this.ensureVideoClean(key);
+      return { key, status: 'confirmed' };
+    }
     // The person gave this file up (POST /uploads/release). A file that lands
     // afterwards, through the link that was still valid, is not counted again:
     // the row stays released, and the sweep removes the file once the link has
@@ -1516,6 +1607,7 @@ export class StorageService {
     if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
     if (held === 'present') {
       const adopted = await this.adoptArrived(wawuId, row.id, key);
+      if (adopted) await this.ensureVideoClean(key);
       return { key, status: adopted ? 'confirmed' : 'abandoned' };
     }
     if (row.status !== 'pending') return { key, status: 'abandoned' };
@@ -1794,13 +1886,17 @@ export class StorageService {
           const held = await this.bucketHolds(row.key, 'reconcile');
           if (held === 'unknown') return;
           // Guarded on `pending`: a confirm that landed since the read wins.
-          await this.prisma.storageObject.updateMany({
+          const settled = await this.prisma.storageObject.updateMany({
             where: { id: row.id, status: 'pending' },
             data:
               held === 'present'
                 ? { status: 'confirmed', confirmedAt: new Date() }
                 : { status: 'abandoned' },
           });
+          // VIDEO-PRIVACY: a web upload settles here, never through /uploads/confirm.
+          // In the background: an allowance read does not wait for a rewrite.
+          if (held === 'present' && settled.count > 0)
+            void this.ensureVideoClean(row.key, { background: true });
         }),
       );
       if (stale.length < RECONCILE_BATCH) return;

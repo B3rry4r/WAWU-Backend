@@ -35,8 +35,10 @@ http
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
       if (req.method === 'PUT') {
+        const put = Buffer.concat(chunks);
         objects.set(key, {
-          body: Buffer.concat(chunks),
+          body: put,
+          etag: '"' + require('node:crypto').createHash('md5').update(put).digest('hex') + '"',
           type: req.headers['content-type'] || 'application/octet-stream',
         });
         res.statusCode = 200;
@@ -49,6 +51,13 @@ http
         const o = objects.get(key);
         if (!o) {
           res.statusCode = 404;
+          res.end();
+          return;
+        }
+        // An ETag, and If-Match answered 412 on a different one, like a real store (VIDEO-PRIVACY).
+        res.setHeader('etag', o.etag);
+        if (req.headers['if-match'] && req.headers['if-match'] !== o.etag) {
+          res.statusCode = 412;
           res.end();
           return;
         }

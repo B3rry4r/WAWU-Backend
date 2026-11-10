@@ -752,6 +752,21 @@ export class ContentPieceService {
         throw err;
       }
     }
+    // VIDEO-PRIVACY (R-127): a video named here has no location or device tags
+    // by the time the piece can be played (a no-op for anything but a video, and
+    // for one already clean; it never refuses the listing).
+    // Only the caller's own uploads, whatever their status: the web never calls
+    // /uploads/confirm, so its rows are still `pending` when the piece is published.
+    const own = await this.prisma.storageObject.findMany({
+      where: {
+        key: { in: keys },
+        wawuUserId: creatorWawuId,
+        releasedAt: null,
+        removingAt: null,
+      },
+      select: { key: true },
+    });
+    for (const row of own) await this.storage.ensureVideoClean(row.key);
   }
 
   /**
