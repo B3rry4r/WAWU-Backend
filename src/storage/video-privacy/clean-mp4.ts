@@ -32,6 +32,33 @@ const MIB = 1024 * 1024;
 const MAX_MOOV = 64 * MIB;
 const MAX_TOP_BOXES = 64;
 const MAX_CHUNKS_READ = 200_000;
+/** Most boxes one parent may hold: a moov of 64 MB of 8-byte boxes is not a video. */
+const MAX_BOXES_PER_PARENT = 100_000;
+/** The most a top-level free box or a trailer is read through to see whether it is already zero. */
+const MAX_ZERO_SCAN = 64 * MIB;
+/** The plan gives up (the file is left as it is) after this long: no file's tables are worth more. */
+const PLAN_BUDGET_MS = 1500;
+/** Top-level boxes a player or an editor knows; bytes that start like one are a cut-short box, not a trailer. */
+const KNOWN_TOP = new Set([
+  'ftyp',
+  'styp',
+  'moov',
+  'mdat',
+  'moof',
+  'free',
+  'skip',
+  'wide',
+  'uuid',
+  'sidx',
+  'ssix',
+  'mfra',
+  'pdin',
+  'prft',
+  'udta',
+  'meta',
+  'XMP_',
+  'pnot',
+]);
 const XMP_UUID = Buffer.from('be7acfcb97a942e89c71999491e3afac', 'hex');
 const METADATA_HANDLERS = new Set(['meta', 'mebx', 'gpmd', 'camm']);
 const TAG_BOXES = new Set(['udta', 'meta', 'XMP_']);
@@ -57,6 +84,7 @@ function boxesIn(buf: Buffer, from: number, to: number): Box[] {
       head = 16;
     } else if (size === 0) size = to - p;
     if (size < head || p + size > to) throw bad('box size outside its parent');
+    if (out.length >= MAX_BOXES_PER_PARENT) throw bad('too many boxes');
     out.push({
       type: buf.toString('latin1', p + 4, p + 8),
       start: p,
@@ -108,6 +136,37 @@ async function readHeader(source: VideoSource, p: number): Promise<TopBox> {
   return { type, start: p, end: p + size, body: p + head, headLen: head };
 }
 
+/**
+ * A zero patch over the non-zero part of `[from, to)`, read in 1 MiB pieces: nothing when it is
+ * all zero already (so a clean file yields no patches), and a note when it is too long to read.
+ */
+async function zeroIfAny(
+  source: VideoSource,
+  from: number,
+  to: number,
+  patches: Patch[],
+  notes: string[],
+  what: string,
+): Promise<void> {
+  if (to - from > MAX_ZERO_SCAN) {
+    notes.push(`${what} left: longer than the cleaner reads`);
+    return;
+  }
+  let first = -1;
+  let last = -1;
+  for (let at = from; at < to; at += MIB) {
+    const piece = await source.read(at, Math.min(to, at + MIB));
+    for (let i = 0; i < piece.length; i += 1) {
+      if (piece[i] !== 0) {
+        if (first < 0) first = at + i;
+        last = at + i;
+      }
+    }
+  }
+  if (first >= 0)
+    patches.push({ offset: first, length: last - first + 1, bytes: null });
+}
+
 export async function planMp4(source: VideoSource): Promise<CleanPlan> {
   const patches: Patch[] = [];
   const removed: string[] = [];
@@ -115,6 +174,7 @@ export async function planMp4(source: VideoSource): Promise<CleanPlan> {
   const tops: TopBox[] = [];
   let fragmented = false;
   let trailing = false;
+  const started = Date.now();
 
   // 1. The top-level boxes, by their headers only.
   let p = 0;
@@ -153,17 +213,29 @@ export async function planMp4(source: VideoSource): Promise<CleanPlan> {
   }
   const moovs = tops.filter((t) => t.type === 'moov');
   if (moovs.length !== 1) throw bad('no single moov box');
-  if (trailing) notes.push('bytes after the last box were not read');
+  // Bytes after the last box (a phone maker's trailer) are zeroed, unless they start like a
+  // box: that is a box cut short, and the file is left as it is.
+  if (!fragmented && p < source.length && (trailing || p + 8 > source.length)) {
+    const head = await source.read(p, Math.min(source.length, p + 8));
+    if (head.length >= 8 && KNOWN_TOP.has(head.toString('latin1', 4, 8)))
+      throw bad('a box is cut short');
+    await zeroIfAny(source, p, source.length, patches, notes, 'trailer');
+    if (patches.length) removed.push('trailer');
+  }
   if (fragmented) notes.push('fragmented: moov cleaned, moof boxes not walked');
 
-  // 2. Top-level tag boxes become free boxes (headers only: no body is read).
+  // 2. Top-level tag boxes become free boxes (headers only: no body is read); a top-level
+  // free or skip box has its body zeroed. A top-level uuid is never needed to play a file
+  // (the streams are in moov, moof and mdat), so every one becomes free. Kept: ftyp, styp,
+  // moov, mdat, moof, sidx, mfra and the other structure boxes; moov-internal uuid boxes
+  // other than XMP (they can carry DRM or stream setup).
   for (const t of tops) {
-    let tag = TAG_BOXES.has(t.type);
-    if (!tag && t.type === 'uuid') {
-      const id = await source.read(t.body, Math.min(t.end, t.body + 16));
-      tag = id.equals(XMP_UUID);
+    if (t.type === 'free' || t.type === 'skip') {
+      if (t.end > t.body)
+        await zeroIfAny(source, t.body, t.end, patches, notes, 'free');
+      continue;
     }
-    if (!tag) continue;
+    if (!TAG_BOXES.has(t.type) && t.type !== 'uuid') continue;
     removed.push(`top/${t.type}`);
     patches.push({
       offset: t.start + 4,
@@ -271,11 +343,15 @@ export async function planMp4(source: VideoSource): Promise<CleanPlan> {
       if (!stsz || !stsc || (!stco && !co64)) return null;
       const uniform = m.readUInt32BE(stsz.body + 4);
       const count = m.readUInt32BE(stsz.body + 8);
+      // No more samples than the file has bytes; with one size for all, the bytes must fit too.
+      if (count > source.length) return null;
       if (uniform === 0 && stsz.body + 12 + count * 4 > stsz.end) return null;
+      if (uniform > 0 && uniform * count > source.length) return null;
       const size = (i: number) =>
         uniform ? uniform : m.readUInt32BE(stsz.body + 12 + i * 4);
       const scRows = m.readUInt32BE(stsc.body + 4);
-      if (stsc.body + 8 + scRows * 12 > stsc.end) return null;
+      if (scRows > MAX_CHUNKS_READ || stsc.body + 8 + scRows * 12 > stsc.end)
+        return null;
       const co = (stco ?? co64)!;
       const chunks = m.readUInt32BE(co.body + 4);
       const w = stco ? 4 : 8;
@@ -285,22 +361,29 @@ export async function planMp4(source: VideoSource): Promise<CleanPlan> {
       let sample = 0;
       let row = 0;
       for (let c = 1; c <= chunks; c += 1) {
+        if ((c & 1023) === 0 && Date.now() - started > PLAN_BUDGET_MS)
+          return null;
         while (
           row + 1 < scRows &&
           m.readUInt32BE(stsc.body + 8 + (row + 1) * 12) <= c
         )
           row += 1;
         const per = m.readUInt32BE(stsc.body + 8 + row * 12 + 4);
+        // What the table promises must be samples that exist.
+        if (per > count - sample) return null;
         let len = 0;
-        for (let s = 0; s < per; s += 1) {
-          if (sample >= count) return null;
-          len += size(sample);
-          sample += 1;
-        }
+        if (uniform) len = per * uniform;
+        else
+          for (let s = 0; s < per; s += 1) {
+            len += size(sample + s);
+          }
+        sample += per;
+        if (len > source.length) return null;
         const at = co.body + 8 + (c - 1) * w;
         const offset = stco
           ? m.readUInt32BE(at)
           : m.readUInt32BE(at) * 2 ** 32 + m.readUInt32BE(at + 4);
+        if (offset + len > source.length) return null;
         if (len > 0) out.push({ offset, length: len });
       }
       return out;

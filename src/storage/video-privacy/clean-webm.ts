@@ -21,6 +21,13 @@ const ID_EBML = 0x1a45dfa3;
 const ID_SEGMENT = 0x18538067;
 const ID_INFO = 0x1549a966;
 const ID_DATE_UTC = 0x4461;
+/** Title, MuxingApp and WritingApp: text a person or a device wrote. */
+const TEXT_IDS = new Map([
+  [0x7ba9, 'Title'],
+  [0x4d80, 'MuxingApp'],
+  [0x5741, 'WritingApp'],
+]);
+const MAX_INFO_ELEMENTS = 1000;
 const ID_TAGS = 0x1254c367;
 const ID_ATTACHMENTS = 0x1941a469;
 const ID_CLUSTER = 0x1f43b675;
@@ -120,10 +127,12 @@ export async function planWebm(source: VideoSource): Promise<CleanPlan> {
         throw new Unreadable('info too big');
       const info = await source.read(known.body, known.end);
       let q = 0;
-      while (q < info.length) {
+      for (let n = 0; q < info.length; n += 1) {
+        if (n > MAX_INFO_ELEMENTS) throw new Unreadable('too many elements');
         const c = header(info, q, known.body, known.end);
         if (!c || c.end === null) throw new Unreadable('bad info element');
-        if (c.id === ID_DATE_UTC && c.end > c.body) {
+        const name = c.id === ID_DATE_UTC ? 'DateUTC' : TEXT_IDS.get(c.id);
+        if (name && c.end > c.body) {
           const cur = info.subarray(c.body - known.body, c.end - known.body);
           if (cur.some((x) => x !== 0)) {
             patches.push({
@@ -131,7 +140,7 @@ export async function planWebm(source: VideoSource): Promise<CleanPlan> {
               length: c.end - c.body,
               bytes: null,
             });
-            removed.push('DateUTC');
+            removed.push(name);
           }
         }
         q = c.end - known.body;

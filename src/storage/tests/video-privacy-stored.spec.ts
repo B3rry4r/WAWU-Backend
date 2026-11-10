@@ -34,26 +34,47 @@ const tagged = () =>
     ),
   ]);
 
-function bucket(objects: Record<string, { body: Buffer; type: string }>) {
+function bucket(
+  objects: Record<string, { body: Buffer; type: string; etag?: string }>,
+) {
+  const calls: unknown[] = [];
+  const hooks: { onHead?: (n: number) => void; onGet?: (n: number) => void } =
+    {};
+  let gets = 0;
+  let heads = 0;
+  let serial = 0;
+  const tag = (o: { etag?: string }) => (o.etag ??= `"e${(serial += 1)}"`);
   const puts: { key: string; type?: string; len?: number }[] = [];
   const deletes: string[] = [];
   const client = {
     send: async (cmd: unknown, opts?: unknown) => {
       void opts;
+      calls.push(cmd);
       if (cmd instanceof HeadObjectCommand) {
+        heads += 1;
+        hooks.onHead?.(heads);
         const o = objects[cmd.input.Key!];
         if (!o) throw new Error('NoSuchKey');
-        return { ContentLength: o.body.length, ContentType: o.type };
+        return {
+          ContentLength: o.body.length,
+          ContentType: o.type,
+          ETag: tag(o),
+        };
       }
       if (cmd instanceof GetObjectCommand) {
+        gets += 1;
+        hooks.onGet?.(gets);
         const o = objects[cmd.input.Key!];
         if (!o) throw new Error('NoSuchKey');
+        if (cmd.input.IfMatch && cmd.input.IfMatch !== tag(o))
+          throw Object.assign(new Error('412'), { name: 'PreconditionFailed' });
         const m = /bytes=(\d+)-(\d+)/.exec(cmd.input.Range ?? '');
         const part = m
           ? o.body.subarray(Number(m[1]), Number(m[2]) + 1)
           : o.body;
         return {
           ContentLength: part.length,
+          ETag: tag(o),
           Body: Object.assign(Readable.from([part]), {
             transformToByteArray: () => Promise.resolve(new Uint8Array(part)),
           }),
@@ -80,7 +101,7 @@ function bucket(objects: Record<string, { body: Buffer; type: string }>) {
       throw new Error('unexpected command');
     },
   } as unknown as S3Client;
-  return { client, puts, deletes };
+  return { client, puts, deletes, calls, hooks, heads: () => heads };
 }
 const logger = { log: jest.fn(), warn: jest.fn() };
 
@@ -200,5 +221,83 @@ describe('VIDEO-PRIVACY: cleaning a stored video', () => {
       key,
     );
     expect(store.deletes).toEqual([key]);
+  });
+
+  const deps = (store: ReturnType<typeof bucket>, more = {}) => ({
+    client: store.client,
+    bucket: 'b',
+    logger,
+    stillWanted: () => Promise.resolve(true),
+    ...more,
+  });
+
+  it('reads only the version it looked at (If-Match), and checks the ETag again before writing', async () => {
+    const key = 'profile/work/u1/e1.mp4';
+    const store = bucket({ [key]: { body: tagged(), type: 'video/mp4' } });
+    expect((await cleanStoredVideo(deps(store), key)).result).toBe('cleaned');
+    const gets = store.calls.filter((c) => c instanceof GetObjectCommand);
+    expect(gets.length).toBeGreaterThan(1);
+    for (const g of gets) expect(g.input.IfMatch).toMatch(/^"e\d+"$/);
+    expect(
+      store.calls.filter((c) => c instanceof HeadObjectCommand),
+    ).toHaveLength(2);
+  });
+
+  it('a replacement during the plan, or just before the write, is never patched or overwritten', async () => {
+    for (const during of ['plan', 'before-write']) {
+      forgetCleanedVideos();
+      const key = `profile/work/u1/r-${during}.mp4`;
+      const objects = { [key]: { body: tagged(), type: 'video/mp4' } };
+      const store = bucket(objects);
+      const replacement = tagged();
+      replacement[10] ^= 0x55;
+      const swap = () => {
+        objects[key] = { body: replacement, type: 'video/mp4' };
+      };
+      if (during === 'plan') store.hooks.onGet = (n) => n === 1 && swap();
+      else store.hooks.onHead = (n) => n === 2 && swap();
+      const out = await cleanStoredVideo(deps(store), key);
+      expect(out.result).toBe('changed');
+      expect(store.puts).toEqual([]);
+      expect(objects[key].body.equals(replacement)).toBe(true);
+    }
+  });
+
+  it('a file that cannot be read is tried once; a failing write three times, then no more reads', async () => {
+    const junk = 'content/full/u1/j.mp4';
+    const good = 'content/full/u1/g.mp4';
+    const store = bucket({
+      [junk]: { body: Buffer.from('x'.repeat(200)), type: 'video/mp4' },
+      [good]: { body: tagged(), type: 'video/mp4' },
+    });
+    await cleanStoredVideo(deps(store), junk);
+    const after1 = store.heads();
+    await cleanStoredVideo(deps(store), junk);
+    expect(store.heads()).toBe(after1);
+
+    const orig = store.client.send.bind(store.client);
+    (store.client as { send: unknown }).send = (c: unknown, o?: unknown) =>
+      c instanceof PutObjectCommand
+        ? Promise.reject(new Error('503'))
+        : orig(c as never, o as never);
+    for (let i = 0; i < 3; i += 1)
+      expect((await cleanStoredVideo(deps(store), good)).result).toBe('left');
+    const before = store.heads();
+    const again = await cleanStoredVideo(deps(store), good);
+    expect(again.result).toBe('left');
+    expect(store.heads()).toBe(before);
+  });
+
+  it('a file above the confirm limit is cleaned right after, not while the person waits', async () => {
+    const key = 'profile/work/u1/big.mp4';
+    const store = bucket({ [key]: { body: tagged(), type: 'video/mp4' } });
+    const out = await cleanStoredVideo(
+      deps(store, { inlineMaxBytes: 100 }),
+      key,
+    );
+    expect(out.result).toBe('deferred');
+    expect(store.puts).toEqual([]);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(store.puts).toHaveLength(1);
   });
 });

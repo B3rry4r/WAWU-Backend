@@ -30,7 +30,10 @@ import {
 import { deleteFromBucket } from './bucket-delete';
 import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
-import { cleanStoredVideo } from './video-privacy/clean-stored';
+import {
+  cleanStoredVideo,
+  INLINE_MAX_BYTES,
+} from './video-privacy/clean-stored';
 import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import {
@@ -1474,7 +1477,10 @@ export class StorageService {
    * for any that slipped past. Never throws and never refuses a file: one that
    * cannot be read is left as it is and logged. See video-privacy/clean-stored.ts.
    */
-  async ensureVideoClean(key: string): Promise<void> {
+  async ensureVideoClean(
+    key: string,
+    opts: { background?: boolean } = {},
+  ): Promise<void> {
     await cleanStoredVideo(
       {
         client: this.client,
@@ -1487,6 +1493,8 @@ export class StorageService {
           });
           return !!r && !r.releasedAt && !r.removingAt;
         },
+        // A person waiting on a confirm is not kept for a big file (see INLINE_MAX_BYTES).
+        inlineMaxBytes: opts.background ? undefined : INLINE_MAX_BYTES,
       },
       key,
     ).catch(() => undefined);
@@ -1516,7 +1524,8 @@ export class StorageService {
       select: { key: true },
       take: limit,
     });
-    for (const r of rows) await this.ensureVideoClean(r.key);
+    for (const r of rows)
+      await this.ensureVideoClean(r.key, { background: true });
     return rows.length;
   }
 

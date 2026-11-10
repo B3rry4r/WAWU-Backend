@@ -755,7 +755,18 @@ export class ContentPieceService {
     // VIDEO-PRIVACY (R-127): a video named here has no location or device tags
     // by the time the piece can be played (a no-op for anything but a video, and
     // for one already clean; it never refuses the listing).
-    for (const key of keys) await this.storage.ensureVideoClean(key);
+    // Only the caller's own uploads: another person's key named here is not touched.
+    const own = await this.prisma.storageObject.findMany({
+      where: {
+        key: { in: keys },
+        wawuUserId: creatorWawuId,
+        status: 'confirmed',
+        releasedAt: null,
+        removingAt: null,
+      },
+      select: { key: true },
+    });
+    for (const row of own) await this.storage.ensureVideoClean(row.key);
   }
 
   /**

@@ -60,6 +60,24 @@ const FILES: [string, string[]][] = [
   ['a.webm', [...VIDEO, '-c:v', 'libvpx', '-c:a', 'libvorbis', ...META]],
 ];
 
+/** An mp4 made here, then given what some phones add: a uuid box, text in free and skip, a trailer. */
+function withLeftovers(buf: Buffer): Buffer {
+  const box = (t: string, ...p: Buffer[]) => {
+    const body = Buffer.concat(p);
+    const h = Buffer.alloc(8);
+    h.writeUInt32BE(8 + body.length);
+    h.write(t, 4, 'latin1');
+    return Buffer.concat([h, body]);
+  };
+  return Buffer.concat([
+    buf,
+    box('uuid', Buffer.alloc(16, 9), Buffer.from('Samsung SM-S918B 6.4542')),
+    box('skip', Buffer.from('skip Samsung SM-S918B')),
+    box('free', Buffer.from('free Samsung SM-S918B')),
+    Buffer.from('SEFT trailer Samsung SM-S918B'),
+  ]);
+}
+
 function probe(file: string) {
   const r = spawnSync(
     'ffprobe',
@@ -120,4 +138,69 @@ d('VIDEO-PRIVACY: real files made with ffmpeg', () => {
       ).toBe(0);
     },
   );
+
+  it('mp4 with a uuid box, free and skip text and a trailer: all zeroed, streams the same, decodes', async () => {
+    const input = join(dir, 'leftovers.mp4');
+    expect(
+      spawnSync('ffmpeg', [
+        '-v',
+        'error',
+        '-y',
+        ...MP4,
+        '-movflags',
+        'use_metadata_tags+faststart',
+        join(dir, 'base.mp4'),
+      ]).status,
+    ).toBe(0);
+    const buf = withLeftovers(readFileSync(join(dir, 'base.mp4')));
+    writeFileSync(input, buf);
+    const plan = await planClean('leftovers.mp4', {
+      length: buf.length,
+      read: (a, b) => Promise.resolve(buf.subarray(a, Math.min(b, buf.length))),
+    });
+    const out = join(dir, 'clean-leftovers.mp4');
+    const cleaned = applyToBuffer(buf, plan!.patches);
+    writeFileSync(out, cleaned);
+    expect(cleaned.includes(Buffer.from('SM-S918B'))).toBe(false);
+    expect(cleaned.length).toBe(buf.length);
+    expect(
+      spawnSync('ffmpeg', ['-v', 'error', '-i', out, '-f', 'null', '-']).status,
+    ).toBe(0);
+    expect(probe(out).format.duration).toBe(
+      probe(join(dir, 'base.mp4')).format.duration,
+    );
+  });
+
+  it('webm with a title: Title, MuxingApp and WritingApp are zeroed and it still decodes', async () => {
+    const input = join(dir, 'titled.webm');
+    expect(
+      spawnSync('ffmpeg', [
+        '-v',
+        'error',
+        '-y',
+        ...VIDEO,
+        '-c:v',
+        'libvpx',
+        '-c:a',
+        'libvorbis',
+        '-metadata',
+        'title=Alice at home',
+        input,
+      ]).status,
+    ).toBe(0);
+    const buf = readFileSync(input);
+    expect(buf.includes(Buffer.from('Alice at home'))).toBe(true);
+    const plan = await planClean('titled.webm', {
+      length: buf.length,
+      read: (a, b) => Promise.resolve(buf.subarray(a, Math.min(b, buf.length))),
+    });
+    const out = join(dir, 'clean-titled.webm');
+    const cleaned = applyToBuffer(buf, plan!.patches);
+    writeFileSync(out, cleaned);
+    for (const t of ['Alice at home', 'Lavf'])
+      expect(cleaned.includes(Buffer.from(t))).toBe(false);
+    expect(
+      spawnSync('ffmpeg', ['-v', 'error', '-i', out, '-f', 'null', '-']).status,
+    ).toBe(0);
+  });
 });

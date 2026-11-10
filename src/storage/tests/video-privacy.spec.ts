@@ -324,6 +324,8 @@ describe('VIDEO-PRIVACY: the WebM cleaner', () => {
             Buffer.concat([
               el('4461', Buffer.from('0123456789abcdef'.slice(0, 8))),
               el('4d80', Buffer.from('Lavf')),
+              el('7ba9', Buffer.from('Alice at home')),
+              el('5741', Buffer.from('PhoneCam 3')),
             ]),
           ),
           el('1654ae6b', Buffer.from('tracks')),
@@ -344,10 +346,25 @@ describe('VIDEO-PRIVACY: the WebM cleaner', () => {
     const file = webm();
     const { plan, out } = await clean(file, 'v.webm');
     expect(plan!.removed).toEqual(
-      expect.arrayContaining(['Tags', 'Attachments', 'DateUTC']),
+      expect.arrayContaining([
+        'Tags',
+        'Attachments',
+        'DateUTC',
+        'Title',
+        'MuxingApp',
+        'WritingApp',
+      ]),
     );
     expect(out.length).toBe(file.length);
-    for (const s of [LOCATION, 'Apple', 'gps', '01234567'])
+    for (const s of [
+      LOCATION,
+      'Apple',
+      'gps',
+      '01234567',
+      'Alice',
+      'PhoneCam',
+      'Lavf',
+    ])
       expect(has(out, s)).toBe(false);
     expect(has(out, 'frames')).toBe(true);
     expect((await planClean('v.webm', src(out)))!.patches).toEqual([]);
@@ -356,5 +373,83 @@ describe('VIDEO-PRIVACY: the WebM cleaner', () => {
   it('stops at a cluster of unknown size and says so (a live recording has no tags after it)', async () => {
     const { plan } = await clean(webm(true), 'v.webm');
     expect(plan!.notes.join()).toMatch(/unknown size/);
+  });
+});
+
+describe('VIDEO-PRIVACY round 1: crafted tables, leftovers and cut-short files', () => {
+  it('a crafted sample table (0xFFFFFFFF samples per chunk and in the count) is given up on in milliseconds', async () => {
+    const { file } = build({ gpsTrack: true });
+    const crafted = Buffer.from(file);
+    const stsz = crafted.lastIndexOf(Buffer.from('stsz'));
+    const stsc = crafted.lastIndexOf(Buffer.from('stsc'));
+    crafted.writeUInt32BE(1, stsz + 4 + 4); // one size for all
+    crafted.writeUInt32BE(0xffffffff, stsz + 4 + 8); // count
+    crafted.writeUInt32BE(0xffffffff, stsc + 4 + 12); // samples per chunk
+    const t = Date.now();
+    const { plan, out } = await clean(crafted);
+    expect(Date.now() - t).toBeLessThan(500);
+    expect(plan!.notes.join()).toMatch(
+      /mebx track left: its samples could not be placed/,
+    );
+    expect(plan!.removed.join()).not.toMatch(/mebx/);
+    // The rest is still cleaned.
+    expect(has(out, LOCATION)).toBe(false);
+    expect(out.length).toBe(crafted.length);
+  });
+
+  it('a count that exceeds the sizes in the table, or a chunk past the end of the file, leaves the track', async () => {
+    const { file } = build({ gpsTrack: true });
+    const a = Buffer.from(file);
+    a.writeUInt32BE(5000, a.lastIndexOf(Buffer.from('stsz')) + 4 + 8);
+    expect((await clean(a)).plan!.notes.join()).toMatch(/could not be placed/);
+    const b = Buffer.from(file);
+    b.writeUInt32BE(
+      file.length - 4,
+      b.lastIndexOf(Buffer.from('stco')) + 4 + 8,
+    );
+    expect((await clean(b)).plan!.notes.join()).toMatch(/could not be placed/);
+  });
+
+  it('zeroes an unknown top-level uuid, top-level free and skip text, and a trailer after the last box', async () => {
+    const { file } = build();
+    const dirty = Buffer.concat([
+      file,
+      box('uuid', Buffer.alloc(16, 7), Buffer.from('device SM-S918B GPS')),
+      box('skip', Buffer.from('skip text SM-S918B')),
+      box('free', Buffer.from('free text SM-S918B')),
+      Buffer.from('trailer SEFT SM-S918B'),
+    ]);
+    const { plan, out } = await clean(dirty);
+    expect(has(out, 'SM-S918B')).toBe(false);
+    expect(plan!.removed).toEqual(
+      expect.arrayContaining(['top/uuid', 'trailer']),
+    );
+    expect(out.length).toBe(dirty.length);
+    const mdatEnd = file.indexOf(Buffer.from('moov')) - 4;
+    expect(out.subarray(0, mdatEnd).equals(dirty.subarray(0, mdatEnd))).toBe(
+      true,
+    );
+    expect((await planClean('v.mp4', src(out)))!.patches).toEqual([]);
+  });
+
+  it('bytes that start like a box after moov mean a cut-short file: it is left, not zeroed', async () => {
+    const { file } = build({ moovFirst: true });
+    const cut = file.subarray(0, file.length - 10); // mdat now claims more than the file holds
+    await expect(planClean('v.mp4', src(cut))).rejects.toBeInstanceOf(
+      Unreadable,
+    );
+  });
+
+  it('a moov of thousands of tiny boxes is refused', async () => {
+    const { file } = build();
+    const moovAt = file.indexOf(Buffer.from('moov')) - 4;
+    const tiny = Buffer.concat(
+      Array.from({ length: 110_000 }, () => box('free')),
+    );
+    const moov = box('moov', tiny);
+    const big = Buffer.concat([file.subarray(0, moovAt), moov]);
+    await expect(planClean('v.mp4', src(big))).rejects.toBeInstanceOf(
+      Unreadable,
+    );
   });
 });
