@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for CREATOR-TAKEDOWN. Refuses while any piece carries the mark: dropping it would hand a buyer's kept piece back to "gone for everyone".
 DO $$
 BEGIN
