@@ -44,6 +44,7 @@ import {
   lockPersonTier,
   TierGrantRefusal,
   TierGrantService,
+  upgradeActiveUntil,
 } from '../tier-grant.service';
 import {
   goodsFromTerms,
@@ -261,6 +262,16 @@ export class PlanPurchaseService implements OnModuleInit {
       kind: paymentKind,
       targetId,
     });
+    let newActiveUntil: string | null = null;
+    if (terms.kind === 'upgrade') {
+      const held = await this.tiers.tierOf(wallet.wawuUserId);
+      if (held.activeUntil !== null)
+        newActiveUntil = upgradeActiveUntil(
+          held.activeUntil,
+          new Date(),
+          goodsOf(plan, this.config.points.boughtExpiryDays).days,
+        ).toISOString();
+    }
     return {
       kind: terms.kind,
       tierId: terms.tierId,
@@ -270,6 +281,7 @@ export class PlanPurchaseService implements OnModuleInit {
       planMinor: plan.planMinor,
       bumpMinor: plan.bumpMinor,
       bumpPoints: plan.bumpPoints,
+      newActiveUntil,
       paymentKind,
       payment,
     };

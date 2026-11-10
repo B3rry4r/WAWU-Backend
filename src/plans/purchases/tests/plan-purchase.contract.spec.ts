@@ -519,6 +519,70 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
     ).toMatchObject({ purchaseRef: first.id });
   });
 
+  it('TIER-UPGRADE-FIX: an upgrade after a renewal keeps every day already paid for, and the quote states the end the grant sets', async () => {
+    const p = await h.buyer(RICH);
+    await purchase(p, { kind: 'tier', tierId: small.id });
+    await purchase(p, { kind: 'renew', tierId: small.id });
+    const renewed = await tierOf(p);
+    const heldEnd = Date.parse(renewed.activeUntil!);
+    // Two periods are held, so the later of the two ends is the held one.
+    expect(heldEnd).toBeGreaterThan(Date.now() + big.days * DAY);
+
+    const { q, view } = await purchase(p, { kind: 'upgrade', tierId: big.id });
+    expect(view.status).toBe('paid');
+    expect(q.newActiveUntil).toBe(new Date(heldEnd).toISOString());
+    const after = await tierOf(p);
+    expect(after.tier!.id).toBe(big.id);
+    expect(Date.parse(after.activeUntil!)).toBeGreaterThanOrEqual(heldEnd);
+    expect(after.activeUntil).toBe(q.newActiveUntil);
+    expect(view.grant!.activeUntil).toBe(q.newActiveUntil);
+  });
+
+  it('TIER-UPGRADE-FIX: an upgrade with no renewal ends where it always did, the new tier days from the grant, and the quote agrees', async () => {
+    const p = await h.buyer(RICH);
+    await purchase(p, { kind: 'tier', tierId: small.id });
+    const { q, view } = await purchase(p, { kind: 'upgrade', tierId: big.id });
+    const from = Date.parse(view.grant!.activeFrom);
+    expect(Date.parse(view.grant!.activeUntil)).toBe(from + big.days * DAY);
+    // The quote is read a moment before the payment: seconds apart, not days.
+    expect(
+      Math.abs(
+        Date.parse(q.newActiveUntil!) - Date.parse(view.grant!.activeUntil),
+      ),
+    ).toBeLessThan(60_000);
+  });
+
+  it('TIER-UPGRADE-FIX: a quote that is not an upgrade states no end date', async () => {
+    const p = await h.buyer(RICH);
+    expect(
+      (await quoted(p, { kind: 'tier', tierId: small.id })).newActiveUntil,
+    ).toBeNull();
+  });
+
+  it('TIER-UPGRADE-FIX: an upgrade after a renewal replayed with the same Idempotency-Key grants once and keeps the end date', async () => {
+    const p = await h.buyer(RICH);
+    await purchase(p, { kind: 'tier', tierId: small.id });
+    await purchase(p, { kind: 'renew', tierId: small.id });
+    const t: Terms = { kind: 'upgrade', tierId: big.id };
+    const q = await quoted(p, t);
+    const key = randomUUID();
+    const first = await call.buy(p, bodyFor(t, q), { key });
+    expect(first.status).toBe(201);
+    const endAfterFirst = (await tierOf(p)).activeUntil;
+    const second = await call.buy(p, bodyFor(t, q), { key, pin: '0000' });
+    expect(second.status).toBe(201);
+    expect(second.headers['idempotent-replayed']).toBe('true');
+    expect(second.body).toEqual(first.body);
+    expect((await tierOf(p)).activeUntil).toBe(endAfterFirst);
+    expect(endAfterFirst).toBe(q.newActiveUntil);
+    expect(sendsFrom(p)).toHaveLength(3);
+    expect((await rowsOf(p)).map((r) => r.kind).sort()).toEqual([
+      'renew',
+      'tier',
+      'upgrade',
+    ]);
+  });
+
   it('renewing the tier held extends from its current end and adds its bonus points again', async () => {
     const p = await h.buyer(RICH);
     const first = (await purchase(p, { kind: 'tier', tierId: small.id })).view;
