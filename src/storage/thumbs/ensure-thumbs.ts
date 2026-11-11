@@ -92,11 +92,17 @@ export function ensureThumbsFor(
   const p = (async () => {
     if (running >= AT_ONCE) await new Promise<void>((go) => waiting.push(go));
     running += 1;
+    const hold: { work?: Promise<unknown> } = {};
     try {
-      return await run(deps, key);
+      return await run(deps, key, hold);
     } finally {
-      running -= 1;
-      waiting.shift()?.();
+      // The slot is kept until the decode truly ends: the time limit only stops WAITING for it (round 2).
+      void Promise.resolve(hold.work)
+        .catch(() => undefined)
+        .finally(() => {
+          running -= 1;
+          waiting.shift()?.();
+        });
     }
   })()
     .catch((): ThumbOutcome => 'left')
@@ -111,7 +117,11 @@ function remember(key: string): void {
   failed.delete(key);
 }
 
-async function run(deps: ThumbDeps, key: string): Promise<ThumbOutcome> {
+async function run(
+  deps: ThumbDeps,
+  key: string,
+  hold: { work?: Promise<unknown> },
+): Promise<ThumbOutcome> {
   const skip = (why: string, retryMs = RETRY_AFTER_MS): ThumbOutcome => {
     if (failed.size >= REMEMBER) failed.clear();
     failed.set(key, Date.now() + retryMs);
@@ -137,10 +147,9 @@ async function run(deps: ThumbDeps, key: string): Promise<ThumbOutcome> {
       return 'have';
     }
     const original = await deps.read(key, MAX_THUMB_SOURCE_BYTES);
-    const copies = await within(
-      makeThumbs(original),
-      deps.workMs ?? THUMB_WORK_MS,
-    );
+    const job = makeThumbs(original);
+    hold.work = job;
+    const copies = await within(job, deps.workMs ?? THUMB_WORK_MS);
     for (const size of THUMB_SIZES)
       await deps.put({ owner, key: thumbKey(key, size), body: copies[size] });
     // A release that ran while the copies were made must not leave them behind.

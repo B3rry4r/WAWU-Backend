@@ -24,6 +24,7 @@ import {
   MAX_THUMB_SOURCE_PIXELS,
   UnreadablePicture,
 } from '../thumbs/make-thumbs';
+import * as makeMod from '../thumbs/make-thumbs';
 import { ensureThumbsFor, forgetThumbs } from '../thumbs/ensure-thumbs';
 import {
   THUMB_SOURCE_FAMILIES,
@@ -218,7 +219,7 @@ describe('which pictures get copies (1: never a paid full file)', () => {
   it('makes no request at all for a paid full file', async () => {
     const key = `content/full/${OWNER}/p1.jpg`;
     const w = world({ [key]: await photo(900, 900) }, [own(key)]);
-    await w.service.ensureThumbs(key);
+    await w.service.ensureThumbs(key, { background: true });
     await w.service.ensureThumbs(key, { background: true });
     expect(w.sent).toEqual([]);
     expect(w.puts).toEqual([]);
@@ -247,7 +248,7 @@ describe('making the copies through StorageService (2)', () => {
   it('stores 96 px and 640 px WebP copies beside the original, never replacing it, with rows of the owner', async () => {
     const original = await photo(3000, 2000);
     const w = world({ [AVATAR]: original }, [own(AVATAR)]);
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     expect(w.puts.sort()).toEqual([
       `avatars/${OWNER}/a1.t640.webp`,
       `avatars/${OWNER}/a1.t96.webp`,
@@ -272,11 +273,11 @@ describe('making the copies through StorageService (2)', () => {
 
   it('is idempotent: a second run reads and writes nothing', async () => {
     const w = world({ [AVATAR]: await photo(800, 800) }, [own(AVATAR)]);
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     forgetThumbs();
     w.puts.length = 0;
     w.sent.length = 0;
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     expect(w.puts).toEqual([]);
     expect(w.sent).toEqual([]);
   });
@@ -284,17 +285,17 @@ describe('making the copies through StorageService (2)', () => {
   it('skips an original that was released or has no row of its owner', async () => {
     const released = { ...own(AVATAR), releasedAt: new Date() };
     const a = world({ [AVATAR]: await photo(800, 800) }, [released]);
-    await a.service.ensureThumbs(AVATAR);
+    await a.service.ensureThumbs(AVATAR, { background: true });
     expect(a.puts).toEqual([]);
     forgetThumbs();
     const b = world({ [AVATAR]: await photo(800, 800) }, []);
-    await b.service.ensureThumbs(AVATAR);
+    await b.service.ensureThumbs(AVATAR, { background: true });
     expect(b.puts).toEqual([]);
   });
 
   it('removes the copies when the original goes (removeThumbsOf), objects and rows', async () => {
     const w = world({ [AVATAR]: await photo(800, 800) }, [own(AVATAR)]);
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     expect(w.table.size).toBe(3);
     await w.service.removeThumbsOf(AVATAR);
     expect([...w.bucket.keys()]).toEqual([AVATAR]);
@@ -368,7 +369,9 @@ describe('a bad picture never fails or slows the path (4)', () => {
     const w = world({ [key]: Buffer.from('this is not a picture at all') }, [
       own(key),
     ]);
-    await expect(w.service.ensureThumbs(key)).resolves.toBeUndefined();
+    await expect(
+      w.service.ensureThumbs(key, { background: true }),
+    ).resolves.toBeUndefined();
     expect(w.puts).toEqual([]);
   });
 
@@ -378,7 +381,7 @@ describe('a bad picture never fails or slows the path (4)', () => {
       { [AVATAR]: good.subarray(0, Math.floor(good.length / 3)) },
       [own(AVATAR)],
     );
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     expect(w.puts).toEqual([]);
   });
 
@@ -388,7 +391,7 @@ describe('a bad picture never fails or slows the path (4)', () => {
       [own(AVATAR)],
       40 * 1024 * 1024,
     );
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     expect(w.puts).toEqual([]);
   });
 
@@ -421,7 +424,7 @@ describe('a bad picture never fails or slows the path (4)', () => {
     await expect(makeThumbs(bomb)).rejects.toBeInstanceOf(UnreadablePicture);
     expect(Date.now() - started).toBeLessThan(2000);
     const w = world({ [AVATAR]: bomb }, [own(AVATAR)]);
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     expect(w.puts).toEqual([]);
   });
 
@@ -472,31 +475,31 @@ describe('a bad picture never fails or slows the path (4)', () => {
     expect(outcome).toBe('left');
     expect(logs.join(' ')).toContain('took too long');
   });
-
-  const SLOW = `avatars/${OWNER}/slow.jpg`;
-  it('the confirm does not wait longer than the inline limit for slow work', async () => {
+  it('a confirm never waits for copies: it returns at once while slow work carries on in the background', async () => {
+    const SLOW = `avatars/${OWNER}/slow.jpg`;
     const w = world({ [SLOW]: await photo(500, 500) }, [own(SLOW)]);
     const real = w.service['client'] as unknown as {
       send: (c: unknown) => Promise<unknown>;
     };
-    const slow = real.send.bind(real);
+    const fast = real.send.bind(real);
     real.send = async (c: unknown) => {
       if (c instanceof GetObjectCommand)
-        await new Promise((r) => setTimeout(r, 6000).unref());
-      return slow(c);
+        await new Promise((r) => setTimeout(r, 1500));
+      return fast(c);
     };
     const started = Date.now();
     await w.service.ensureThumbs(SLOW);
-    expect(Date.now() - started).toBeLessThan(4000);
-    // The copy job is still holding the process-wide queue: let it end before the next test.
-    await new Promise((r) => setTimeout(r, 4500));
-  }, 15000);
+    expect(Date.now() - started).toBeLessThan(300);
+    expect(w.puts).toEqual([]);
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(w.puts.length).toBe(2);
+  });
 });
 
 describe('serving the copies (5)', () => {
   it('signs both links through read-link.ts: the same links all day, only on the app', async () => {
     const w = world({ [AVATAR]: await photo(800, 800) }, [own(AVATAR)]);
-    await w.service.ensureThumbs(AVATAR);
+    await w.service.ensureThumbs(AVATAR, { background: true });
     const a = await asApp(() =>
       w.service.thumbsFor([AVATAR, null, 'content/full/u/x.jpg']),
     );
@@ -583,6 +586,84 @@ describe('memory (round 1): the worst picture accepted stays small', () => {
     const keys = [1, 2, 3, 4, 5].map((n) => `avatars/${OWNER}/q${n}.jpg`);
     const out = await Promise.all(keys.map(mk));
     expect(out.every((o) => o === 'made')).toBe(true);
+    expect(most).toBe(1);
+  });
+});
+
+describe('round 2: the sweep and the queue slot', () => {
+  it('a sweep spends its 20 looks only on pictures that still need copies', async () => {
+    const good = Array.from(
+      { length: 50 },
+      (_, n) => `avatars/${OWNER}/g${n}.jpg`,
+    );
+    const needy = Array.from(
+      { length: 5 },
+      (_, n) => `avatars/${OWNER}/n${n}.jpg`,
+    );
+    const objects: Record<string, Buffer> = {};
+    const rows: Row[] = [];
+    const img = await photo(200, 200);
+    for (const k of [...good, ...needy]) {
+      objects[k] = img;
+      rows.push(own(k));
+    }
+    for (const k of good) for (const t of thumbKeysOf(k)) rows.push(own(t));
+    const w = world(objects, rows);
+    const prisma = (
+      w.service as unknown as {
+        prisma: {
+          storageObject: {
+            findMany: (a: {
+              where: { key?: { in?: string[] } };
+            }) => Promise<Row[]>;
+          };
+        };
+      }
+    ).prisma;
+    const keyed = prisma.storageObject.findMany;
+    // newest first: the 50 pictures that have their copies, then the 5 that do not
+    const order = [...good, ...needy].map((k) => ({ key: k }));
+    prisma.storageObject.findMany = async (a) =>
+      a.where.key?.in ? keyed(a) : (order as unknown as Row[]);
+    const looked = await w.service.sweepThumbs(20);
+    expect(looked).toBe(5);
+    expect(w.puts.length).toBe(10);
+  });
+
+  it('keeps the queue slot until the decode truly ends, so two decodes never overlap', async () => {
+    const real = makeMod.makeThumbs;
+    let active = 0;
+    let most = 0;
+    const spy = jest
+      .spyOn(makeMod, 'makeThumbs')
+      .mockImplementation(async (b) => {
+        active += 1;
+        most = Math.max(most, active);
+        await new Promise((r) => setTimeout(r, 200));
+        active -= 1;
+        return real(b);
+      });
+    const img = await photo(200, 200);
+    const mk = (k: string) =>
+      ensureThumbsFor(
+        {
+          logger: { log: () => undefined, warn: () => undefined },
+          enabled: true,
+          rowOf: async () => own(k),
+          haveRows: async () => new Set(),
+          read: async () => img,
+          put: async () => undefined,
+          discard: async () => undefined,
+          workMs: 20,
+        },
+        k,
+      );
+    const out = await Promise.all(
+      [`avatars/${OWNER}/t1.jpg`, `avatars/${OWNER}/t2.jpg`].map(mk),
+    );
+    await new Promise((r) => setTimeout(r, 600));
+    spy.mockRestore();
+    expect(out).toEqual(['left', 'left']);
     expect(most).toBe(1);
   });
 });

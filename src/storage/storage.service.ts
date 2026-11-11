@@ -315,9 +315,6 @@ export const GENERATED_KEY_FOLDERS = [
  * against this list, so a folder missing from it is a folder whose links are
  * never recognised, never re-signed and never found for a purge (FIX-71).
  */
-/** HUB-THUMBS: the most a person waiting on a confirm waits for the small copies. */
-export const THUMB_INLINE_WAIT_MS = 2_500;
-
 /** HUB-THUMBS: the links to a picture's two small copies (96 and 640 px on the long side). */
 export interface Thumbs {
   w96: string;
@@ -1537,8 +1534,12 @@ export class StorageService {
    * HUB-THUMBS: makes the two small copies (96 and 640 px on the long side, WebP) of a PUBLIC picture
    * (avatar, profile cover, content cover, content preview: see thumbs/thumb-keys.ts; anything else is a
    * no-op), stored beside the original and written only here. Never throws and never fails the caller: a
-   * picture that is broken, huge, a decompression bomb or slow is left as it is and logged. A person
-   * waiting on a confirm waits at most THUMB_INLINE_WAIT_MS; the work carries on after that.
+   * picture that is broken, huge, a decompression bomb or slow is left as it is and logged.
+   *
+   * A CONFIRM NEVER WAITS FOR COPIES (lead ruling, 11 Nov 2026): the job goes to the one-at-a-time queue and
+   * this returns at once, so an upload confirms as fast as before this task. Until the copies exist the app
+   * draws the full picture (the fields are optional). Only the sweeps pass `background: true`, which awaits the
+   * job so they can count what they made.
    */
   async ensureThumbs(
     key: string,
@@ -1546,19 +1547,7 @@ export class StorageService {
   ): Promise<void> {
     if (!this.client || !thumbSourceOk(key)) return;
     const work = ensureThumbsFor(this.thumbDeps(), key).catch(() => undefined);
-    if (opts.background) {
-      await work;
-      return;
-    }
-    let timer: NodeJS.Timeout | undefined;
-    await Promise.race([
-      work,
-      new Promise<void>((go) => {
-        timer = setTimeout(go, THUMB_INLINE_WAIT_MS);
-        timer.unref();
-      }),
-    ]);
-    clearTimeout(timer);
+    if (opts.background) await work;
   }
 
   private thumbDeps(): ThumbDeps {
@@ -1708,7 +1697,7 @@ export class StorageService {
    * in the last two hours that have no copies yet. A picture that has them costs one database read. Run on a
    * timer by StorageSweepService.
    */
-  async sweepThumbs(limit = 20): Promise<number> {
+  async sweepThumbs(limit = 60): Promise<number> {
     if (!this.client) return 0;
     const since = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const rows = await this.prisma.storageObject.findMany({
@@ -1725,16 +1714,17 @@ export class StorageService {
       },
       orderBy: { createdAt: 'desc' },
       select: { key: true },
-      take: limit * 3,
+      take: limit * 10,
     });
-    let looked = 0;
-    for (const r of rows) {
-      if (looked >= limit) break;
-      if (!thumbSourceOk(r.key)) continue;
-      looked += 1;
-      await this.ensureThumbs(r.key, { background: true });
-    }
-    return looked;
+    // Pictures that already have both copies are skipped BEFORE the limit is spent (round 2), so a sweep after a
+    // burst spends its looks only on pictures that need copies.
+    const keys = rows.map((r) => r.key).filter(thumbSourceOk);
+    const have = await this.thumbDeps().haveRows(keys.flatMap(thumbKeysOf));
+    const need = keys
+      .filter((k) => !thumbKeysOf(k).every((t) => have.has(t)))
+      .slice(0, limit);
+    for (const k of need) await this.ensureThumbs(k, { background: true });
+    return need.length;
   }
 
   /**
