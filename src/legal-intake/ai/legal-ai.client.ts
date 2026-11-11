@@ -27,8 +27,8 @@ export function modelLabelOf(client: GeminiClient): string {
 
 /**
  * The legal services' AI client (LEGAL-ELEVEN, R-137), bound to `GEMINI_CLIENT` inside the legal module only.
- * `legal.ai_provider` picks who answers: `elevenlabs` (the default) or `gemini`, which keeps the earlier path
- * untouched. Read on every call, so the way back needs no code change.
+ * `legal.ai_provider` picks who answers: `elevenlabs` (the default, used only where the agent platform is set up) or
+ * `gemini`, which keeps the earlier path untouched. Read on every call, so the way back needs no code change.
  */
 @Injectable()
 export class LegalAiClient implements GeminiClient, NamesItsModel {
@@ -38,10 +38,16 @@ export class LegalAiClient implements GeminiClient, NamesItsModel {
     private readonly eleven: ElevenLabsLegalAi,
   ) {}
 
+  /**
+   * The agent platform answers only when it is set up on this server AND `legal.ai_provider` is `elevenlabs`. A server
+   * without `AI_VOICE_BASE_URL` and `AI_VOICE_API_KEY` keeps today's Gemini path exactly (its own "not set" error
+   * included), so legal never goes dark for want of keys the server was never given.
+   */
   private pick(): GeminiClient {
-    return this.settings.lines(LEGAL_AI_PROVIDER_SETTING)[0] === 'gemini'
-      ? this.gemini
-      : this.eleven;
+    return this.settings.lines(LEGAL_AI_PROVIDER_SETTING)[0] === 'elevenlabs' &&
+      this.eleven.available()
+      ? this.eleven
+      : this.gemini;
   }
 
   modelLabel(): string {

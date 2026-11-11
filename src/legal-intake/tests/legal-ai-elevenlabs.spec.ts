@@ -403,6 +403,14 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
       }),
     ).toBe('from the agent');
     expect(modelLabelOf(router)).toBe('elevenlabs:gemini-3-flash-preview');
+    // Not set up on this server: the setting says elevenlabs, the picker still uses today's Gemini path.
+    const unset = new ElevenLabsLegalAi(
+      { agentsConfigured: false } as unknown as AiVoiceProvider,
+      settingsOf(values),
+    );
+    const bare = new LegalAiClient(settingsOf(values), gemini as never, unset);
+    expect(await bare.chat({ instruction: 'i', history: [] })).toBe('g');
+    seen.length = 0;
     values['legal.ai_provider'] = ['gemini'];
     expect(
       await router.chat({

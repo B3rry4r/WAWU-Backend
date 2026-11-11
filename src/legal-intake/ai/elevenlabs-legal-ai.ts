@@ -106,6 +106,11 @@ export class ElevenLabsLegalAi implements GeminiClient {
     private readonly settings: PlanSettingsService,
   ) {}
 
+  /** True when the agent platform is set up on this server (`AI_VOICE_BASE_URL` and `AI_VOICE_API_KEY`). */
+  available(): boolean {
+    return this.voice.agentsConfigured;
+  }
+
   /** The model, as the brief records it (`generatedBy`). */
   modelLabel(): string {
     return `elevenlabs:${this.llm()}`;
