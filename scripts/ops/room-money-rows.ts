@@ -35,6 +35,7 @@ export async function findRoomMoneyRows(
   communityId: string,
   running: WalletProviderName,
   sandboxProven: boolean,
+  sweepStart: Date,
 ): Promise<RealMoneyRow[]> {
   const out: RealMoneyRow[] = [];
   const add = (
@@ -166,6 +167,8 @@ export async function findRoomMoneyRows(
       id: true,
       creditsFunded: true,
       grossKobo: true,
+      hostShareKobo: true,
+      earnedAt: true,
       lotIds: true,
       settlement: {
         select: {
@@ -246,6 +249,17 @@ export async function findRoomMoneyRows(
       }
     }
     const st = e.settlement;
+    if (!st && e.hostShareKobo > 0 && e.earnedAt >= sweepStart) {
+      // The sweep makes the host's owed share later (adoptHostShares); until it has, the share is on its way.
+      add(
+        'CreditSpendEarning',
+        e.id,
+        'no settlement yet',
+        e.hostShareKobo,
+        'provider',
+        "the host's share has not been made into an earning yet (the sweep makes it)",
+      );
+    }
     if (st) {
       if (st.status !== 'landed' || (st.move && st.move.status !== 'landed'))
         add(
@@ -270,4 +284,22 @@ export async function findRoomMoneyRows(
     }
   }
   return out;
+}
+
+/**
+ * The moment from which the earnings sweep makes host shares, read the way the sweep reads it
+ * (EarningSettlementService.sweepStart): EARNINGS_SWEEP_START when set, else the stored first-run row. Read only; with
+ * neither, the beginning of time, so every unsettled share keeps its room.
+ */
+export async function sweepStartFor(
+  db: Db,
+  getEnv: (key: string) => string | undefined,
+): Promise<Date> {
+  const raw = getEnv('EARNINGS_SWEEP_START')?.trim();
+  if (raw) {
+    const at = new Date(raw);
+    if (!Number.isNaN(at.getTime())) return at;
+  }
+  const row = await db.earningSweepStart.findUnique({ where: { id: 1 } });
+  return row ? row.startedAt : new Date(0);
 }

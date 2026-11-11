@@ -51,7 +51,7 @@ import { POPULAR_CACHE_SECONDS } from '../../src/search-response/search-history.
 import type { WalletProviderName } from '../../src/wallet-provider/wallet-provider.interface';
 import { proveTestProvider } from './delete-test-account';
 import type { RealMoneyRow } from './real-money-rows';
-import { findRoomMoneyRows } from './room-money-rows';
+import { findRoomMoneyRows, sweepStartFor } from './room-money-rows';
 
 /** Notifications that exist only to open a room. Deleted with it. */
 export const ROOM_ONLY_NOTICE_KINDS = [
@@ -66,6 +66,8 @@ export interface Deps {
   out: (line: string) => void;
   /** A test hook, never set by the command line: look only at these rooms (a shared test database holds other specs' rooms). */
   onlyIds?: string[];
+  /** A test hook, never set by the command line: runs for each room after the plan is made and before it is cleared (a purchase landing mid-run). */
+  beforeRoom?: (id: string) => Promise<void>;
 }
 
 export interface Options {
@@ -96,6 +98,7 @@ async function report(
   prisma: PrismaService,
   running: WalletProviderName,
   sandboxProven: boolean,
+  sweepStart: Date,
   onlyIds?: string[],
 ): Promise<RoomReport[]> {
   const rooms = await prisma.community.findMany({
@@ -152,7 +155,7 @@ async function report(
         _count: { _all: true },
       }),
       prisma.creditSpend.count({ where: { ...where, earning: { is: null } } }),
-      findRoomMoneyRows(prisma, r.id, running, sandboxProven),
+      findRoomMoneyRows(prisma, r.id, running, sandboxProven, sweepStart),
     ]);
     out.push({
       id: r.id,
@@ -188,6 +191,7 @@ async function clearRoom(
   id: string,
   running: WalletProviderName,
   sandboxProven: boolean,
+  sweepStart: Date,
 ): Promise<{ kept: RealMoneyRow[] } | { removed: Record<string, number> }> {
   return prisma.$transaction(
     async (tx) => {
@@ -195,7 +199,13 @@ async function clearRoom(
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "Community" WHERE "id" = ${id} FOR UPDATE`;
       if (locked.length === 0) return { removed: {} };
-      const money = await findRoomMoneyRows(tx, id, running, sandboxProven);
+      const money = await findRoomMoneyRows(
+        tx,
+        id,
+        running,
+        sandboxProven,
+        sweepStart,
+      );
       if (money.length > 0) return { kept: money };
       const removed: Record<string, number> = {};
       const count = (k: string, n: number) => {
@@ -287,7 +297,14 @@ export async function clearCommunities(
   };
   const proof = proveTestProvider(deps.getEnv);
   const running = proof.provider === 'nuvion' ? 'nuvion' : 'fintava';
-  const rooms = await report(prisma, running, proof.ok, deps.onlyIds);
+  const sweepStart = await sweepStartFor(prisma, deps.getEnv);
+  const rooms = await report(
+    prisma,
+    running,
+    proof.ok,
+    sweepStart,
+    deps.onlyIds,
+  );
   const toClear = rooms.filter((r) => r.money.length === 0);
   const kept = rooms.filter((r) => r.money.length > 0);
   const phrase = phraseFor(toClear.length);
@@ -340,7 +357,8 @@ export async function clearCommunities(
   const failures: string[] = [];
   for (const r of toClear) {
     try {
-      const res = await clearRoom(prisma, r.id, running, proof.ok);
+      await deps.beforeRoom?.(r.id);
+      const res = await clearRoom(prisma, r.id, running, proof.ok, sweepStart);
       if ('kept' in res) {
         stopped++;
         out(
