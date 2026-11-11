@@ -201,6 +201,11 @@ export const WEBHOOK_TABLE_READERS: readonly WebhookTableReader[] = [
     reads: 'This job: ids and states, to clear and to count the rows it holds.',
   },
   {
+    file: 'scripts/ops/nuvion-live-reset-kinds.ts',
+    reads:
+      "The NUV-LIVE reset command's `webhook_events` step, run once by the owner on the server while it is still on Nuvion's test keys: one update of NuvionWebhookEvent rows that are `pending` or `failed`, which become `processed` with a note, `nextAttemptAt` and `claimedUntil` cleared and `processedAt` kept or set, so the dispatcher never replays a test-system delivery after the swap to live keys. It reads no body and touches no other state.",
+  },
+  {
     file: 'scripts/fintava/ledger-sandbox-check.ts',
     reads:
       'A sandbox check that prints the state and note of the delivery it just sent.',
