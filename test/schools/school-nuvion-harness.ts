@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -302,6 +306,22 @@ export async function bootSchoolNuvion(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here (not env): the book charge and the bank charge.
+  // A spec that changes the bank charge says so in the old band form ("0:2000"): its first figure.
+  const bankFee = Number(
+    (extraEnv.NUVION_FEE_BANK_PAYOUT ?? '0:2500')
+      .split(',')[0]
+      .split(':')
+      .pop(),
+  );
+  await seedFees(
+    app,
+    {
+      wallet_to_wallet: { feeKobo: 1_500, providerKobo: 1_500 },
+      ngn_bank_withdrawal: { feeKobo: bankFee, providerKobo: bankFee },
+    },
+    1_500,
+  );
   await app.listen(0, '127.0.0.1');
   const prisma = moduleRef.get(PrismaService);
   nuvion.operational.availableKobo = 5_000_000_000n;
@@ -518,6 +538,7 @@ export async function bootSchoolNuvion(
       await prisma.fintavaWallet.deleteMany({
         where: { wawuUserId: { in: users } },
       });
+      await removeSpecFees(app);
       await app.close();
       await mail.stop();
       await wawuId.stop();

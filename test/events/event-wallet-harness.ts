@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { type INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -24,6 +28,7 @@ import { MoneyModule } from '../../src/money/money.module';
 import { WalletPaymentService } from '../../src/money/payments/wallet-payment.service';
 import { FintavaDouble, MERCHANT_ACCOUNT } from '../fintava/fintava-double';
 import {
+  HARNESS_FLAT_FEE_KOBO,
   NuvionHarnessRig,
   runsOnFintavaDouble,
 } from '../nuvion/harness-wallets';
@@ -164,6 +169,14 @@ export async function bootEventApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here (not env).
+  if (nuv) {
+    await seedFlatFees(
+      app,
+      { feeKobo: HARNESS_FLAT_FEE_KOBO, providerKobo: HARNESS_FLAT_FEE_KOBO },
+      HARNESS_FLAT_FEE_KOBO,
+    );
+  }
   await app.listen(0, '127.0.0.1');
   const prisma = moduleRef.get(PrismaService);
   const payments = moduleRef.get(WalletPaymentService);
@@ -338,6 +351,7 @@ export async function bootEventApp(
       await prisma.userProfile.deleteMany({
         where: { wawuUserId: { in: users } },
       });
+      await removeSpecFees(app);
       await app.close();
       await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {

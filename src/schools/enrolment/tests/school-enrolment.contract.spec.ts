@@ -28,7 +28,7 @@ import type { SchoolEnrolmentView } from '../school-enrolment-view.type';
  */
 
 const PRICE = 15_000_000;
-const FEE = 1_575;
+const FEE = 2_325;
 const TOTAL = PRICE + FEE;
 const START = 20_000_000;
 const NOV = '2030-11-03';
@@ -530,8 +530,8 @@ describe('SCHOOLS-07 enrol in a course and pay from the wallet', () => {
         willBeHeld: true,
       });
       expect(q.fee).toMatchObject({
-        providerFeeKobo: FEE,
-        wawuFeeKobo: 0,
+        providerFeeKobo: 0,
+        wawuFeeKobo: FEE,
         totalFeeKobo: FEE,
       });
       const merchantBefore = h.wallets.kobo.get(MERCHANT_ACCOUNT)!;

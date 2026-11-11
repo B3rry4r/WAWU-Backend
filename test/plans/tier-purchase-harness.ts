@@ -60,8 +60,12 @@ import {
 
 export const PIN = '4826';
 /** The dashboard's balance-transfer charge (docs/fintava/fees.md), in kobo. */
-export const liveFee = (...args: [number?]): number =>
-  args.length >= 0 ? HARNESS_FLAT_FEE_KOBO : 0;
+export const liveFee = (amountKobo = 0): number =>
+  runsOnFintavaDouble()
+    ? amountKobo < 500_000
+      ? 2325
+      : 1575
+    : HARNESS_FLAT_FEE_KOBO;
 
 /** Fintava's record by our reference, with the ids that belong to ONE transfer. */
 export function recordFor(
