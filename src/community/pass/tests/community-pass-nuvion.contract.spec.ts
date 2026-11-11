@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../../money/fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -360,6 +364,12 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // R-139: the fee comes from rows, seeded here (not env).
+    await seedFlatFees(
+      app,
+      { feeKobo: NUVION_FEE, providerKobo: NUVION_FEE },
+      NUVION_FEE,
+    );
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     earnings = moduleRef.get(EarningSettlementService);
@@ -374,6 +384,7 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
   });
 
   afterAll(async () => {
+    await removeSpecFees(app);
     if (prisma) {
       await prisma.notification.deleteMany({
         where: { userWawuId: { in: users } },
@@ -461,7 +472,7 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
         kind: 'community_pass',
         priceKobo: PRICE,
         totalKobo: PRICE + NUVION_FEE,
-        fee: { providerFeeKobo: NUVION_FEE, wawuFeeKobo: 0 },
+        fee: { providerFeeKobo: 0, wawuFeeKobo: NUVION_FEE },
       },
     });
     expect(q.payment.payee?.wawuUserId).toBe(host.id);

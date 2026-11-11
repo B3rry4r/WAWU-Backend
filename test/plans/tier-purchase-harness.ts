@@ -60,6 +60,10 @@ import {
 
 export const PIN = '4826';
 /** The dashboard's balance-transfer charge (docs/fintava/fees.md), in kobo. */
+/** Fintava's dashboard balance-transfer charge: stepped at NGN 5,000 (docs/fintava/fees.md). */
+export const fintavaDashboardFee = (amountKobo: number): number =>
+  amountKobo < 500_000 ? 2325 : 1575;
+
 export const liveFee = (amountKobo = 0): number =>
   runsOnFintavaDouble()
     ? amountKobo < 500_000
@@ -166,7 +170,8 @@ export function installFintava(double: FintavaDouble, wallets: Wallets): void {
       };
     }
     const amountKobo = Math.round(b.amount * 100);
-    const feeKobo = liveFee(amountKobo);
+    // The Fintava double scripts the dashboard's own charge (stepped), whatever runs the spec.
+    const feeKobo = fintavaDashboardFee(amountKobo);
     const have = wallets.kobo.get(b.senderAccount) ?? 0;
     if (have < amountKobo + feeKobo) {
       return {

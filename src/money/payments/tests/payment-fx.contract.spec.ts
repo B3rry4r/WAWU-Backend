@@ -443,7 +443,7 @@ describe('Pay a naira price from another currency (PAY-FX, R-91)', () => {
     const nview = body<PaymentQuoteView>(nq).data!;
     expect(nview.source).toBeUndefined();
     const before = p.naira!.availableKobo;
-    nuvion.feeKobo = () => BigInt(nview.fee.providerFeeKobo);
+    nuvion.feeKobo = () => BigInt(nview.fee.totalFeeKobo);
     nuvion.mode = 'successful';
     const npay = await send(p, payBody(nview));
     expect(npay.status).toBe(201);

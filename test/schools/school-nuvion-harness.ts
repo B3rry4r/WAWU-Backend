@@ -420,7 +420,7 @@ export async function bootSchoolNuvion(
         throw new Error(`quote ${qres.status}: ${qres.text.slice(0, 200)}`);
       }
       const q = body<PaymentQuoteView>(qres).data!;
-      nuvion.feeKobo = () => BigInt(q.fee.providerFeeKobo);
+      nuvion.feeKobo = () => BigInt(q.fee.totalFeeKobo);
       const res = await request(app.getHttpServer())
         .post(`${BASE}/money/payments`)
         .set('Authorization', p.auth)

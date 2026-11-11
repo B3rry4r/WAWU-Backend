@@ -214,7 +214,7 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       kind: 'paid_dm',
       priceKobo: PRICE,
       totalKobo: PRICE + FEE,
-      fee: { providerFeeKobo: FEE, wawuFeeKobo: 0 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: FEE },
       willBeHeld: true,
     });
     // Nothing is in the creator's inbox until it is paid.
