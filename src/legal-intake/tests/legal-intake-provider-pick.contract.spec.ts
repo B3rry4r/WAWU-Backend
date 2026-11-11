@@ -10,6 +10,7 @@ import * as path from 'path';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import type { App } from 'supertest/types';
 import { ConfigModule } from '@nestjs/config';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
@@ -58,6 +59,10 @@ async function healthy(url: string, ms = 15000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 200));
   }
   return false;
+}
+
+interface Done {
+  data: { brief: { analysis: { summary: string }; generatedBy: string } };
 }
 
 describe('LEGAL-ELEVEN: the provider that writes the intake brief (contract)', () => {
@@ -114,13 +119,13 @@ describe('LEGAL-ELEVEN: the provider that writes the intake brief (contract)', (
   }
 
   const complete = async () => {
-    const server = app!.getHttpServer();
+    const server = app!.getHttpServer() as App;
     const made = await request(server)
       .post('/legal/intake')
       .set('Authorization', `Bearer ${token}`)
       .send({ matter: 'debt_recovery' })
       .expect(201);
-    const id = made.body.data.id as string;
+    const id = (made.body as { data: { id: string } }).data.id;
     await request(server)
       .patch(`/legal/intake/${id}/answers`)
       .set('Authorization', `Bearer ${token}`)
@@ -175,10 +180,10 @@ describe('LEGAL-ELEVEN: the provider that writes the intake brief (contract)', (
     await boot(false);
     const res = await complete();
     expect(res.status).toBe(201);
-    expect(res.body.data.brief.analysis.summary).toBe(
+    expect((res.body as Done).data.brief.analysis.summary).toBe(
       'From the Gemini stand-in.',
     );
-    expect(res.body.data.brief.generatedBy).toContain('gemini');
+    expect((res.body as Done).data.brief.generatedBy).toContain('gemini');
     expect(gemini.briefs).toBe(1);
     expect(standin.state.chats).toHaveLength(0);
   }, 40000);
@@ -194,8 +199,10 @@ describe('LEGAL-ELEVEN: the provider that writes the intake brief (contract)', (
     );
     const res = await complete();
     expect(res.status).toBe(201);
-    expect(res.body.data.brief.analysis.summary).toBe('From the agent.');
-    expect(res.body.data.brief.generatedBy).toMatch(/^elevenlabs:/);
+    expect((res.body as Done).data.brief.analysis.summary).toBe(
+      'From the agent.',
+    );
+    expect((res.body as Done).data.brief.generatedBy).toMatch(/^elevenlabs:/);
     expect(gemini.briefs).toBe(0);
     expect(standin.state.chats).toHaveLength(1);
     expect(standin.state.chats[0].textOnly).toBe(true);
