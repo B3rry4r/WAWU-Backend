@@ -39,7 +39,7 @@ export const AI_TOOLS: readonly AiTool[] = [
 /**
  * The Studio picture and video tools (R-109, AITOOLS-09 and -10), kept apart
  * from the seven above so that list stays the launch set the older specs pin.
- * Each is listed only while its own `ai.listed.<id>` setting is on (AITOOLS-08).
+ * Each is listed unless its own `ai.listed.<id>` setting is turned off (AITOOLS-08, R-135).
  */
 export const AI_STUDIO2_TOOLS: readonly AiTool[] = [
   IMAGE_TOOL,

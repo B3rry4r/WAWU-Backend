@@ -152,8 +152,8 @@ describe('AITOOLS-12: Music for a video and Split a song (contract)', () => {
   });
 
   it('lists neither tool while its switch is off and answers unavailable with nothing held; lists each whole when on', async () => {
-    for (const id of ['video-music', 'stems'])
-      await set(`ai.listed.${id}`, null);
+    // R-135: the default is on, so the Dashboard turns each off with a 0.
+    for (const id of ['video-music', 'stems']) await set(`ai.listed.${id}`, 0);
     await h.grant(PLAIN, 5000);
     const off = data<AiToolsView>(
       await h.http().get('/ai-tools').set(auth(PLAIN)),

@@ -290,8 +290,9 @@ describe('AITOOLS-08 to AITOOLS-10: the Studio media pipeline (contract)', () =>
 
   describe('AITOOLS-08: the listing switch, the catalogue and the quote', () => {
     it('lists no new tool while its switch is off, even with the provider set, and the routes answer unavailable with nothing held', async () => {
+      // R-135: the default is on, so the Dashboard turns each off with a 0.
       for (const id of ['image', 'photo-edit', 'video', 'talking-photo'])
-        await set(`ai.listed.${id}`, null);
+        await set(`ai.listed.${id}`, 0);
       await h.grant(PLAIN, 5000);
       const list = data<AiToolsView>(
         await h.http().get('/ai-tools').set(auth(PLAIN)),
@@ -1371,7 +1372,7 @@ describe('AITOOLS-08 to AITOOLS-10: the Studio media pipeline (contract)', () =>
       expect(await notices()).toBe(1);
       // The owner has not released the tool: the switch is off, so a job that ends now tells nobody.
       const off = await run(await makeImage(PLAIN, 'another [[slow:1300]]'));
-      await set('ai.listed.image', null);
+      await set('ai.listed.image', 0);
       expect((await follow(PLAIN, off)).state).toBe('done');
       expect(await notices()).toBe(1);
     });

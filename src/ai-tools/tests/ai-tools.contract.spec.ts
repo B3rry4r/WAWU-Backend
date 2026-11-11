@@ -127,7 +127,8 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     // specs check them): the one assertion each task's scope changes.
     // VoiceOver's entry below is as before.
     // AITOOLS-05 lists Dubbing last: seven tools (this count pinned six).
-    expect(view.tools).toHaveLength(7);
+    // STUDIO-ON (R-135): the 12 Studio tools are listed by default, so 19 in all; the seven launch tools come first.
+    expect(view.tools).toHaveLength(19);
     const tool = view.tools[0];
     expect(tool).toMatchObject({
       id: 'voiceover',

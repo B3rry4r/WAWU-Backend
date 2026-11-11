@@ -21,8 +21,59 @@ export const PODCAST_MAX_CHARS_SETTING = 'ai.podcast_max_chars';
 export const PODCAST_MODEL_SETTING = 'ai.podcast_model';
 export const PODCAST_LANGUAGES_SETTING = 'ai.podcast_languages';
 export const PODCAST_MAX_RUN_SETTING = 'ai.podcast_max_run_seconds';
-/** The switch the lead turns on only after the provider's Studio API proof call passed for our account. */
+/**
+ * The Dashboard override of the Studio API proof (STUDIO-ON, R-135): 1 forces the Podcast maker on, 0 forces it off,
+ * -1 (the default, "unset") uses the Hub's own proof.
+ */
 export const PODCAST_STUDIO_OK_SETTING = 'ai.podcast_studio_api_ok';
+
+/** How long a refusal from the provider keeps the Podcast maker unlisted, and how long a pass is remembered. */
+export const PODCAST_REFUSAL_MS = 60 * 60 * 1000;
+export const PODCAST_PASS_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The Hub's own proof that our account may use the Studio API (STUDIO-ON). The provider's documented Studio reads
+ * (`GET /v1/studio/projects`) do not say they are gated by the allowlist, so no read proves it and none is made. The
+ * proof is the real answer: a 403 on a real run (`refused`) unlists the tool for an hour, then it is tried again; a run
+ * the provider accepted (`passed`) clears a refusal and is remembered for a day. Kept in memory, per process.
+ */
+export class PodcastStudioProof {
+  private state: { ok: boolean; at: number } | null = null;
+  constructor(private readonly now: () => number = Date.now) {}
+
+  refused(): void {
+    this.state = { ok: false, at: this.now() };
+  }
+
+  passed(): void {
+    this.state = { ok: true, at: this.now() };
+  }
+
+  reset(): void {
+    this.state = null;
+  }
+
+  /** True unless a refusal is still inside its hour. A pass and no answer yet both list the tool. */
+  holds(): boolean {
+    const s = this.state;
+    if (!s) return true;
+    if (s.ok) return true;
+    return this.now() - s.at >= PODCAST_REFUSAL_MS;
+  }
+}
+
+/** The one proof of this process; specs reset it. */
+export const podcastStudioProof = new PodcastStudioProof();
+
+/** The Podcast maker's proof: the Dashboard override when set (1 on, 0 off), else the Hub's own proof. */
+export function podcastProofHolds(
+  settings: Pick<AiToolSettings, 'number'>,
+): boolean {
+  const override = settings.number(PODCAST_STUDIO_OK_SETTING);
+  if (override === 1) return true;
+  if (override === 0) return false;
+  return podcastStudioProof.holds();
+}
 /** A link is only `https`, at most this many characters; the Hub never fetches it (the provider does). */
 export const PODCAST_LINK_MAX_CHARS = 2000;
 
@@ -81,8 +132,9 @@ export function podcastLinkOk(link: string): boolean {
 
 /**
  * Podcast maker (AITOOLS-13, R-109): a text or a web page becomes a podcast with one host or two voices. It runs on the
- * provider's Studio API, which only allowlisted accounts can use, so the tool is also unlisted until
- * `ai.podcast_studio_api_ok` is on, and a refusal from the provider (403) gives every point back and logs an owner item.
+ * provider's Studio API, which only allowlisted accounts can use, so the tool is also unlisted while the Hub's own proof
+ * is refused (`podcastStudioProof`; `ai.podcast_studio_api_ok` can force it either way), and a refusal from the provider
+ * (403) gives every point back, logs an owner item and marks the proof refused.
  * The provider works for minutes: the job stays `working` while a follower reads the project. Priced by its length
  * (three plan actions, PROVISIONAL): no text a person reads may state a price.
  */
@@ -98,7 +150,7 @@ export const PODCAST_TOOL: AiTool = {
   audioFolder: AI_PODCAST_FOLDER,
   listedWhenOff: false,
   listingSetting: 'ai.listed.podcast',
-  requiredSettings: [PODCAST_STUDIO_OK_SETTING],
+  proof: podcastProofHolds,
   enabled: (provider) => provider.podcastConfigured && provider.configured,
   precheck: (req, settings) => {
     const r = asPodcast(req);

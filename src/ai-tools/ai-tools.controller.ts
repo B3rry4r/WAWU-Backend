@@ -925,7 +925,7 @@ export class AiToolsController {
    * job's `audioUrl` is the podcast (`pieceFormat: audio`). A link that is not `https`, one over the limit, two voices that
    * are the same and a language off the list are refused with the reason and nothing held. If the provider does not take
    * our account (its Studio API is open to allowlisted accounts only) the job fails with "This isn't available right now.
-   * No points were taken." The tool is listed only while `ai.listed.podcast` and `ai.podcast_studio_api_ok` are both on.
+   * No points were taken." The tool is listed unless `ai.listed.podcast` is turned off or the Hub's Studio API proof is refused (`ai.podcast_studio_api_ok` -1 uses the proof, 1 forces on, 0 forces off).
    */
   @Post('podcast/jobs')
   @HttpCode(202)
