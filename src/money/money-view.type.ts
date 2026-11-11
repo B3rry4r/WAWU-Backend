@@ -473,24 +473,24 @@ export interface FeeQuoteView {
    */
   arrivalMinutes?: number;
   /**
-   * FEE-01 (R-139), additive. The move's currency (`NGN` for every kind the
+   * FEE-01 (R-139), additive. Present when the fee engine prices the move (Nuvion); absent under Fintava. The move's currency (`NGN` for every kind the
    * wallet quotes today).
    */
-  currency: string;
+  currency?: string;
   /**
    * WAWU's fee on this move, in minor units, as the fee schedule works it
    * out (R-139 point 1). Under a provider with no schedule it is the fee
    * the quote already showed.
    */
-  feeMinor: number;
+  feeMinor?: number;
   /** VAT on that fee, in minor units; 0 while VAT is off. Shown apart from the fee. */
-  vatMinor: number;
+  vatMinor?: number;
   /** Whether VAT is switched on. */
-  vatOn: boolean;
+  vatOn?: boolean;
   /** What the person pays: the amount, the fee and VAT. Equals `totalKobo` for a naira quote. */
-  totalMinor: number;
+  totalMinor?: number;
   /** Exactly what the receiver gets. Equals `amountKobo` for a naira quote. */
-  receiveMinor: number;
+  receiveMinor?: number;
 }
 
 /* ------------------------------------------------------------------ */

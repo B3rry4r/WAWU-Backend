@@ -56778,22 +56778,28 @@
             "nullable": true
           },
           "currency": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "feeMinor": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           },
           "vatMinor": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           },
           "vatOn": {
-            "type": "boolean"
+            "type": "boolean",
+            "nullable": true
           },
           "totalMinor": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           },
           "receiveMinor": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           }
         },
         "required": [
@@ -56806,13 +56812,7 @@
           "withinDailyLimit",
           "remainingTodayKobo",
           "quoteToken",
-          "expiresAt",
-          "currency",
-          "feeMinor",
-          "vatMinor",
-          "vatOn",
-          "totalMinor",
-          "receiveMinor"
+          "expiresAt"
         ]
       },
       "CheckedBvnView": {
@@ -59316,6 +59316,21 @@
           },
           "chargeKobo": {
             "type": "integer"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "vatOn": {
+            "type": "boolean"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
           }
         },
         "required": [
@@ -59325,7 +59340,12 @@
           "providerFeeKobo",
           "wawuFeeKobo",
           "feeKobo",
-          "chargeKobo"
+          "chargeKobo",
+          "feeMinor",
+          "vatMinor",
+          "vatOn",
+          "totalMinor",
+          "receiveMinor"
         ]
       },
       "AddMoneyView": {
@@ -60035,6 +60055,24 @@
           },
           "validForSeconds": {
             "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "vatOn": {
+            "type": "boolean"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
           }
         },
         "required": [
@@ -60053,7 +60091,13 @@
           "wawuFeeMinor",
           "speed",
           "expiresAt",
-          "validForSeconds"
+          "validForSeconds",
+          "currency",
+          "feeMinor",
+          "vatMinor",
+          "vatOn",
+          "totalMinor",
+          "receiveMinor"
         ]
       },
       "AbroadSendView": {
@@ -60262,16 +60306,12 @@
           },
           "cryptoSend": {
             "type": "boolean"
-          },
-          "localUsdIn": {
-            "type": "boolean"
           }
         },
         "required": [
           "openAccount",
           "swap",
-          "cryptoSend",
-          "localUsdIn"
+          "cryptoSend"
         ]
       },
       "AdminFxCurrenciesView": {
@@ -60796,6 +60836,9 @@
           "products": {
             "$ref": "#/components/schemas/FxProductsView"
           },
+          "localUsdIn": {
+            "type": "boolean"
+          },
           "naira": {
             "type": "object",
             "properties": {
@@ -60821,6 +60864,7 @@
         "required": [
           "currencies",
           "products",
+          "localUsdIn",
           "naira"
         ]
       },
@@ -61163,6 +61207,24 @@
           },
           "validForSeconds": {
             "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "vatOn": {
+            "type": "boolean"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
           }
         },
         "required": [
@@ -61180,7 +61242,13 @@
           "wawuFeeMinor",
           "totalFromMinor",
           "expiresAt",
-          "validForSeconds"
+          "validForSeconds",
+          "currency",
+          "feeMinor",
+          "vatMinor",
+          "vatOn",
+          "totalMinor",
+          "receiveMinor"
         ]
       },
       "FxSwapView": {

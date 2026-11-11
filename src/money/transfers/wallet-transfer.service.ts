@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { FeeRecordService } from '../fees/engine/fee-record.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
@@ -327,6 +334,8 @@ export class WalletTransferService implements OnModuleInit {
     private readonly saved: SavedAccountTargetService,
     /** EMAIL-02: the final state of a bank send is emailed once. */
     private readonly mail: NoticeMailer,
+    /** FEE-01: the fee record of each Nuvion move. Absent in a spec that does not care. */
+    @Optional() private readonly feeRecords?: FeeRecordService,
   ) {}
 
   onModuleInit(): void {
@@ -425,6 +434,7 @@ export class WalletTransferService implements OnModuleInit {
     // send still leaves a send the sweep settles, and a repeat of the key is
     // answered from this send).
     const transfer = await this.claim(scope, data, inClaim);
+    await this.recordFee(transfer, 'wallet_to_wallet');
 
     // WAWU's fee moves FIRST (FIX-52): a balance spent while the send is on
     // its way can never evade it. Nothing else moves unless it did.
@@ -533,6 +543,7 @@ export class WalletTransferService implements OnModuleInit {
     // row and the key's link to it, in one transaction, before the provider
     // is called.
     const transfer = await this.claim(scope, data);
+    await this.recordFee(transfer, 'ngn_bank_withdrawal');
 
     // WAWU's fee moves first, as for a send to a WAWU user (FIX-52).
     const feeStep = await this.takeFee(transfer);
@@ -960,6 +971,13 @@ export class WalletTransferService implements OnModuleInit {
       if (inn.discrepancy) notes.push(inn.discrepancy);
     }
 
+    if (rec.feeKobo !== null) {
+      await this.settleFee(
+        t,
+        t.kind === 'bank_account' ? 'ngn_bank_withdrawal' : 'wallet_to_wallet',
+        real.providerFeeKobo,
+      );
+    }
     const above = figures.verdict === 'above';
     if (above) {
       this.logger.error(`send ${t.id}: ${figures.note}; flagged for review`);
@@ -1005,6 +1023,38 @@ export class WalletTransferService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   /** Whether this send's WAWU fee is a transfer of its own on this provider. */
+  /**
+   * FEE-01: the fee record of a claimed Nuvion send (the amount, WAWU's fee,
+   * VAT, the provider's expected charge). Never fails the send.
+   */
+  private async recordFee(
+    t: TransferRow,
+    kind: 'wallet_to_wallet' | 'ngn_bank_withdrawal',
+  ): Promise<void> {
+    if (this.provider.name !== 'nuvion' || !this.feeRecords) return;
+    await this.feeRecords.record({
+      provider: 'nuvion',
+      reference: t.customerReference,
+      kind,
+      amountMinor: t.amountKobo,
+    });
+  }
+
+  /** FEE-01: the provider's own charge, once the completed send's record gives it. */
+  private async settleFee(
+    t: TransferRow,
+    kind: 'wallet_to_wallet' | 'ngn_bank_withdrawal',
+    actualKobo: number,
+  ): Promise<void> {
+    if (this.provider.name !== 'nuvion' || !this.feeRecords) return;
+    await this.feeRecords.settle(
+      'nuvion',
+      t.customerReference,
+      kind,
+      BigInt(actualKobo),
+    );
+  }
+
   private feeLegDue(t: TransferRow): boolean {
     return (
       this.provider.wawuFeeLeg === true &&

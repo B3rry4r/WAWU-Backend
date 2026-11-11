@@ -725,6 +725,16 @@ export class AbroadService {
       speed: speedOf(recipient),
       expiresAt: row.expiresAt.toISOString(),
       validForSeconds: validFor,
+      // FEE-01, additive: the same figures in the words every fee quote uses.
+      currency: row.fromCurrency,
+      feeMinor: row.fromCurrency === 'NGN' ? feeKobo : feeMinor,
+      vatMinor: 0,
+      vatOn: false,
+      totalMinor:
+        quote.amountFromMinor +
+        (partnerFee ?? 0) +
+        (row.fromCurrency === 'NGN' ? feeKobo : feeMinor),
+      receiveMinor: quote.amountToMinor,
     };
   }
 

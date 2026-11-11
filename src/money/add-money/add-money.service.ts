@@ -344,6 +344,11 @@ export class AddMoneyService implements OnModuleInit {
       wawuFeeKobo: q.wawuFeeKobo,
       feeKobo: q.providerFeeKobo + q.wawuFeeKobo,
       chargeKobo: amountKobo + q.providerFeeKobo + q.wawuFeeKobo,
+      feeMinor: q.providerFeeKobo + q.wawuFeeKobo,
+      vatMinor: 0,
+      vatOn: false,
+      totalMinor: amountKobo + q.providerFeeKobo + q.wawuFeeKobo,
+      receiveMinor: amountKobo,
     };
   }
 

@@ -155,6 +155,17 @@ export interface AbroadQuoteView {
   speed: string;
   expiresAt: string;
   validForSeconds: number;
+  /** FEE-01 (R-139), additive: the quote in the same words every fee quote uses. */
+  currency: string;
+  /** WAWU's fee, in `currency`'s smallest unit (kobo for a naira send). */
+  feeMinor: number;
+  /** VAT on it; 0 until VAT is applied to this move. */
+  vatMinor: number;
+  vatOn: boolean;
+  /** What the person pays. */
+  totalMinor: number;
+  /** What the receiver gets. */
+  receiveMinor: number;
 }
 
 export type AbroadSendStatus =

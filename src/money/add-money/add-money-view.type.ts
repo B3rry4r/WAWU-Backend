@@ -55,6 +55,14 @@ export interface AddMoneyQuoteView {
   wawuFeeKobo: number;
   feeKobo: number;
   chargeKobo: number;
+  /** FEE-01 (R-139), additive: the same quote in the words every fee quote uses. */
+  feeMinor: number;
+  vatMinor: number;
+  vatOn: boolean;
+  /** What the person pays: `chargeKobo`. */
+  totalMinor: number;
+  /** What the wallet gets: `amountKobo`. */
+  receiveMinor: number;
 }
 
 /** One attempt (`POST /money/add-money`, `GET /money/add-money/{id}`). */

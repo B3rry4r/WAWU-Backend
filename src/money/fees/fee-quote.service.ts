@@ -140,7 +140,9 @@ export class FeeQuoteService {
   ) {
     const get = (key: string) => config?.get<string>(key);
     this.engine =
-      provider?.name === 'nuvion' && schedule !== undefined && rates !== undefined;
+      provider?.name === 'nuvion' &&
+      schedule !== undefined &&
+      rates !== undefined;
     this.providerFees =
       this.engine && rates && schedule
         ? engineFeeSchedule(rates, schedule)
@@ -222,21 +224,24 @@ export class FeeQuoteService {
       // mobile repo): nothing is known to stop this, and nothing is shown.
       withinDailyLimit: true,
       remainingTodayKobo: null,
-      // FEE-01, additive: the same figures in the move's own words.
-      currency: 'NGN',
-      feeMinor: this.engine
-        ? fee.totalFeeKobo - vatKobo
-        : fee.wawuFeeKobo,
-      vatMinor: vatKobo,
-      vatOn: this.engine ? this.schedule!.vat().on : false,
-      totalMinor: totalKobo,
-      receiveMinor: input.amountKobo,
       quoteToken,
       expiresAt: new Date(expires).toISOString(),
       // FIX-109 (W17's Arrives row): only a send to a bank has an arrival
       // time, and only when it is set. Absent otherwise, so nothing is drawn.
       ...(input.kind === 'bank_transfer' && this.timing.bankOutMinutes !== null
         ? { arrivalMinutes: this.timing.bankOutMinutes }
+        : {}),
+      // FEE-01, additive and only under the fee engine (Nuvion): under
+      // Fintava the answer stays byte-identical to main (NUV-07's golden).
+      ...(this.engine
+        ? {
+            currency: 'NGN',
+            feeMinor: fee.totalFeeKobo - vatKobo,
+            vatMinor: vatKobo,
+            vatOn: this.schedule!.vat().on,
+            totalMinor: totalKobo,
+            receiveMinor: input.amountKobo,
+          }
         : {}),
     };
   }
@@ -347,7 +352,9 @@ export class FeeQuoteService {
   private computeEngine(input: FeeQuoteInput): FeeLines {
     const sched = this.schedule!;
     const kind: FeeKind =
-      input.kind === 'bank_transfer' ? 'ngn_bank_withdrawal' : 'wallet_to_wallet';
+      input.kind === 'bank_transfer'
+        ? 'ngn_bank_withdrawal'
+        : 'wallet_to_wallet';
     const amount = input.amountKobo;
     const fee = sched.feeFor(kind, BigInt(amount));
     const feeKobo = Number(fee.feeMinor);
@@ -359,13 +366,15 @@ export class FeeQuoteService {
     const wawuPart = feeKobo - providerPart;
     const parts: FeeQuotePartView[] = [
       {
-        code: input.kind === 'bank_transfer' ? 'bank_transfer' : 'balance_transfer',
+        code:
+          input.kind === 'bank_transfer' ? 'bank_transfer' : 'balance_transfer',
         source: 'provider',
         amountKobo: providerPart,
       },
       { code: 'wawu_fee', source: 'wawu', amountKobo: wawuPart },
     ];
-    if (vatKobo > 0) parts.push({ code: 'vat', source: 'wawu', amountKobo: vatKobo });
+    if (vatKobo > 0)
+      parts.push({ code: 'vat', source: 'wawu', amountKobo: vatKobo });
     const wawuFeeKobo = wawuPart + vatKobo;
     return {
       fee: {
