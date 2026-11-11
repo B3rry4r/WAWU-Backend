@@ -35,6 +35,11 @@ import { FILE_KINDS } from '../../account-purge/purge-files';
 import { GENERATED_KEY_FOLDERS } from '../../storage/storage.service';
 import { AI_AUDIO_FOLDERS } from '../audio/ai-audio-store';
 import { toolForAction } from '../tools';
+import {
+  PODCAST_REFUSAL_MS,
+  PodcastStudioProof,
+  podcastStudioProof,
+} from '../tools/podcast.tool';
 
 jest.setTimeout(180_000);
 
@@ -79,7 +84,7 @@ describe('AITOOLS-13: the Audiobook and the Podcast maker (contract)', () => {
   const switchOn = async () => {
     await set('ai.listed.audiobook', 1);
     await set('ai.listed.podcast', 1);
-    await set('ai.podcast_studio_api_ok', 1);
+    // STUDIO-ON: no person sets the Studio API switch; the Hub's own proof lists the Podcast maker.
     // The day's cap is the owner's to size for long-form; a spec of a 40,000 character book lifts it.
     await set('points.daily_cap', 100_000);
   };
@@ -190,6 +195,7 @@ describe('AITOOLS-13: the Audiobook and the Podcast maker (contract)', () => {
     h.inputs.removed.length = 0;
     for (const key of [...touched]) await set(key, null);
     touched.clear();
+    podcastStudioProof.reset();
     await switchOn();
     await h.grant(PLAIN, 60_000);
   });
@@ -265,7 +271,59 @@ describe('AITOOLS-13: the Audiobook and the Podcast maker (contract)', () => {
       }
     });
 
-    it('keeps the Podcast maker unlisted until the Studio switch is on, even with its own switch on', async () => {
+    it('lists every Studio tool with no stored setting, and lists the Podcast maker with nobody setting the Studio switch', async () => {
+      for (const key of [...touched]) await set(key, null);
+      touched.clear();
+      const res = data<AiToolsView>(
+        await h.http().get('/ai-tools').set(auth(PLAIN)),
+      );
+      const ids = res.tools.map((t) => t.id);
+      expect(ids).toContain('audiobook');
+      expect(ids).toContain('podcast');
+    });
+
+    it('lists the Podcast maker while the stand-in proof passes, drops it when the provider refuses, and tries again after the hour', async () => {
+      const ids = async () =>
+        data<AiToolsView>(
+          await h.http().get('/ai-tools').set(auth(PLAIN)),
+        ).tools.map((t) => t.id);
+      expect(await ids()).toContain('podcast');
+      jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      const started = data<AiJobView>(
+        await makeCast(PLAIN, {
+          source: { text: 'Hello there [[allowlist]]' },
+        }),
+      );
+      await finish(PLAIN, started.id);
+      jest.restoreAllMocks();
+      expect(await ids()).not.toContain('podcast');
+      expect(await ids()).toContain('audiobook');
+      // The Dashboard can force it either way: 1 forces it on while refused.
+      await set('ai.podcast_studio_api_ok', 1);
+      expect(await ids()).toContain('podcast');
+      await set('ai.podcast_studio_api_ok', null);
+      expect(await ids()).not.toContain('podcast');
+      // A run the provider takes clears the refusal.
+      podcastStudioProof.passed();
+      expect(await ids()).toContain('podcast');
+    });
+
+    it('keeps a refusal for an hour on the proof itself, with a stand-in clock', () => {
+      let now = 1_000;
+      const proof = new PodcastStudioProof(() => now);
+      expect(proof.holds()).toBe(true);
+      proof.refused();
+      expect(proof.holds()).toBe(false);
+      now += PODCAST_REFUSAL_MS - 1;
+      expect(proof.holds()).toBe(false);
+      now += 1;
+      expect(proof.holds()).toBe(true);
+      proof.refused();
+      proof.passed();
+      expect(proof.holds()).toBe(true);
+    });
+
+    it('keeps the Podcast maker unlisted when the Dashboard forces the Studio switch to 0, even with its own switch on', async () => {
       await set('ai.podcast_studio_api_ok', 0);
       const res = data<AiToolsView>(
         await h.http().get('/ai-tools').set(auth(PLAIN)),

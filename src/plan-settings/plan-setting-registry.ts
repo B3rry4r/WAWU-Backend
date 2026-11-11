@@ -1232,8 +1232,8 @@ export function buildRegistry(
     parse: whole(5, LIMIT.maxMinutes),
   });
   // R-109 (AITOOLS-08 to -10): Studio's picture and video tools. Each new
-  // tool is listed only while its own switch is on (default off, so a tool
-  // never reaches an app before its screen exists); the lead turns it on.
+  // tool is listed unless its own switch is turned off (default on, R-135; an
+  // app that cannot draw a tool ignores it, R-109 isDrawnTool).
   for (const [id, label] of [
     ['image', 'Make an image'],
     ['photo-edit', 'Edit a photo'],
@@ -1243,11 +1243,11 @@ export function buildRegistry(
     add({
       key: `ai.listed.${id}`,
       group: 'Studio',
-      label: `${label} is listed in Studio (1 is on, 0 is off)`,
+      label: `${label} is listed in Studio (on unless set to 0; 0 turns it off)`,
       unit: 'count',
       usedBy: ['GET /ai-tools', `POST /ai-tools/${id}/jobs`],
       provisional: 'STUDIO2-LISTED',
-      default: extra(`ai.listed.${id}`, 0),
+      default: extra(`ai.listed.${id}`, 1),
       parse: whole(0, 1),
     });
   }
@@ -1369,7 +1369,7 @@ export function buildRegistry(
     });
   }
   // R-109 (AITOOLS-11, AITOOLS-12): Voice changer, Dialogue, a saved clone of your own voice, Music for a video and
-  // Split a song. Each is listed only while its own switch is on (default off, like the four before them).
+  // Split a song. Each is listed unless its own switch is turned off (default on, R-135).
   for (const [id, label] of [
     ['voice-changer', 'Voice changer'],
     ['dialogue', 'Dialogue'],
@@ -1380,7 +1380,7 @@ export function buildRegistry(
     add({
       key: `ai.listed.${id}`,
       group: 'Studio',
-      label: `${label} is listed in Studio (1 is on, 0 is off)`,
+      label: `${label} is listed in Studio (on unless set to 0; 0 turns it off)`,
       unit: 'count',
       usedBy: [
         'GET /ai-tools',
@@ -1389,7 +1389,7 @@ export function buildRegistry(
           : `POST /ai-tools/${id}/jobs`,
       ],
       provisional: 'STUDIO2-LISTED',
-      default: extra(`ai.listed.${id}`, 0),
+      default: extra(`ai.listed.${id}`, 1),
       parse: whole(0, 1),
     });
   }
@@ -1504,8 +1504,8 @@ export function buildRegistry(
     });
   }
 
-  // R-109 (AITOOLS-13, AITOOLS-06): Audiobook, Podcast maker and the Receptionist. Each is listed only while its own
-  // switch is on (default off); the Podcast maker also needs the provider's Studio API switch.
+  // R-109 (AITOOLS-13, AITOOLS-06): Audiobook, Podcast maker and the Receptionist. Each is listed unless its own
+  // switch is turned off (default on, R-135); the Podcast maker also needs the Hub's own Studio API proof.
   for (const [id, label, usedBy] of [
     ['audiobook', 'Audiobook', 'POST /ai-tools/audiobook/jobs'],
     ['podcast', 'Podcast maker', 'POST /ai-tools/podcast/jobs'],
@@ -1514,11 +1514,11 @@ export function buildRegistry(
     add({
       key: `ai.listed.${id}`,
       group: 'Studio',
-      label: `${label} is listed in Studio (1 is on, 0 is off)`,
+      label: `${label} is listed in Studio (on unless set to 0; 0 turns it off)`,
       unit: 'count',
       usedBy: ['GET /ai-tools', usedBy],
       provisional: 'STUDIO2-LISTED',
-      default: extra(`ai.listed.${id}`, 0),
+      default: extra(`ai.listed.${id}`, 1),
       parse: whole(0, 1),
     });
   }
@@ -1526,12 +1526,12 @@ export function buildRegistry(
     key: 'ai.podcast_studio_api_ok',
     group: 'Studio',
     label:
-      "Podcast maker may run (1 only after the provider's Studio API proof call has passed for our account, 0 until then)",
+      "Podcast maker override of the Hub's own Studio API proof (-1 uses the proof, 1 forces it on, 0 forces it off)",
     unit: 'count',
     usedBy: ['GET /ai-tools', 'POST /ai-tools/podcast/jobs'],
     provisional: 'STUDIO2-PODCAST',
-    default: extra('ai.podcast_studio_api_ok', 0),
-    parse: whole(0, 1),
+    default: extra('ai.podcast_studio_api_ok', -1),
+    parse: whole(-1, 1),
   });
   for (const [key, label, usedBy, fallback, parse, provisional] of [
     [

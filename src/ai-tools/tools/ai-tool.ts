@@ -455,14 +455,17 @@ export function isMediaSpec(spec: AiToolInputSpec): spec is MediaInputSpec {
   return spec.kind === 'image' || spec.kind === 'video';
 }
 
-/** Whether the tool's listing switch and every setting it requires are on (AITOOLS-08, AITOOLS-13). A tool with none is always listed. */
+/**
+ * Whether the tool's listing switch is on (a tool is on unless the Dashboard turned it off, R-135) and its own proof, if
+ * it has one, holds (STUDIO-ON). A tool with neither is always listed.
+ */
 export function isListed(
-  tool: Pick<AiTool, 'listingSetting' | 'requiredSettings'>,
+  tool: Pick<AiTool, 'listingSetting' | 'proof'>,
   settings: Pick<AiToolSettings, 'number'>,
 ): boolean {
   if (tool.listingSetting && settings.number(tool.listingSetting) !== 1)
     return false;
-  return (tool.requiredSettings ?? []).every((k) => settings.number(k) === 1);
+  return tool.proof ? tool.proof(settings) : true;
 }
 
 /** A tool's settings keys, read on each call (R-65). */
@@ -500,13 +503,16 @@ export interface AiTool {
   /** Where the job's picture or video is stored (AITOOLS-09, AITOOLS-10); absent for every tool that makes audio or words. */
   readonly mediaFolder?: AiMediaFolder;
   /**
-   * The setting that lists the tool (`ai.listed.<id>`, AITOOLS-08, default off): the catalogue lists the tool only while
-   * its code is built, the provider is set up for it AND this setting is 1. Absent for the seven older tools, which
-   * list as soon as they can run.
+   * The setting that lists the tool (`ai.listed.<id>`, AITOOLS-08; default 1 since R-135, so it only turns a tool off):
+   * the catalogue lists the tool only while its code is built, the provider is set up for it AND this setting is 1.
+   * Absent for the seven older tools, which list as soon as they can run.
    */
   readonly listingSetting?: string;
-  /** AITOOLS-13: further settings that must be 1 for the tool to be listed and run (the Podcast maker's Studio API switch). */
-  readonly requiredSettings?: readonly string[];
+  /**
+   * STUDIO-ON: a check the Hub makes itself that must hold for the tool to be listed and run (the Podcast maker's
+   * Studio API proof). Reads the settings so a Dashboard override can force it either way.
+   */
+  readonly proof?: (settings: Pick<AiToolSettings, 'number'>) => boolean;
   /**
    * Whether the catalogue lists the tool while the provider is not set up
    * (`enabled: false`). VoiceOver keeps AITOOLS-01's answer; a tool added

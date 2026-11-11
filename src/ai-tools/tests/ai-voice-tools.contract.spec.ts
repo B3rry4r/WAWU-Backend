@@ -216,8 +216,9 @@ describe('AITOOLS-11: Voice changer, Dialogue and a saved clone of your own voic
 
   describe('the listing switches and the catalogue', () => {
     it('lists none of the three while its switch is off, answers unavailable with nothing held, and lists each whole when on', async () => {
+      // R-135: the default is on, so the Dashboard turns each off with a 0.
       for (const id of ['voice-changer', 'dialogue', 'my-voice'])
-        await set(`ai.listed.${id}`, null);
+        await set(`ai.listed.${id}`, 0);
       await h.grant(PLAIN, 5000);
       const off = await catalogue(PLAIN);
       for (const id of ['voice-changer', 'dialogue', 'my-voice'])
@@ -435,7 +436,7 @@ describe('AITOOLS-11: Voice changer, Dialogue and a saved clone of your own voic
       expect(await notices()).toBe(1);
       const res = await change(PLAIN, voiceFile(PLAIN, 20, '[[slow:1300]]'));
       expect(res.status).toBe(202);
-      await set('ai.listed.voice-changer', null);
+      await set('ai.listed.voice-changer', 0);
       await h.jobs.drain();
       expect(await notices()).toBe(1);
     });

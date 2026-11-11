@@ -176,7 +176,7 @@ export class AiToolsService {
       if (!action) continue;
       const enabled = tool.enabled(this.voice);
       if (!enabled && !tool.listedWhenOff) continue;
-      // AITOOLS-08: a new tool is listed only while its own switch is on, so
+      // AITOOLS-08: a tool is listed unless its own switch is turned off (R-135), so
       // the live app never sees a tool before its screen ships.
       if (!isListed(tool, this.settings)) continue;
       const spec = tool.input;

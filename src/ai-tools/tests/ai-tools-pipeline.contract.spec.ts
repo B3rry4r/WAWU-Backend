@@ -163,6 +163,7 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
 
   it('check 2: GET /ai-tools lists Quick voice with 125 points a minute before anyone runs it, with its input kind, limits and the same voices; a tool whose code is not built is not listed', async () => {
     const view = await catalogue();
+    // STUDIO-ON (R-135): the 12 Studio tools follow the seven launch tools by default (this list pinned only the seven).
     expect(view.tools.map((t) => t.id)).toEqual([
       'voiceover',
       'quick-voice',
@@ -172,6 +173,18 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       'clean-audio',
       // AITOOLS-05: Dubbing is the seventh tool. This list pinned the registry's six.
       'dubbing',
+      'image',
+      'photo-edit',
+      'video',
+      'talking-photo',
+      'voice-changer',
+      'dialogue',
+      'my-voice',
+      'video-music',
+      'stems',
+      'audiobook',
+      'podcast',
+      'receptionist',
     ]);
     const tool = view.tools[1];
     expect(tool).toMatchObject({
@@ -196,7 +209,8 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       input: { kind: 'text', charactersPerUnit: 900 },
     });
     // Nothing a person could not act on: no unbuilt tool (the Receptionist; Captions and Clean audio are built by AITOOLS-04 and Dubbing by AITOOLS-05, so this no longer matches `dub`).
-    expect(view.tools.some((t) => /receptionist/i.test(t.id))).toBe(false);
+    // STUDIO-ON (R-135): the Receptionist is built and on by default, so it is listed now (this line pinned it unlisted).
+    expect(view.tools.some((t) => /receptionist/i.test(t.id))).toBe(true);
     // No provider name, no provider id, no model name and no em-dash (R-68, R-5).
     const text = JSON.stringify(view);
     expect(text).not.toMatch(/eleven|stand-in|xi-api|flash/i);

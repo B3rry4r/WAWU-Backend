@@ -1148,9 +1148,9 @@ the local stand-in (`scripts/dev/voice-standin.cjs`) with the provider's wire
 shape (`docs/elevenlabs/API-FACTS.md`).
 
 - **The listing switch.** Each new tool has a setting `ai.listed.<tool id>`
-  (`image`, `photo-edit`, `video`, `talking-photo`; group "Studio", default 0,
+  (`image`, `photo-edit`, `video`, `talking-photo`; group "Studio", default 1 since R-135,
   PROVISIONAL `STUDIO2-LISTED`). `GET /ai-tools` lists a new tool only while its
-  code is built, the provider is set up AND its switch is 1; with it 0 the job
+  code is built, the provider is set up AND its switch is not 0 (the Dashboard only turns a tool off); with it 0 the job
   routes answer `503 ai_tool_unavailable` and nothing is held. The seven older
   tools are unchanged. Every entry the Hub writes is whole (`id`, `name`,
   `costPointsPerUnit`, `enabled`), because the app refuses the whole list for one
@@ -1254,8 +1254,8 @@ shape (`docs/elevenlabs/API-FACTS.md`).
 
 NOT RUN against the real provider (the owner's credits are not bought yet): every route is run against the local
 stand-in (`scripts/dev/voice-standin.cjs`) with the provider's wire shape (`docs/elevenlabs/API-FACTS.md`, "Studio 2").
-Each tool is listed only while its switch `ai.listed.<tool id>` is 1 (`voice-changer`, `dialogue`, `my-voice`,
-`video-music`, `stems`; group "Studio", default 0, PROVISIONAL `STUDIO2-LISTED`); with it 0 the job routes answer `503
+Each tool is listed unless its switch `ai.listed.<tool id>` is set to 0 (`voice-changer`, `dialogue`, `my-voice`,
+`video-music`, `stems`; group "Studio", default 1 since R-135, PROVISIONAL `STUDIO2-LISTED`); with it 0 the job routes answer `503
 ai_tool_unavailable`, nothing is held, and `GET /ai-tools/my-voice` answers `available: false`. Every result goes
 through the media pipeline of AITOOLS-08: each `outputs[]` file carries `contentType`, `bytes`, `name`, `downloadUrl`
 and `pieceFormat: audio`, and `POST /ai-tools/jobs/{id}/piece` takes the `outputIndex` of the one the person picks.
@@ -1320,10 +1320,10 @@ and `pieceFormat: audio`, and `POST /ai-tools/jobs/{id}/piece` takes the `output
 
 NOT RUN against the real provider (the owner's credits are not bought yet): every route is run against the local
 stand-in (`scripts/dev/voice-standin.cjs`, with the agent socket) with the provider's wire shape
-(`docs/elevenlabs/API-FACTS.md`, "Audiobook", "Podcast maker", "Receptionist: the talking agent"). Each tool is listed only
-while its switch `ai.listed.audiobook`, `ai.listed.podcast` or `ai.listed.receptionist` is 1 (group "Studio", default 0,
-PROVISIONAL `STUDIO2-LISTED`); the Podcast maker also needs `ai.podcast_studio_api_ok` (1 only after the provider's Studio
-API proof call passed for our account). With a switch 0 the job routes answer `503 ai_tool_unavailable` and nothing is
+(`docs/elevenlabs/API-FACTS.md`, "Audiobook", "Podcast maker", "Receptionist: the talking agent"). Each tool is listed unless
+its switch `ai.listed.audiobook`, `ai.listed.podcast` or `ai.listed.receptionist` is set to 0 (group "Studio", default 1 since R-135,
+PROVISIONAL `STUDIO2-LISTED`); the Podcast maker also needs the Hub's own Studio API proof (a 403 from the provider on a real run
+unlists it for an hour; `ai.podcast_studio_api_ok` is a Dashboard override: -1 default uses the proof, 1 forces on, 0 forces off). With a switch 0 the job routes answer `503 ai_tool_unavailable` and nothing is
 held. Results go through the media pipeline of AITOOLS-08: `outputs[]` carry `contentType`, `bytes`, `name`,
 `downloadUrl` and `pieceFormat: audio`, and `POST /ai-tools/jobs/{id}/piece` makes the piece.
 
