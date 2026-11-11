@@ -1,10 +1,3 @@
-// The image library is not used here (no picture is made); this machine's shared node_modules does not carry it.
-jest.mock(
-  'sharp',
-  () => Object.assign(() => ({}), { cache: () => undefined }),
-  { virtual: true },
-);
-
 import { randomUUID } from 'node:crypto';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
