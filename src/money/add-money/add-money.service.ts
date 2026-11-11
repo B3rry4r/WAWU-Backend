@@ -4,9 +4,11 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   type OnModuleInit,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { DollarFeeService } from '../fees/engine/dollar-fees';
 import { Prisma } from '../../../generated/prisma/client';
 import type { AdminRole } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -222,6 +224,8 @@ export class AddMoneyService implements OnModuleInit {
     private readonly ledger: LedgerService,
     private readonly keys: IdempotencyService,
     private readonly merchant: MerchantWallet,
+    /** FEE-01 fix round 1: under Nuvion, adding naira passes on the provider's receiving charge and nothing of WAWU's. */
+    @Optional() private readonly dollar?: DollarFeeService,
   ) {}
 
   onModuleInit(): void {
@@ -329,6 +333,25 @@ export class AddMoneyService implements OnModuleInit {
     const problem = this.railProblem(rail);
     if (problem !== null)
       throw new MoneyError('add_money_unavailable', problem);
+    if (this.dollar && this.provider.name === 'nuvion') {
+      // R-139 point 11: the one fee is the provider's receiving charge from the rate table; WAWU adds none and no VAT. Money coming
+      // in: the fee comes off what arrives, so the person pays the amount and the wallet gets the amount less the fee.
+      const fee = Number(this.dollar.addMoneyCharge(BigInt(amountKobo)));
+      return {
+        rail,
+        currency: 'NGN',
+        amountKobo,
+        providerFeeKobo: fee,
+        wawuFeeKobo: 0,
+        feeKobo: fee,
+        chargeKobo: amountKobo,
+        feeMinor: fee,
+        vatMinor: 0,
+        vatOn: false,
+        totalMinor: amountKobo,
+        receiveMinor: Math.max(0, amountKobo - fee),
+      };
+    }
     const q = this.settings.quote(rail, amountKobo);
     if (!q.ok) {
       throw new MoneyError(
@@ -766,6 +789,13 @@ export class AddMoneyService implements OnModuleInit {
       sourceEventId,
       occurredAt: t.createdAt,
     });
+    if (this.dollar && this.provider.name === 'nuvion') {
+      await this.dollar.recordAddMoney({
+        reference: s.reference,
+        amountMinor: BigInt(t.amountKobo),
+        actualMinor: BigInt(t.feeKobo),
+      });
+    }
     const differs = BigInt(t.feeKobo) !== s.providerFeeKobo;
     await this.prisma.addMoneySession.updateMany({
       // A payment that lands after we ended the attempt (failed or expired) is still money in the wallet.

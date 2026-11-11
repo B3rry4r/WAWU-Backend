@@ -1,3 +1,4 @@
+import { DollarFeeService } from '../../money/fees/engine/dollar-fees';
 import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -111,6 +112,8 @@ export class NuvionAccountsHandler implements NuvionEventHandler {
         // AddMoneyService (found like the ledger: it is in the app, or the
         // hook is left out and the recorder answers as it always did).
         const addMoney = this.find<AddMoneyService>(AddMoneyService);
+        // FEE-01: the provider's receiving charge on naira added by bank transfer is kept in the fee record.
+        const dollar = this.find<DollarFeeService>(DollarFeeService);
         return new NuvionInflowRecorder(
           this.prisma,
           area,
@@ -119,6 +122,15 @@ export class NuvionAccountsHandler implements NuvionEventHandler {
           addMoney
             ? (t, w, source, eventId) =>
                 addMoney.creditInflow(t, w, source, eventId)
+            : null,
+          dollar
+            ? (t) =>
+                dollar.recordAddMoney({
+                  reference: t.id,
+                  amountMinor: BigInt(t.amountKobo),
+                  actualMinor: BigInt(t.feeKobo),
+                  at: t.createdAt ?? undefined,
+                })
             : null,
         ).onInflow(d);
       }

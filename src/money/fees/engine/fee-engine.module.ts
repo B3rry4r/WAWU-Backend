@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PlanSettingsModule } from '../../../plan-settings/plan-settings.module';
 import { MoneyCheckMailer } from '../../check/money-check-mailer';
+import { DollarFeeService } from './dollar-fees';
 import { FeeRecordService } from './fee-record.service';
 import { FeeScheduleService } from './fee-schedule.service';
 import { ProviderRateService } from './provider-rate.service';
@@ -17,8 +18,14 @@ import { ProviderRateService } from './provider-rate.service';
     FeeScheduleService,
     ProviderRateService,
     FeeRecordService,
+    DollarFeeService,
     MoneyCheckMailer,
   ],
-  exports: [FeeScheduleService, ProviderRateService, FeeRecordService],
+  exports: [
+    FeeScheduleService,
+    ProviderRateService,
+    FeeRecordService,
+    DollarFeeService,
+  ],
 })
 export class FeeEngineModule {}

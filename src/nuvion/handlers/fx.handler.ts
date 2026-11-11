@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { FxAccount } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { DollarFeeService } from '../../money/fees/engine/dollar-fees';
 import { FxOperationsService } from '../../money/fx/fx-operations.service';
 import { NotificationService } from '../../notification/notification.service';
 import {
@@ -162,6 +163,7 @@ export class NuvionFxHandler implements NuvionEventHandler {
       t.type === 'inflow'
         ? 'in'
         : 'out';
+    const fee0 = fee;
     await this.prisma.fxMovement.upsert({
       where: {
         provider_providerTransferId: {
@@ -186,6 +188,38 @@ export class NuvionFxHandler implements NuvionEventHandler {
       },
       update: { status: ledgerStatus, feeMinor: fee, eventId: d.eventId },
     });
+    // R-139: WAWU's fee on dollars received is taken once (the record and the book transfer are keyed on this transfer's id).
+    let feeNote = '';
+    if (direction === 'in') {
+      const dollar = this.find<DollarFeeService>(DollarFeeService);
+      if (dollar) {
+        const wallet = await this.prisma.fintavaWallet.findUnique({
+          where: { wawuUserId: account.wawuUserId },
+        });
+        const fee = await dollar
+          .onForeignInflow({
+            account: {
+              wawuUserId: account.wawuUserId,
+              currency: account.currency,
+              providerAccountId: accountId,
+              providerCustomerId: account.providerCustomerId,
+            },
+            walletId: wallet?.walletId ?? '',
+            abroad: provider.abroad,
+            transferId: t.id,
+            paymentType: t.paymentType,
+            amountMinor: BigInt(t.amountKobo),
+            providerFeeMinor: fee0,
+            status: ledgerStatus,
+            occurredAt: t.createdAt ?? d.receivedAt,
+          })
+          .catch(() => null);
+        if (fee?.outcome === 'wait') return { outcome: 'wait', note: fee.note };
+        if (fee?.outcome === 'failed')
+          return { outcome: 'failed', note: fee.note };
+        if (fee && fee.outcome !== 'none') feeNote = `; ${fee.note}`;
+      }
+    }
     // A swap or send of ours: settle it from the provider's record.
     const ref = t.uniqueReference;
     if (ref) {
@@ -213,13 +247,13 @@ export class NuvionFxHandler implements NuvionEventHandler {
         }
         return {
           outcome: 'done',
-          note: `${account.currency} ${direction} recorded; our ${ref.endsWith('-fee') ? 'fee' : 'operation'} settled`,
+          note: `${account.currency} ${direction} recorded; our ${ref.endsWith('-fee') ? 'fee' : 'operation'} settled${feeNote}`,
         };
       }
     }
     return {
       outcome: 'done',
-      note: `${account.currency} ${direction} recorded`,
+      note: `${account.currency} ${direction} recorded${feeNote}`,
     };
   }
 
