@@ -61513,6 +61513,39 @@
           "nextCursor"
         ]
       },
+      "AccountDeletionResponse": {
+        "type": "object",
+        "properties": {
+          "deletionScheduledAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deletionScheduledAt"
+        ]
+      },
+      "PushTokenRegistered": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registered"
+        ]
+      },
+      "PushTokenRemoved": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ]
+      },
       "PointNextExpiryView": {
         "type": "object",
         "properties": {
@@ -72745,39 +72778,6 @@
           "subline",
           "ctaDestination",
           "artworkUrl"
-        ]
-      },
-      "AccountDeletionResponse": {
-        "type": "object",
-        "properties": {
-          "deletionScheduledAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "deletionScheduledAt"
-        ]
-      },
-      "PushTokenRegistered": {
-        "type": "object",
-        "properties": {
-          "registered": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "registered"
-        ]
-      },
-      "PushTokenRemoved": {
-        "type": "object",
-        "properties": {
-          "removed": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "removed"
         ]
       },
       "CommentAuthor": {

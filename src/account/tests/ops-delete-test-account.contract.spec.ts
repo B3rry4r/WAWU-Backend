@@ -782,6 +782,65 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
       });
     });
 
+    it('M1: 120 rows of the running provider cannot hide one row of another provider', async () => {
+      const id = await person('odt-m1@example.test', 'odt_m1', 100);
+      const row = (provider: string) => ({
+        walletKind: 'user' as const,
+        wawuUserId: id,
+        accountNumber: '0000000000',
+        direction: 'in' as const,
+        status: 'completed' as const,
+        category: 'top_up' as const,
+        amountKobo: 100n,
+        totalKobo: 100n,
+        source: 'odt',
+        occurredAt: new Date(),
+        provider,
+      });
+      await prisma.fintavaLedgerEntry.createMany({
+        data: [
+          ...Array.from({ length: 120 }, () => row('fintava')),
+          row('nuvion'),
+        ],
+      });
+      const before = await snapshot();
+      const r = await run('odt-m1@example.test', {
+        apply: true,
+        confirm: `DELETE ${id.slice(0, 8)}`,
+      });
+      expect(r.code).toBe(1);
+      expect(r.text).toContain('  FintavaLedgerEntry ');
+      expect(r.text).toContain('provider is not fintava');
+      expect(await snapshot()).toEqual(before);
+      await prisma.fintavaLedgerEntry.deleteMany({ where: { wawuUserId: id } });
+    });
+
+    it('M2: a CAC application awaiting payment (no amount yet) refuses', async () => {
+      const id = await person('odt-m2@example.test', 'odt_m2', 100);
+      await prisma.serviceApplication.create({
+        data: {
+          applicantWawuId: id,
+          kind: 'cac',
+          title: 'Fixture',
+          reference: `odt-${randomUUID()}`,
+          status: 'awaiting_payment',
+          statusLabel: 'Awaiting payment',
+          timeline: [],
+        } as never,
+      });
+      const before = await snapshot();
+      const r = await run('odt-m2@example.test', {
+        apply: true,
+        confirm: `DELETE ${id.slice(0, 8)}`,
+      });
+      expect(r.code).toBe(1);
+      expect(r.text).toContain('  ServiceApplication ');
+      expect(await snapshot()).toEqual(before);
+      await prisma.serviceApplication.deleteMany({
+        where: { applicantWawuId: id },
+      });
+    });
+
     it('a clean sandbox-only account still deletes, with a row of the running provider', async () => {
       const id = await person('odt-sb@example.test', 'odt_sb', 2_000);
       await prisma.walletCard.create({
@@ -794,6 +853,22 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
           state: 'active',
         },
       });
+      for (const provider of ['fintava', null])
+        await prisma.fintavaLedgerEntry.create({
+          data: {
+            walletKind: 'user',
+            wawuUserId: id,
+            accountNumber: '0000000000',
+            direction: 'in',
+            status: 'completed',
+            category: 'top_up',
+            amountKobo: 100n,
+            totalKobo: 100n,
+            source: 'odt',
+            occurredAt: new Date(),
+            provider,
+          },
+        });
       const r = await run('odt-sb@example.test', {
         apply: true,
         confirm: `DELETE ${id.slice(0, 8)}`,
