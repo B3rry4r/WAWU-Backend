@@ -60,6 +60,7 @@ import type {
   FeeQuoteView,
   HoldView,
   PaymentQuoteView,
+  PaymentSourceView,
   PaymentStatus,
   PaymentView,
 } from '../money-view.type';
@@ -1832,7 +1833,49 @@ export class WalletPaymentService implements OnModuleInit {
       remainingTodayKobo: standing.remainingTodayKobo,
       quoteToken: this.fx().tokenOf(sq.row),
       expiresAt: sq.row.expiresAt.toISOString(),
-      source: sq.view,
+      ...this.foreignFields(sq.view),
+    };
+  }
+
+  /**
+   * FEE-01 (R-139, lead ruling 1): under the fee engine the app sees one fee, so the provider's charge on
+   * a payment from another currency is folded into WAWU's line (the total is unchanged) and never shown
+   * apart. Outside the engine the view is returned as it is.
+   */
+  private foldCharge<
+    T extends { providerFeeMinor: number; wawuFeeMinor: number },
+  >(view: T): T {
+    if (!this.fees.engineOn) return view;
+    return {
+      ...view,
+      providerFeeMinor: 0,
+      wawuFeeMinor: view.wawuFeeMinor + view.providerFeeMinor,
+    };
+  }
+
+  /** The quote's `source` and, under the engine, the six added fields in the source currency. */
+  private foreignFields(
+    view: PaymentSourceView,
+  ): Pick<
+    PaymentQuoteView,
+    | 'source'
+    | 'currency'
+    | 'feeMinor'
+    | 'vatMinor'
+    | 'vatOn'
+    | 'totalMinor'
+    | 'receiveMinor'
+  > {
+    const source = this.foldCharge(view);
+    if (!this.fees.engineOn) return { source };
+    return {
+      source,
+      currency: source.currency,
+      feeMinor: source.wawuFeeMinor,
+      vatMinor: 0,
+      vatOn: false,
+      totalMinor: source.totalMinor,
+      receiveMinor: source.amountMinor,
     };
   }
 
@@ -2713,7 +2756,9 @@ export class WalletPaymentService implements OnModuleInit {
             : null,
       createdAt: p.createdAt.toISOString(),
       completedAt: p.completedAt ? p.completedAt.toISOString() : null,
-      ...(fx && this.foreign ? { source: this.foreign.paidFrom(fx) } : {}),
+      ...(fx && this.foreign
+        ? { source: this.foldCharge(this.foreign.paidFrom(fx)) }
+        : {}),
     };
   }
 }

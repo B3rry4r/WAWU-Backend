@@ -262,6 +262,22 @@ describe('Pay a naira price from another currency (PAY-FX, R-91)', () => {
     expect(p.usd.available).toBe(500n);
   });
 
+  it('FEE-01: the dollar-account quote carries the six fee fields, with the provider charge folded and never shown', async () => {
+    const p = await buyer(500n);
+    const q = await usdQuote(p);
+    expect(q).toMatchObject({
+      currency: 'USD',
+      vatMinor: 0,
+      vatOn: false,
+      totalMinor: q.source!.totalMinor,
+      receiveMinor: q.source!.amountMinor,
+    });
+    expect(q.source!.providerFeeMinor).toBe(0);
+    expect(q.feeMinor).toBe(q.source!.wawuFeeMinor);
+    // The screen adds up: what leaves the account is the amount and the one fee.
+    expect(q.totalMinor).toBe(q.receiveMinor! + q.feeMinor! + q.vatMinor!);
+  });
+
   it('a dollar buyer with no naira account pays: the naira lands in WAWU, the payee is credited as today, the card shows what it took', async () => {
     const p = await buyer(500n);
     const q = await usdQuote(p);

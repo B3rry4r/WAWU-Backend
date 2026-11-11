@@ -1074,7 +1074,21 @@ export class AbroadSendService {
     return rows.map((r) => {
       const v = this.view(r);
       const f = fees.get(r.reference);
-      if (!f) return v;
+      if (!f) {
+        if (!dollar) return v;
+        // One fee in the app: the partner's charge (what it did charge, else the estimate) is
+        // folded into WAWU's line and never shown apart.
+        const partner = Number(
+          r.providerFeeMinor ?? r.providerFeeEstimateMinor ?? 0n,
+        );
+        return {
+          ...v,
+          providerFeeMinor: 0,
+          wawuFeeKobo: v.wawuFeeKobo + (r.fromCurrency === 'NGN' ? partner : 0),
+          wawuFeeMinor:
+            v.wawuFeeMinor + (r.fromCurrency === 'NGN' ? 0 : partner),
+        };
+      }
       return {
         ...v,
         providerFeeMinor: 0,

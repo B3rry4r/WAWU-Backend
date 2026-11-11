@@ -1016,6 +1016,9 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
 }> = [
   { model: 'Product', column: 'wawuPick' },
   { model: 'Product', column: 'wawuVerified' },
+  // WAWU's fee in minor units on a fee record (FEE-01): keyed by the transaction's reference, no person column;
+  // kept as the finance record of a transaction (like the ledger rows it describes), not erased with a person.
+  { model: 'MoneyFeeRecord', column: 'wawuFeeMinor' },
   // WAWU's fee in kobo on a ledger row (MONEY-10), not a person.
   { model: 'FintavaLedgerEntry', column: 'wawuFeeKobo' },
   // WAWU's fee and WAWU's 15% share in kobo on a payment (MONEY-17), not a person.

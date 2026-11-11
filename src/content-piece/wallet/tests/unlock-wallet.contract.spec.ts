@@ -131,7 +131,7 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
         kind: 'content_unlock',
         priceKobo: PRICE,
         totalKobo: PRICE + FEE,
-        fee: { providerFeeKobo: FEE, wawuFeeKobo: 0 },
+        fee: { providerFeeKobo: 0, wawuFeeKobo: FEE },
         willBeHeld: false,
       },
     });

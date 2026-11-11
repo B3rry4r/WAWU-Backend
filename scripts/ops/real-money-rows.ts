@@ -353,6 +353,12 @@ export const WALLET_PROVIDER_TABLES: Record<string, string> = {
 
 /** Tables with a money-looking field that hold no money of an account, each with the reason. */
 export const NOT_MONEY_TABLES: Record<string, string> = {
+  MoneyFeeRecord:
+    "one row per provider transaction, keyed by that transaction's reference with no person column: what it cost and what WAWU kept. The transaction itself is in WalletTransfer, WalletPayment and FintavaLedgerEntry, which are listed; the fee record is finance's history and goes with the same reset (nuvion-live-reset deletes it)",
+  FeeSchedule:
+    "WAWU's own fee schedule, one row per change, append-only configuration: not a person's money",
+  ProviderRate:
+    "the wallet provider's rates (Nuvion's commercials), append-only configuration: not a person's money",
   UserProfile: 'unpaidWarnedAt is a warning timestamp',
   ProductDraft: 'a draft price, nothing sold',
   CreatorState: 'the price the creator asks for a DM, a setting',

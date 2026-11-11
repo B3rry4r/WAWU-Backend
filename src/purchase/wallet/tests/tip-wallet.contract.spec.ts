@@ -109,7 +109,7 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
       kind: 'tip',
       priceKobo: TIP,
       totalKobo: TIP + FEE,
-      fee: { providerFeeKobo: FEE, wawuFeeKobo: 0 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: FEE },
       willBeHeld: false,
     });
     expect(q.creator.wawuUserId).toBe(c.id);

@@ -741,6 +741,9 @@ export class AbroadService {
         Math.floor((quote.expiresAt.getTime() - Date.now()) / 1000),
       ),
     );
+    // Under the fee engine the app sees one fee: a partner fee still configured for this corridor
+    // is folded into WAWU's line (the total the person pays is unchanged) and never shown apart.
+    const foldedPartner = payout || !this.dollar ? 0 : (partnerFee ?? 0);
     return {
       id: row.id,
       recipientId: recipient.id,
@@ -753,9 +756,11 @@ export class AbroadService {
       converted: quote.quoteRef !== null,
       rate: quote.rate,
       // Under the schedule the app sees one fee: the provider's charge is inside it and never shown.
-      providerFeeMinor: payout ? 0 : partnerFee,
-      wawuFeeKobo: feeKobo,
-      wawuFeeMinor: payout ? Number(payout.feeMinor) : feeMinor,
+      providerFeeMinor: payout || this.dollar ? 0 : partnerFee,
+      wawuFeeKobo: feeKobo + (row.fromCurrency === 'NGN' ? foldedPartner : 0),
+      wawuFeeMinor: payout
+        ? Number(payout.feeMinor)
+        : feeMinor + (row.fromCurrency === 'NGN' ? 0 : foldedPartner),
       speed: speedOf(recipient),
       expiresAt: row.expiresAt.toISOString(),
       validForSeconds: validFor,
@@ -763,9 +768,7 @@ export class AbroadService {
       currency: row.fromCurrency,
       feeMinor: payout
         ? Number(payout.feeMinor)
-        : row.fromCurrency === 'NGN'
-          ? feeKobo
-          : feeMinor,
+        : (row.fromCurrency === 'NGN' ? feeKobo : feeMinor) + foldedPartner,
       vatMinor: payout ? Number(payout.vatMinor) : 0,
       vatOn: payout ? this.dollar!.vatOn() : false,
       totalMinor:
