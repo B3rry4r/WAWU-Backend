@@ -13,7 +13,7 @@ import {
   GEMINI_CLIENT,
   type GeminiClient,
 } from '../common/ai/gemini-client.interface';
-import { GEMINI_MODEL } from '../common/ai/real-gemini.adapter';
+import { modelLabelOf } from './ai/legal-ai.client';
 import {
   BRIEF_INSTRUCTION,
   renderFacts,
@@ -221,7 +221,7 @@ export class LegalIntakeService {
       facts,
       documentCount: intake.documents.length,
       analysis,
-      generatedBy: GEMINI_MODEL,
+      generatedBy: modelLabelOf(this.gemini),
       generatedAt: new Date().toISOString(),
     };
 

@@ -1,5 +1,12 @@
 import { Module } from '@nestjs/common';
-import { AiModule } from '../common/ai/ai.module';
+import { GEMINI_CLIENT } from '../common/ai/gemini-client.interface';
+import { RealGeminiAdapter } from '../common/ai/real-gemini.adapter';
+import { ConfigService } from '@nestjs/config';
+import { AI_VOICE_PROVIDER } from '../ai-tools/voice/ai-voice-provider';
+import { HttpVoiceProvider } from '../ai-tools/voice/http-voice-provider';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { ElevenLabsLegalAi } from './ai/elevenlabs-legal-ai';
+import { LegalAiClient } from './ai/legal-ai.client';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { LivePublisherModule } from '../live/live-publisher.module';
@@ -21,7 +28,7 @@ import {
 } from './assistant/legal-assistant-config';
 
 /**
- * Legal profiling. AiModule supplies the Gemini client that writes the brief;
+ * Legal profiling. The AI client that writes the brief is LegalAiClient (LEGAL-ELEVEN);
  * WawuAuthModule supplies the JWKS verification the guard needs. PrismaService
  * comes from the global PrismaModule.
  *
@@ -33,7 +40,8 @@ import {
  */
 @Module({
   imports: [
-    AiModule,
+    // LEGAL-ELEVEN: the settings that pick the provider and model (no controller: it moves no route).
+    PlanSettingsModule,
     WawuAuthModule,
     AdminAuthModule,
     LivePublisherModule,
@@ -48,6 +56,19 @@ import {
     LegalAssistantOpsController,
   ],
   providers: [
+    // LEGAL-ELEVEN (R-137): the legal services' GEMINI_CLIENT is this module's own, which answers through the agent
+    // platform (`legal.ai_provider=elevenlabs`, the default) or Gemini (`gemini`, the way back).
+    RealGeminiAdapter,
+    // The agent client, this module's own instance (the same class and settings as the AI tools'; importing AiToolsModule
+    // would load its controllers earlier and reorder the Hub's routes).
+    {
+      provide: AI_VOICE_PROVIDER,
+      useFactory: (config: ConfigService) => new HttpVoiceProvider(config),
+      inject: [ConfigService],
+    },
+    ElevenLabsLegalAi,
+    LegalAiClient,
+    { provide: GEMINI_CLIENT, useExisting: LegalAiClient },
     LegalIntakeService,
     LegalIntakeOpsService,
     LegalChatService,

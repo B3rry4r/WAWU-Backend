@@ -299,6 +299,10 @@ function startVoiceStandin({
     deletedKnowledge: [],
     signedUrls: 0,
     chats: [],
+    nextAgentReplies: [],
+    /** LEGAL-ELEVEN: reads of the agent list, and the most agents a page of it holds (0: the request's page_size). */
+    agentListReads: 0,
+    agentListPageSize: 0,
     deletedConversations: [],
     /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500 (a spec sets it). */
     conversationDeleteRefusals: 0,
@@ -1520,6 +1524,8 @@ function startVoiceStandin({
     textOnlyOverride: body.platform_settings?.overrides?.conversation_config_override?.conversation?.text_only === true,
     // REC-PRIVACY: the privacy settings as last sent (null when none were); `socketId` marks an agent whose link names no conversation.
     privacy: body.platform_settings?.privacy ?? null,
+    // LEGAL-ELEVEN: which parts of the agent a conversation may replace (`prompt`, `llm`), as last sent (null when none).
+    overrides: body.platform_settings?.overrides?.conversation_config_override?.agent?.prompt ?? null,
     socketId: /\[\[socket-id\]\]/.test(`${body.name ?? ''} ${body.conversation_config?.agent?.prompt?.prompt ?? ''}`),
   });
   function agentCreate(req, res, _m, raw) {
@@ -1534,9 +1540,32 @@ function startVoiceStandin({
     if (shape.voice !== null && !VOICES.has(shape.voice))
       return reply(res, 422, 'application/json', '{"detail":"no such voice"}');
     const id = `agent-${++agentSeq}`;
+    shape.createdSecs = 1_700_000_000 + agentSeq;
     agentsById.set(id, shape);
     state.agents.push({ id, ...shape, prompt: undefined, promptChars: shape.prompt.length, promptHasGuardrail: /never invent/i.test(shape.prompt) });
     return reply(res, 200, 'application/json', JSON.stringify({ agent_id: id }));
+  }
+  // LEGAL-ELEVEN: GET /v1/convai/agents?search=&page_size=&cursor= (search is a substring of the name, case-insensitive;
+  // the cursor is an offset). Each agent carries created_at_unix_secs from its creation order.
+  function agentList(req, res) {
+    if (!authed(req, res)) return;
+    state.agentListReads += 1;
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const search = (url.searchParams.get('search') ?? '').toLowerCase();
+    const size = Math.min(Number(url.searchParams.get('page_size') ?? 30) || 30, state.agentListPageSize || 100);
+    const from = Number(url.searchParams.get('cursor') ?? 0) || 0;
+    const all = [...agentsById.entries()].filter(([, a]) => a.name.toLowerCase().includes(search));
+    const page = all.slice(from, from + size);
+    return reply(
+      res,
+      200,
+      'application/json',
+      JSON.stringify({
+        agents: page.map(([id, a]) => ({ agent_id: id, name: a.name, created_at_unix_secs: a.createdSecs ?? 0 })),
+        has_more: from + size < all.length,
+        next_cursor: from + size < all.length ? String(from + size) : null,
+      }),
+    );
   }
   function agentPatch(req, res, m, raw) {
     if (!authed(req, res)) return;
@@ -1546,6 +1575,7 @@ function startVoiceStandin({
     if (!body) return reply(res, 400, 'application/json', '{"detail":"bad body"}');
     const shape = agentShape(body);
     if (`${shape.name} ${shape.prompt}`.includes('[[fail]]')) return reply(res, 500, 'application/json', '{"detail":"down"}');
+    shape.createdSecs = agentsById.get(id).createdSecs;
     agentsById.set(id, shape);
     state.agentPatches.push({ id, knowledge: shape.knowledge, language: shape.language, privacy: shape.privacy });
     return reply(res, 200, 'application/json', JSON.stringify({ agent_id: id }));
@@ -1706,7 +1736,7 @@ function startVoiceStandin({
     let textOnly = false;
     let needPong = false;
     let pending = null;
-    const record = { agent: agentId, textOnly: false, earlier: false, chars: 0, keyLeak: false, pongs: 0 };
+    const record = { agent: agentId, textOnly: false, earlier: false, chars: 0, keyLeak: false, pongs: 0, override: null, message: '' };
     // REC-DELETE: the conversation this socket carries; it finishes (as chatConversationStatus says) when the chat ends.
     let chatConvo = url.searchParams.get('conversation_id');
     const finishChat = () => {
@@ -1724,12 +1754,28 @@ function startVoiceStandin({
       const docs = (agent?.knowledge ?? []).map((id) => docsById.get(id)?.name).filter(Boolean);
       const slow = /\[\[slow:(\d{1,6})\]\]/.exec(text);
       setTimeout(() => {
+        // LEGAL-ELEVEN: [[parts]] in the message answers in two responses; every turn then says it is complete.
+        const sendComplete = () => ws.send(JSON.stringify({ type: 'agent_response_complete', agent_response_complete_event: { event_id: 1 } }));
+        if (/\[\[parts\]\]/.test(text) && state.nextAgentReplies.length >= 2) {
+          for (const part of [state.nextAgentReplies.shift(), state.nextAgentReplies.shift()])
+            ws.send(JSON.stringify({ type: 'agent_response', agent_response_event: { agent_response: part } }));
+          sendComplete();
+          finishChat();
+          return;
+        }
         ws.send(
           JSON.stringify({
             type: 'agent_response',
-            agent_response_event: { agent_response: `I know ${docs.length} things${docs.length ? `: ${docs.join(', ')}` : ''}.` },
+            // LEGAL-ELEVEN: a spec queues the words the agent answers with (state.nextAgentReplies, first in first out).
+            agent_response_event: {
+              agent_response:
+                state.nextAgentReplies.length > 0
+                  ? state.nextAgentReplies.shift()
+                  : `I know ${docs.length} things${docs.length ? `: ${docs.join(', ')}` : ''}.`,
+            },
           }),
         );
+        sendComplete();
         finishChat();
       }, slow ? Number(slow[1]) : 0);
     };
@@ -1739,6 +1785,14 @@ function startVoiceStandin({
       if (event.type === 'conversation_initiation_client_data') {
         textOnly = event.conversation_config_override?.conversation?.text_only === true;
         record.textOnly = textOnly && Boolean(agent?.textOnlyOverride);
+        // LEGAL-ELEVEN: the prompt and model this one conversation replaced (kept only when the agent allows it).
+        const asked = event.conversation_config_override?.agent?.prompt;
+        if (asked && typeof asked === 'object')
+          record.override = {
+            prompt: typeof asked.prompt === 'string' ? asked.prompt : null,
+            llm: typeof asked.llm === 'string' ? asked.llm : null,
+            allowed: Boolean(agent?.overrides?.prompt || agent?.overrides?.llm),
+          };
         let convo = url.searchParams.get('conversation_id');
         if (!convo && agent?.socketId) {
           convo = `convo-${++convoSeq}`;
@@ -1749,6 +1803,7 @@ function startVoiceStandin({
       } else if (event.type === 'user_message') {
         const text = String(event.text ?? '');
         record.chars = text.length;
+        record.message = text;
         record.earlier = /\nThe person now writes: /.test(text);
         if (text.includes('[[ping]]') && !needPong) {
           needPong = true;
@@ -1872,6 +1927,7 @@ function startVoiceStandin({
     { method: 'POST', path: /^\/v1\/studio\/projects\/([^/]+)\/snapshots\/([^/]+)\/stream$/, handle: podcastStream },
     { method: 'GET', path: /^\/v1\/studio\/projects\/([^/]+)$/, handle: podcastRead },
     { method: 'DELETE', path: /^\/v1\/studio\/projects\/([^/]+)$/, handle: podcastDelete },
+    { method: 'GET', path: /^\/v1\/convai\/agents$/, handle: agentList },
     { method: 'POST', path: /^\/v1\/convai\/agents\/create$/, handle: agentCreate },
     { method: 'PATCH', path: /^\/v1\/convai\/agents\/([^/]+)$/, handle: agentPatch },
     { method: 'DELETE', path: /^\/v1\/convai\/agents\/([^/]+)$/, handle: agentDelete },

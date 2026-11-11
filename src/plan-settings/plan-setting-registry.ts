@@ -289,6 +289,15 @@ function modelLine(raw: unknown): string[] {
   return one;
 }
 
+/** Zero lines, or one provider id (letters, digits, dash, underscore). */
+function agentIdLine(raw: unknown): string[] {
+  if (Array.isArray(raw) && raw.length === 0) return [];
+  const one = oneLine(raw);
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(one[0]))
+    throw new SettingInvalid('must be an agent id or empty');
+  return one;
+}
+
 /** One line that must be one of `allowed` (a resolution the provider takes). */
 function choiceLine(allowed: readonly string[]) {
   return (raw: unknown): string[] => {
@@ -1701,6 +1710,42 @@ export function buildRegistry(
       provisional,
       default: extra(key, [...fallback]),
       parse: dubbingLanguages,
+    });
+  }
+  // LEGAL-ELEVEN (R-137): the legal assistant's AI turns run on the agent platform. The model and the way back to
+  // Gemini are the owner's to move, and neither is ever shown to a person.
+  for (const [key, label, usedBy, fallback, parse] of [
+    [
+      'legal.ai_llm',
+      "The language model the legal assistant's agent runs on, from the agent platform's list (never shown to a person)",
+      'The legal assistant chat and the lawyer brief (LEGAL-ELEVEN)',
+      'gemini-3-flash-preview',
+      modelLine,
+    ],
+    [
+      'legal.ai_provider',
+      'Who answers the legal assistant: elevenlabs (the agent platform) or gemini (the way back)',
+      'The legal assistant chat and the lawyer brief (LEGAL-ELEVEN)',
+      'elevenlabs',
+      choiceLine(['elevenlabs', 'gemini']),
+    ],
+    [
+      'legal.ai_agent_id',
+      "The agent platform's id of the legal agent (blank: the Hub finds the agent named WAWU Legal assistant at the provider, or makes it)",
+      'The legal assistant chat and the lawyer brief (LEGAL-ELEVEN)',
+      '',
+      agentIdLine,
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Other rulings',
+      label,
+      unit: 'lines',
+      usedBy: [usedBy],
+      provisional: null,
+      default: extra(key, fallback === '' ? [] : [fallback]),
+      parse,
     });
   }
   add({

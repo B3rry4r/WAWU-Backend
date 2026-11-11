@@ -170,6 +170,8 @@ export interface StandinHandle {
       promptHasGuardrail: boolean;
       /** REC-PRIVACY: `platform_settings.privacy` as sent (null when none was). */
       privacy: Record<string, unknown> | null;
+      /** LEGAL-ELEVEN: which prompt and model overrides the agent allows (null when none). */
+      overrides: { prompt?: boolean; llm?: boolean } | null;
     }[];
     agentPatches: {
       id: string;
@@ -195,7 +197,20 @@ export interface StandinHandle {
       chars: number;
       keyLeak: boolean;
       pongs: number;
+      /** LEGAL-ELEVEN: the prompt and model this conversation replaced (null when none), and whether the agent allows it. */
+      override: {
+        prompt: string | null;
+        llm: string | null;
+        allowed: boolean;
+      } | null;
+      /** LEGAL-ELEVEN: the `user_message` text as it came. */
+      message: string;
     }[];
+    /** LEGAL-ELEVEN: the words the next agent answers use, first in first out (empty: the stand-in's own sentence). */
+    nextAgentReplies: string[];
+    /** LEGAL-ELEVEN: reads of the agent list, and the most agents one page holds (0: the request's page_size). */
+    agentListReads: number;
+    agentListPageSize: number;
     deletedConversations: string[];
     /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500. */
     conversationDeleteRefusals: number;
