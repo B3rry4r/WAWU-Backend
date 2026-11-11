@@ -9,6 +9,7 @@ import {
 import {
   deleteTestAccount,
   LEAVING_REASON,
+  parseArgs,
   proveTestProvider,
   type Deps,
   type Options,
@@ -159,7 +160,7 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
         getEnv: (k) => env[k],
         out: (l) => lines.push(l),
       },
-      { email, apply: false, allowTestHolds: false, ...over },
+      { email, apply: false, ...over },
     );
     return { code, text: lines.join('\n') };
   }
@@ -258,7 +259,33 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
       await prisma.walletHold.deleteMany({ where: { paymentId: { in: ids } } });
       await prisma.walletPayment.deleteMany({ where: { id: { in: ids } } });
       await prisma.purchase.deleteMany({
-        where: { creatorWawuId: { in: people } },
+        where: {
+          OR: [
+            { creatorWawuId: { in: people } },
+            { buyerWawuId: { in: people } },
+          ],
+        },
+      });
+      await prisma.creditLot.deleteMany({
+        where: { userWawuId: { in: people } },
+      });
+      await prisma.creditPurchase.deleteMany({
+        where: { userWawuId: { in: people } },
+      });
+      await prisma.billPayment.deleteMany({
+        where: { buyerWawuId: { in: people } },
+      });
+      await prisma.walletWithdrawal.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+      await prisma.walletLedgerEntry.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+      await prisma.creatorWallet.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+      await prisma.walletCard.deleteMany({
+        where: { wawuUserId: { in: people } },
       });
       await prisma.accountDeletionContent.deleteMany({
         where: { wawuUserId: { in: people } },
@@ -321,29 +348,15 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
       const a = await person('odt-a@example.test', 'odt_a', 5_000_000);
       const b = await person('odt-a2@example.test', 'odt_a2', 0);
       const buyer = await person('odt-buyer@example.test', 'odt_buyer');
-      const sold = await piece(a, 'ODT sold');
+      await piece(a, 'ODT sold');
       await piece(a, 'ODT unsold');
       const bPiece = await piece(b, 'ODT other');
-      await prisma.purchase.create({
-        data: {
-          contentId: sold.id,
-          type: 'content',
-          buyerWawuId: buyer,
-          creatorWawuId: a,
-          amount: 100,
-          commissionRate: 0.15,
-          flutterwaveTxRef: `odt-${randomUUID()}`,
-          status: 'completed',
-        },
-      });
-
       const before = await snapshot();
       const dry = await run('odt-a@example.test');
       expect(dry.code).toBe(0);
       expect(dry.text).toContain('DRY RUN');
       expect(dry.text).toContain('balance 5000000 kobo');
       expect(dry.text).toContain('wallet_balance: waived (test balance)');
-      expect(dry.text).toContain('1 pieces others bought');
       expect(dry.text).toContain('Proof: FINTAVA_BASE_URL');
       expect(dry.text).not.toContain('FAKEKEY');
       expect(await snapshot()).toEqual(before);
@@ -385,18 +398,9 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
       expect(
         await prisma.contentPiece.count({ where: { creatorWawuId: a } }),
       ).toBe(0);
-      // R-130: the piece a buyer paid for stays, with its purchase.
-      const kept = await prisma.contentPiece.findUnique({
-        where: { id: sold.id },
-      });
-      expect(kept).not.toBeNull();
-      expect(kept!.creatorWawuId).not.toBe(a);
-      expect(
-        await prisma.purchase.count({
-          where: { buyerWawuId: buyer, contentId: sold.id },
-        }),
-      ).toBe(1);
-      // Exactly the unsold piece went; nothing else lost a row beyond A's own.
+      // R-130 (a bought piece stays with its buyer) is held by sold-content-survives.contract.spec.ts; a sale writes a
+      // Flutterwave Purchase row, which this script now refuses (B1).
+      // Both of A's pieces went; nothing else lost a row beyond A's own.
       const after = await snapshot();
       const lost = Object.keys(before).filter((t) => after[t] < before[t]);
       expect(lost.sort()).toEqual(
@@ -406,7 +410,7 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
           'UserProfile',
         ]),
       );
-      expect(before.ContentPiece - after.ContentPiece).toBe(1);
+      expect(before.ContentPiece - after.ContentPiece).toBe(2);
       expect(before.UserProfile - after.UserProfile).toBe(1);
       // The audit record.
       const row = await prisma.accountDeletion.findUnique({
@@ -512,15 +516,26 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
         confirm: `DELETE ${c.slice(0, 8)}`,
       });
       expect(r.text).toContain('open_hold: REFUSES');
-      const ok = await run('odt-hold@example.test', {
+      // The payee's side refuses too: a payer's held money never sits against a deleted payee (M1).
+      const rp = await refused('odt-hold-other@example.test', {
         apply: true,
-        confirm: `DELETE ${c.slice(0, 8)}`,
-        allowTestHolds: true,
+        confirm: 'DELETE x',
       });
-      expect(ok.code).toBe(0);
+      expect(rp.text).toMatch(/open_hold: REFUSES\. Release or refund/);
+      expect(rp.text).toContain('no flag waives them');
       expect(
         await prisma.userProfile.findUnique({ where: { wawuUserId: c } }),
-      ).toBeNull();
+      ).not.toBeNull();
+    });
+
+    it('has no flag that waives a blocker', () => {
+      const parsed = parseArgs([
+        '--email',
+        'x@example.test',
+        '--allow-test-holds',
+      ]);
+      expect(typeof parsed).toBe('string');
+      expect(parsed).toContain('--allow-test-holds');
     });
 
     it('an admin login', async () => {
@@ -538,6 +553,161 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
         confirm: 'DELETE x',
       });
       expect(r.text).toContain('admin login');
+    });
+  });
+  describe('real-money rows (B1): listed in the dry run, apply refuses, nothing is written', () => {
+    /** The verifier's seed: every kind of row the website's Flutterwave rail writes, for one account. */
+    async function seedFlutterwave(id: string, other: string) {
+      const ref = () => `odt-${randomUUID()}`;
+      await prisma.creatorWallet.create({
+        data: { wawuUserId: id, accountReference: ref(), barterId: ref() },
+      });
+      const entry = await prisma.walletLedgerEntry.create({
+        data: {
+          wawuUserId: id,
+          kind: 'withdrawal',
+          amount: 500,
+          reference: ref(),
+          status: 'pending',
+        },
+      });
+      await prisma.walletWithdrawal.create({
+        data: {
+          wawuUserId: id,
+          entryId: entry.id,
+          amount: 500,
+          bankCode: '000',
+          accountNumber: '0000000000',
+          accountName: 'Fixture',
+        },
+      });
+      await prisma.purchase.create({
+        data: {
+          type: 'content',
+          buyerWawuId: id,
+          creatorWawuId: other,
+          amount: 100,
+          commissionRate: 0.15,
+          flutterwaveTxRef: ref(),
+          status: 'pending',
+        },
+      });
+      await prisma.billPayment.create({
+        data: {
+          buyerWawuId: id,
+          category: 'airtime',
+          billerCode: 'b',
+          itemCode: 'i',
+          billerName: 'Fixture',
+          customerRef: '0',
+          amount: 200,
+          flutterwaveTxRef: ref(),
+        },
+      });
+      await prisma.walletCard.create({
+        data: {
+          wawuUserId: id,
+          provider: 'someone-else',
+          reference: ref(),
+          type: 'virtual',
+          name: 'Fixture',
+          state: 'active',
+        },
+      });
+      const cp = await prisma.creditPurchase.create({
+        data: {
+          userWawuId: id,
+          pack: 'starter',
+          creditsGranted: 10,
+          flutterwaveTxRef: ref(),
+          amount: 300,
+        },
+      });
+      await prisma.creditLot.create({
+        data: {
+          creditPurchaseId: cp.id,
+          userWawuId: id,
+          creditsGranted: 10,
+          creditsRemaining: 10,
+          grossKobo: 30000,
+        },
+      });
+    }
+
+    it('lists each row, refuses apply, writes nothing', async () => {
+      const id = await person('odt-fw@example.test', 'odt_fw', 100);
+      const other = await person('odt-fw-seller@example.test', 'odt_fw_s');
+      await seedFlutterwave(id, other);
+      const before = await snapshot();
+      const dry = await run('odt-fw@example.test');
+      expect(dry.code).toBe(1);
+      for (const t of [
+        'CreatorWallet',
+        'WalletLedgerEntry',
+        'WalletWithdrawal',
+        'Purchase',
+        'BillPayment',
+        'WalletCard',
+        'CreditPurchase',
+        'CreditLot',
+      ]) {
+        expect(dry.text).toContain(`  ${t} `);
+      }
+      expect(dry.text).toContain('status pending amount 50000 kobo');
+      expect(dry.text).toContain('REFUSED');
+      const applied = await run('odt-fw@example.test', {
+        apply: true,
+        confirm: phraseOf(dry.text),
+      });
+      expect(applied.code).toBe(1);
+      expect(applied.text).toContain('touch a real-money provider');
+      expect(applied.text).not.toContain('Audit:');
+      expect(await snapshot()).toEqual(before);
+      expect(scheduleCalls()).toHaveLength(0);
+      expect(
+        await prisma.creatorWallet.findUnique({ where: { wawuUserId: id } }),
+      ).not.toBeNull();
+    });
+
+    it('a clean sandbox-only account still deletes, with a row of the running provider', async () => {
+      const id = await person('odt-sb@example.test', 'odt_sb', 2_000);
+      await prisma.walletCard.create({
+        data: {
+          wawuUserId: id,
+          provider: 'fintava',
+          reference: `odt-${randomUUID()}`,
+          type: 'virtual',
+          name: 'Fixture',
+          state: 'active',
+        },
+      });
+      const r = await run('odt-sb@example.test', {
+        apply: true,
+        confirm: `DELETE ${id.slice(0, 8)}`,
+      });
+      expect(r.code).toBe(0);
+      expect(r.text).toContain('Real-money rows: none');
+      expect(r.text).toContain('Audit:');
+      expect(
+        await prisma.userProfile.findUnique({ where: { wawuUserId: id } }),
+      ).toBeNull();
+    });
+
+    it('a refusal prints no Audit line', async () => {
+      const id = await person('odt-na@example.test', 'odt_na', 100);
+      await prisma.creatorWallet.create({
+        data: {
+          wawuUserId: id,
+          accountReference: `odt-${randomUUID()}`,
+          barterId: `odt-${randomUUID()}`,
+        },
+      });
+      const r = await run('odt-na@example.test', {
+        apply: true,
+        confirm: `DELETE ${id.slice(0, 8)}`,
+      });
+      expect(r.code).toBe(1);
+      expect(r.text).not.toContain('Audit:');
     });
   });
 });

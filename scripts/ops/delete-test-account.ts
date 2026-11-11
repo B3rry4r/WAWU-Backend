@@ -13,7 +13,9 @@
  * settings reader: WALLET_PROVIDER picks the adapter, then NUVION_BASE_URL must be Nuvion's sandbox host, or
  * FINTAVA_BASE_URL Fintava's sandbox host; the values are compared, never printed, and no key is read); the account is
  * not an admin login; and no blocker besides the wallet balance exists (an open hold, waiting earnings, a payment in
- * flight) unless --allow-test-holds is passed.
+ * flight) ever; and the account has no row that touches a real-money provider (Flutterwave, or a table whose provider is
+ * unclear), pending or final: scripts/ops/real-money-rows.ts lists the tables and the provider of each. There is no flag
+ * to waive a blocker or a real-money row.
  *
  * Apply uses the app's own services: the money check (AccountDeletionMoneyService), the deletion row (status `purging`,
  * no 30-day wait), WAWU ID told through the Hub's identity service and client, then the sweep's own purge steps for
@@ -47,8 +49,20 @@ import { rowsToDelete } from '../../src/account-purge/account-data-map';
 import { PrismaModule } from '../../src/common/prisma/prisma.module';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { readFintavaSettings } from '../../src/fintava/fintava-config';
+import { findRealMoneyRows } from './real-money-rows';
 import { readNuvionSettings } from '../../src/nuvion/nuvion-config';
+import type { WalletProviderName } from '../../src/wallet-provider/wallet-provider.interface';
 import { readWalletProviderName } from '../../src/wallet-provider/wallet-provider-config';
+
+const SETTLE_FIRST: Record<string, string> = {
+  open_hold:
+    'Release or refund the held paid DM, ticket or bill, for or against this account, first.',
+  waiting_earnings:
+    'Let the earning be paid out (or refunded) first; it must not be left pointing at a deleted account.',
+  payment_in_progress: 'Wait for the payment to reach a final answer first.',
+  cash_out_in_flight: 'Wait for the cash-out to finish first.',
+  wallet_opening: 'Wait for the wallet to finish opening first.',
+};
 
 export const LEAVING_REASON = 'ops_delete_test_account';
 
@@ -67,7 +81,6 @@ export interface Options {
   email: string;
   apply: boolean;
   confirm?: string;
-  allowTestHolds: boolean;
 }
 
 export type Proof =
@@ -238,7 +251,20 @@ export async function deleteTestAccount(
   );
   for (const b of check.blockers) {
     out(
-      `  ${b}: ${b === 'wallet_balance' ? 'waived (test balance)' : opts.allowTestHolds ? 'waived (--allow-test-holds)' : 'REFUSES'}`,
+      `  ${b}: ${b === 'wallet_balance' ? 'waived (test balance)' : `REFUSES. ${SETTLE_FIRST[b] ?? 'Settle it first.'}`}`,
+    );
+  }
+  const realMoney = await findRealMoneyRows(
+    prisma,
+    id,
+    proof.provider as WalletProviderName,
+  );
+  out(
+    `Real-money rows: ${realMoney.length === 0 ? 'none' : `${realMoney.length} (REFUSES, no flag waives them)`}`,
+  );
+  for (const r of realMoney) {
+    out(
+      `  ${r.table} ${r.id} status ${r.status} amount ${r.amountKobo} kobo [${r.klass}: ${r.why}]`,
     );
   }
   out(
@@ -250,9 +276,14 @@ export async function deleteTestAccount(
   for (const [k, n] of Object.entries(counts.perTable)) out(`  ${k}: ${n}`);
   out(`Confirmation phrase: ${phrase}`);
 
-  if (other.length > 0 && !opts.allowTestHolds) {
+  if (other.length > 0) {
     return refuse(
-      `blockers besides the test balance (${other.join(', ')}). Pass --allow-test-holds to waive them.`,
+      `blockers besides the test balance (${other.join(', ')}). Settle them first; no flag waives them.`,
+    );
+  }
+  if (realMoney.length > 0) {
+    return refuse(
+      `${realMoney.length} row(s) touch a real-money provider (listed above). This script deletes test accounts only.`,
     );
   }
   if (!opts.apply) {
@@ -311,13 +342,13 @@ export async function deleteTestAccount(
   });
   out(`Outcome: ${outcome}`);
   out(`Deletion row now: ${after?.status} ${after?.purgeNote ?? ''}`.trim());
-  out(
-    `Audit: AccountDeletion row ${id}, reason ${LEAVING_REASON}, at ${new Date().toISOString()}`,
-  );
   if (outcome !== 'purged') {
     out('Not finished. It is safe to run the same command again.');
     return 2;
   }
+  out(
+    `Audit: AccountDeletion row ${id}, reason ${LEAVING_REASON}, at ${new Date().toISOString()}`,
+  );
   out(
     'Done. The WAWU ID account is anonymised, so its email can be used to sign up again.',
   );
@@ -329,14 +360,24 @@ export function parseArgs(argv: string[]): Options | string {
     const i = argv.indexOf(`--${name}`);
     return i >= 0 ? argv[i + 1] : undefined;
   };
+  const known = ['--email', '--apply', '--confirm'];
+  const unknown = argv.filter(
+    (a, i) =>
+      a.startsWith('--') &&
+      !known.includes(a) &&
+      argv[i - 1] !== '--confirm' &&
+      argv[i - 1] !== '--email',
+  );
+  if (unknown.length > 0) {
+    return `unknown option ${unknown[0]}. There is no flag that waives a blocker or a real-money row.`;
+  }
   const email = val('email');
   if (!email || email.startsWith('--'))
-    return 'usage: --email <address> [--apply --confirm "<phrase>"] [--allow-test-holds]';
+    return 'usage: --email <address> [--apply --confirm "<phrase>"]';
   return {
     email,
     apply: argv.includes('--apply'),
     confirm: val('confirm'),
-    allowTestHolds: argv.includes('--allow-test-holds'),
   };
 }
 
