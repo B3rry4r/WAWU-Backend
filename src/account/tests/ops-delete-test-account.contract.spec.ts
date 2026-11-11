@@ -1,0 +1,543 @@
+import { randomUUID } from 'node:crypto';
+import { ConfigModule } from '@nestjs/config';
+import { Test } from '@nestjs/testing';
+import {
+  FintavaDouble,
+  FREEZE_200,
+  WALLET_BALANCE,
+} from '../../../test/fintava/fintava-double';
+import {
+  deleteTestAccount,
+  LEAVING_REASON,
+  proveTestProvider,
+  type Deps,
+  type Options,
+} from '../../../scripts/ops/delete-test-account';
+import { PrismaModule } from '../../common/prisma/prisma.module';
+import { PrismaService } from '../../common/prisma/prisma.service';
+import { AccountModule } from '../account.module';
+import { AccountDeletionIdentityService } from '../account-deletion-identity.service';
+import { AccountDeletionMoneyService } from '../account-deletion-money.service';
+import { AccountDeletionSweepService } from '../account-deletion-sweep.service';
+import {
+  WAWU_ID_ACCOUNT_GATEWAY,
+  type WawuIdAccountGateway,
+} from '../wawu-id-account.gateway';
+
+/**
+ * OPS-DEL-TEST: the one-off script that deletes one test account holding test wallet money.
+ * Made-up accounts only. The real services run over a real database and the Fintava double; the wallet
+ * provider's settings the script reads (`getEnv`) are given sandbox-looking or live-looking values.
+ */
+const SANDBOX_ENV: Record<string, string> = {
+  WALLET_PROVIDER: 'fintava',
+  FINTAVA_BASE_URL: 'https://dev.fintavapay.com',
+};
+const LIVE_ENV: Record<string, string> = {
+  WALLET_PROVIDER: 'fintava',
+  FINTAVA_BASE_URL: 'https://live.fintavapay.com',
+};
+
+describe('delete-test-account (OPS-DEL-TEST)', () => {
+  const double = new FintavaDouble();
+  const balances = new Map<string, number>();
+  const gateway: jest.Mocked<WawuIdAccountGateway> = {
+    scheduleAccountDeletion: jest.fn().mockResolvedValue({ scheduled: true }),
+    finalizeAccountDeletion: jest.fn().mockResolvedValue({ finalized: true }),
+  };
+  const previousEnv: Record<string, string | undefined> = {};
+  const emails = new Map<string, string[]>();
+  const people: string[] = [];
+  let prisma: PrismaService;
+  let closeApp: () => Promise<void>;
+  let deps: Omit<Deps, 'getEnv' | 'out'>;
+
+  async function person(email: string, handle: string, balanceKobo?: number) {
+    const id = randomUUID();
+    people.push(id);
+    emails.set(email.toLowerCase(), [
+      ...(emails.get(email.toLowerCase()) ?? []),
+      id,
+    ]);
+    await prisma.userProfile.create({
+      data: { wawuUserId: id, accountType: 'creator', handle },
+    });
+    if (balanceKobo !== undefined) {
+      const walletId = `w-${id}`;
+      balances.set(walletId, balanceKobo);
+      await prisma.fintavaWallet.create({
+        data: {
+          wawuUserId: id,
+          customerId: `c-${id}`,
+          walletId,
+          accountNumber: `8${Math.floor(Math.random() * 1e9)
+            .toString()
+            .padStart(9, '0')}`,
+        },
+      });
+    }
+    return id;
+  }
+
+  function piece(creator: string, title: string) {
+    const id = randomUUID();
+    return prisma.contentPiece.create({
+      data: {
+        id,
+        slug: `odt-${id.slice(0, 8)}`,
+        creatorWawuId: creator,
+        contentType: 'video',
+        title,
+        description: 'FIXTURE: ops-delete-test-account.contract.spec.ts',
+        category: 'beauty',
+        tags: [],
+        accessType: 'paid',
+        price: 100,
+        previewAssetUrl: 'https://storage.test/fixture-preview.mp4',
+        status: 'live',
+      },
+    });
+  }
+
+  async function hold(payer: string, payee: string) {
+    const id = randomUUID();
+    await prisma.walletPayment.create({
+      data: {
+        id,
+        payerWawuUserId: payer,
+        payeeWawuUserId: payee,
+        kind: 'tip',
+        targetId: id,
+        title: 'A tip',
+        priceKobo: 10000n,
+        providerFeeKobo: 0n,
+        wawuFeeKobo: 0n,
+        totalKobo: 10000n,
+        payeeShareKobo: 8500n,
+        wawuShareKobo: 1500n,
+        customerReference: `odt-${id}`,
+        merchantAccountNumber: '1102038668',
+        status: 'completed',
+      },
+    });
+    await prisma.walletHold.create({
+      data: {
+        paymentId: id,
+        payerWawuUserId: payer,
+        payeeWawuUserId: payee,
+        kind: 'paid_dm',
+        targetId: id,
+        title: 'A paid DM',
+        releaseCondition: 'dm_answered',
+        amountKobo: 10000n,
+        payeeShareKobo: 8500n,
+        wawuShareKobo: 1500n,
+        merchantAccountNumber: '1102038668',
+        heldAt: new Date(),
+      },
+    });
+  }
+
+  /** Row count of every table: the proof that a run wrote nothing. */
+  async function snapshot(): Promise<Record<string, number>> {
+    const rows = await prisma.$queryRawUnsafe<{ t: string; c: number }[]>(
+      `select table_name as t, (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')))[1]::text::int as c
+       from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'`,
+    );
+    return Object.fromEntries(rows.map((r) => [r.t, r.c]));
+  }
+
+  async function run(
+    email: string,
+    over: Partial<Options> = {},
+    env: Record<string, string> = SANDBOX_ENV,
+  ) {
+    const lines: string[] = [];
+    const code = await deleteTestAccount(
+      {
+        ...deps,
+        getEnv: (k) => env[k],
+        out: (l) => lines.push(l),
+      },
+      { email, apply: false, allowTestHolds: false, ...over },
+    );
+    return { code, text: lines.join('\n') };
+  }
+
+  const phraseOf = (text: string) => /Confirmation phrase: (.*)/.exec(text)![1];
+
+  beforeAll(async () => {
+    await double.start();
+    double.on('GET', /^\/customer\/wallet\/balance\//, (req) => {
+      const id = decodeURIComponent(req.path.split('/').pop()!);
+      const kobo = balances.get(id);
+      if (kobo === undefined) {
+        return { status: 404, body: { status: 404, message: ['No wallet'] } };
+      }
+      return {
+        status: 200,
+        body: {
+          ...WALLET_BALANCE,
+          data: {
+            ...WALLET_BALANCE.data,
+            balance: {
+              bookedBalance: kobo / 100,
+              availableBalance: kobo / 100,
+            },
+          },
+        },
+      };
+    });
+    double.on('PATCH', /^\/customer\/wallet\/[^/]+\/freeze$/, () => ({
+      status: 200,
+      body: FREEZE_200,
+    }));
+    double.on('PATCH', /^\/customer\/wallet\/[^/]+\/unfreeze$/, () => ({
+      status: 200,
+      body: {
+        ...FREEZE_200,
+        data: { ...FREEZE_200.data, isFrozen: false },
+        message: 'Wallet unfrozen successfully',
+      },
+    }));
+    const env: Record<string, string> = {
+      FINTAVA_BASE_URL: double.baseUrl,
+      FINTAVA_API_KEY: 'live_test_odt_0123456789FAKEKEY',
+      FINTAVA_TIMEOUT_MS: '5000',
+      FINTAVA_MONEY_TIMEOUT_MS: '5000',
+      FINTAVA_CHECK_TIMEOUT_MS: '5000',
+    };
+    for (const [k, v] of Object.entries(env)) {
+      previousEnv[k] = process.env[k];
+      process.env[k] = v;
+    }
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        PrismaModule,
+        AccountModule,
+      ],
+    })
+      .overrideProvider(WAWU_ID_ACCOUNT_GATEWAY)
+      .useValue(gateway)
+      .compile();
+    const app = moduleRef.createNestApplication();
+    await app.init();
+    closeApp = () => app.close();
+    prisma = moduleRef.get(PrismaService);
+    deps = {
+      prisma,
+      money: moduleRef.get(AccountDeletionMoneyService),
+      identity: moduleRef.get(AccountDeletionIdentityService),
+      sweep: moduleRef.get(AccountDeletionSweepService),
+      resolveEmail: (e) =>
+        Promise.resolve(emails.get(e.trim().toLowerCase()) ?? []),
+    };
+  });
+
+  const scheduleCalls = () => gateway.scheduleAccountDeletion.mock.calls;
+  const finalizeCalls = () => gateway.finalizeAccountDeletion.mock.calls;
+
+  beforeEach(() => {
+    gateway.scheduleAccountDeletion.mockClear();
+    gateway.finalizeAccountDeletion.mockClear();
+  });
+
+  afterAll(async () => {
+    if (prisma) {
+      const payments = await prisma.walletPayment.findMany({
+        where: {
+          OR: [
+            { payerWawuUserId: { in: people } },
+            { payeeWawuUserId: { in: people } },
+          ],
+        },
+        select: { id: true },
+      });
+      const ids = payments.map((p) => p.id);
+      await prisma.walletHold.deleteMany({ where: { paymentId: { in: ids } } });
+      await prisma.walletPayment.deleteMany({ where: { id: { in: ids } } });
+      await prisma.purchase.deleteMany({
+        where: { creatorWawuId: { in: people } },
+      });
+      await prisma.accountDeletionContent.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+      await prisma.contentPiece.deleteMany({
+        where: { title: { startsWith: 'ODT ' } },
+      });
+      await prisma.accountDeletion.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+      await prisma.adminUser.deleteMany({
+        where: { email: 'odt-admin@example.test' },
+      });
+      await prisma.fintavaWallet.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+      await prisma.userProfile.deleteMany({
+        where: { wawuUserId: { in: people } },
+      });
+    }
+    await closeApp?.();
+    await double.stop();
+    for (const [k, v] of Object.entries(previousEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  describe('the provider proof', () => {
+    it('accepts a sandbox host and refuses a live one, for both providers', () => {
+      expect(proveTestProvider((k) => SANDBOX_ENV[k]).ok).toBe(true);
+      expect(proveTestProvider((k) => LIVE_ENV[k]).ok).toBe(false);
+      const nuvion = {
+        WALLET_PROVIDER: 'nuvion',
+        NUVION_API_KEY: 'k-not-printed-0123456789',
+        NUVION_WEBHOOK_SECRET: 'whsec-0123456789',
+        NUVION_OPERATIONAL_ACCOUNT_ID: '01OPERATIONAL00000000001',
+      };
+      const sandbox = proveTestProvider(
+        (k) =>
+          ({ ...nuvion, NUVION_BASE_URL: 'https://api.nuvion.dev' })[
+            k as keyof typeof nuvion
+          ],
+      );
+      expect(sandbox.ok).toBe(true);
+      const live = proveTestProvider(
+        (k) => ({ ...nuvion, NUVION_BASE_URL: 'https://api.nuvion.co' })[k],
+      );
+      expect(live.ok).toBe(false);
+      // Unreadable settings are a refusal, never a pass.
+      expect(proveTestProvider(() => undefined).ok).toBe(true); // fintava default: sandbox host
+      expect(
+        proveTestProvider((k) => ({ WALLET_PROVIDER: 'nuvion' })[k]).ok,
+      ).toBe(false);
+    });
+  });
+
+  describe('dry run, apply, and running twice', () => {
+    it('dry run writes nothing; apply deletes only the one account; a second apply finds nothing', async () => {
+      const a = await person('odt-a@example.test', 'odt_a', 5_000_000);
+      const b = await person('odt-a2@example.test', 'odt_a2', 0);
+      const buyer = await person('odt-buyer@example.test', 'odt_buyer');
+      const sold = await piece(a, 'ODT sold');
+      await piece(a, 'ODT unsold');
+      const bPiece = await piece(b, 'ODT other');
+      await prisma.purchase.create({
+        data: {
+          contentId: sold.id,
+          type: 'content',
+          buyerWawuId: buyer,
+          creatorWawuId: a,
+          amount: 100,
+          commissionRate: 0.15,
+          flutterwaveTxRef: `odt-${randomUUID()}`,
+          status: 'completed',
+        },
+      });
+
+      const before = await snapshot();
+      const dry = await run('odt-a@example.test');
+      expect(dry.code).toBe(0);
+      expect(dry.text).toContain('DRY RUN');
+      expect(dry.text).toContain('balance 5000000 kobo');
+      expect(dry.text).toContain('wallet_balance: waived (test balance)');
+      expect(dry.text).toContain('1 pieces others bought');
+      expect(dry.text).toContain('Proof: FINTAVA_BASE_URL');
+      expect(dry.text).not.toContain('FAKEKEY');
+      expect(await snapshot()).toEqual(before);
+      expect(scheduleCalls()).toHaveLength(0);
+
+      const phrase = phraseOf(dry.text);
+      expect(phrase).toBe(
+        `DELETE ${(await prisma.userProfile.findFirstOrThrow({ where: { handle: 'odt_a' } })).wawuUserId.slice(0, 8)}`,
+      );
+      const applied = await run('odt-a@example.test', {
+        apply: true,
+        confirm: phrase,
+      });
+      expect(applied.text).toContain('Outcome: purged');
+      expect(applied.code).toBe(0);
+      expect(scheduleCalls()[0]).toEqual([a, expect.any(Date)]);
+      expect(finalizeCalls()).toHaveLength(1);
+      expect(finalizeCalls()[0]).toEqual([a]);
+
+      // A is gone; B and the buyer are untouched.
+      expect(
+        await prisma.userProfile.findUnique({ where: { wawuUserId: a } }),
+      ).toBeNull();
+      expect(
+        await prisma.fintavaWallet.findUnique({ where: { wawuUserId: a } }),
+      ).toBeNull();
+      expect(
+        await prisma.userProfile.findUnique({ where: { wawuUserId: b } }),
+      ).not.toBeNull();
+      expect(
+        await prisma.userProfile.findUnique({ where: { wawuUserId: buyer } }),
+      ).not.toBeNull();
+      expect(
+        await prisma.fintavaWallet.findUnique({ where: { wawuUserId: b } }),
+      ).not.toBeNull();
+      expect(
+        await prisma.contentPiece.findUnique({ where: { id: bPiece.id } }),
+      ).not.toBeNull();
+      expect(
+        await prisma.contentPiece.count({ where: { creatorWawuId: a } }),
+      ).toBe(0);
+      // R-130: the piece a buyer paid for stays, with its purchase.
+      const kept = await prisma.contentPiece.findUnique({
+        where: { id: sold.id },
+      });
+      expect(kept).not.toBeNull();
+      expect(kept!.creatorWawuId).not.toBe(a);
+      expect(
+        await prisma.purchase.count({
+          where: { buyerWawuId: buyer, contentId: sold.id },
+        }),
+      ).toBe(1);
+      // Exactly the unsold piece went; nothing else lost a row beyond A's own.
+      const after = await snapshot();
+      const lost = Object.keys(before).filter((t) => after[t] < before[t]);
+      expect(lost.sort()).toEqual(
+        expect.arrayContaining([
+          'ContentPiece',
+          'FintavaWallet',
+          'UserProfile',
+        ]),
+      );
+      expect(before.ContentPiece - after.ContentPiece).toBe(1);
+      expect(before.UserProfile - after.UserProfile).toBe(1);
+      // The audit record.
+      const row = await prisma.accountDeletion.findUnique({
+        where: { wawuUserId: a },
+      });
+      expect(row).toMatchObject({
+        status: 'purged',
+        leavingReason: LEAVING_REASON,
+      });
+
+      // Second apply: WAWU ID no longer knows the email, so there is nothing to do.
+      emails.delete('odt-a@example.test');
+      const snap = await snapshot();
+      const again = await run('odt-a@example.test', {
+        apply: true,
+        confirm: phrase,
+      });
+      expect(again.code).toBe(0);
+      expect(again.text).toContain('Nothing to do');
+      expect(await snapshot()).toEqual(snap);
+      expect(finalizeCalls()).toHaveLength(1);
+    });
+
+    it('a second apply after a half-finished first one (WAWU ID down) finishes it', async () => {
+      const a = await person('odt-half@example.test', 'odt_half', 1_000);
+      gateway.finalizeAccountDeletion.mockRejectedValueOnce(new Error('down'));
+      const phrase = `DELETE ${a.slice(0, 8)}`;
+      const first = await run('odt-half@example.test', {
+        apply: true,
+        confirm: phrase,
+      });
+      expect(first.code).toBe(2);
+      expect(first.text).toContain('safe to run the same command again');
+      const second = await run('odt-half@example.test', {
+        apply: true,
+        confirm: phrase,
+      });
+      expect(second.code).toBe(0);
+      expect(finalizeCalls()).toHaveLength(2);
+      expect(
+        (await prisma.accountDeletion.findUnique({ where: { wawuUserId: a } }))!
+          .status,
+      ).toBe('purged');
+    });
+  });
+
+  describe('refusals (each changes nothing)', () => {
+    async function refused(
+      email: string,
+      over: Partial<Options>,
+      env?: Record<string, string>,
+    ) {
+      const before = await snapshot();
+      const r = await run(email, over, env);
+      expect(r.code).toBe(1);
+      expect(r.text).toContain('REFUSED');
+      expect(await snapshot()).toEqual(before);
+      expect(scheduleCalls()).toHaveLength(0);
+      return r;
+    }
+
+    it('live-looking provider settings', async () => {
+      const live = await person('odt-live@example.test', 'odt_live', 100);
+      const r = await refused(
+        'odt-live@example.test',
+        { apply: true, confirm: `DELETE ${live.slice(0, 8)}` },
+        LIVE_ENV,
+      );
+      expect(r.text).toContain('not proven to be on test credentials');
+    });
+
+    it('two matches', async () => {
+      await person('odt-two@example.test', 'odt_two1', 100);
+      await person('odt-two@example.test', 'odt_two2', 100);
+      const r = await refused('odt-two@example.test', {
+        apply: true,
+        confirm: 'DELETE x',
+      });
+      expect(r.text).toContain('2 accounts match');
+    });
+
+    it('no phrase, and a wrong phrase', async () => {
+      await person('odt-ph@example.test', 'odt_ph', 100);
+      expect(
+        (await refused('odt-ph@example.test', { apply: true })).text,
+      ).toContain('needs --confirm');
+      expect(
+        (
+          await refused('odt-ph@example.test', {
+            apply: true,
+            confirm: 'DELETE someone',
+          })
+        ).text,
+      ).toContain('not the one printed');
+    });
+
+    it('an open hold, unless --allow-test-holds', async () => {
+      const c = await person('odt-hold@example.test', 'odt_hold', 100);
+      const other = await person('odt-hold-other@example.test', 'odt_hold_o');
+      await hold(c, other);
+      const r = await refused('odt-hold@example.test', {
+        apply: true,
+        confirm: `DELETE ${c.slice(0, 8)}`,
+      });
+      expect(r.text).toContain('open_hold: REFUSES');
+      const ok = await run('odt-hold@example.test', {
+        apply: true,
+        confirm: `DELETE ${c.slice(0, 8)}`,
+        allowTestHolds: true,
+      });
+      expect(ok.code).toBe(0);
+      expect(
+        await prisma.userProfile.findUnique({ where: { wawuUserId: c } }),
+      ).toBeNull();
+    });
+
+    it('an admin login', async () => {
+      await person('odt-admin@example.test', 'odt_admin', 100);
+      await prisma.adminUser.create({
+        data: {
+          email: 'odt-admin@example.test',
+          passwordHash: 'x',
+          name: 'Fixture Admin',
+          role: 'superadmin',
+        } as never,
+      });
+      const r = await refused('ODT-ADMIN@example.test', {
+        apply: true,
+        confirm: 'DELETE x',
+      });
+      expect(r.text).toContain('admin login');
+    });
+  });
+});
