@@ -64,7 +64,7 @@ export class MoneyCardsController {
   @Get('quote')
   @BuiltBy('WALLET-31')
   @RequireOpenWallet()
-  @MoneyErrors(...WALLET_GATE_ERRORS, 'fees_not_set')
+  @MoneyErrors(...WALLET_GATE_ERRORS, 'fees_not_set', 'rate_unavailable')
   @RequireFeesSet()
   quote(@CurrentWallet() wallet: OpenWallet): Promise<CardQuoteView> {
     return this.cards.quote(wallet);
@@ -99,6 +99,7 @@ export class MoneyCardsController {
     'device_approval_refused',
     'cards_unavailable',
     'card_limit_reached',
+    'rate_unavailable',
   )
   @RequireFeesSet()
   create(

@@ -24,6 +24,8 @@ export class CardCreatableGuard implements CanActivate {
       );
     }
     this.cards.assertCreatable();
+    // A dollar fee is priced now, so a card with no rate is refused before a PIN try is used.
+    await this.cards.issuerFeeKobo(wawuUserId);
     await this.cards.assertWithinLimits(wawuUserId);
     return true;
   }

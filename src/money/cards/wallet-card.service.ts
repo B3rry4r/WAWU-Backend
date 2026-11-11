@@ -25,6 +25,7 @@ import {
 } from '../payments/idempotency';
 import { successBody } from '../payments/wallet-payment.service';
 import { CARDS_ENABLED_SETTING, CardSettings } from './card-config';
+import { CardFeeRateService } from './card-fee-rate.service';
 import {
   recordCardFeeRow,
   recordIssuerFeeRow,
@@ -171,6 +172,7 @@ export class WalletCardService implements OnModuleInit {
     private readonly keys: IdempotencyService,
     private readonly fees: FeeQuoteService,
     private readonly ledger: LedgerService,
+    private readonly rate: CardFeeRateService,
   ) {}
 
   /**
@@ -211,7 +213,10 @@ export class WalletCardService implements OnModuleInit {
       throw new MoneyError('cards_unavailable', UNAVAILABLE_MESSAGE);
     }
     this.cards();
-    if (this.settings.providerFeeKobo === null) {
+    if (
+      this.settings.providerFeeKobo === null &&
+      this.settings.providerFeeUsdCents === null
+    ) {
       throw new MoneyError('fees_not_set', FEE_MESSAGE);
     }
     // WAWU's own fee moves as a send's fee does: from the person's account to
@@ -219,6 +224,21 @@ export class WalletCardService implements OnModuleInit {
     if (this.settings.wawuFeeKobo > 0 && this.provider.wawuFeeLeg !== true) {
       throw new MoneyError('fees_not_set', FEE_MESSAGE);
     }
+  }
+
+  /**
+   * Nuvion's fee for making a card, in kobo, as it stands now (NUV-FEES): a
+   * dollar fee is quoted at Nuvion's rate this moment and refuses plainly when
+   * there is none; a kobo fee is the setting. The caller has passed
+   * `assertCreatable`, so one of the two is set.
+   */
+  async issuerFeeKobo(wawuUserId: string): Promise<number> {
+    const cents = this.settings.providerFeeUsdCents;
+    if (cents !== null) return this.rate.kobo(cents, wawuUserId);
+    if (this.settings.providerFeeKobo === null) {
+      throw new MoneyError('fees_not_set', FEE_MESSAGE);
+    }
+    return this.settings.providerFeeKobo;
   }
 
   /** Reading and controlling cards that exist works while the product is off (a person can still block theirs). */
@@ -263,10 +283,16 @@ export class WalletCardService implements OnModuleInit {
 
   async quote(wallet: OpenWallet): Promise<CardQuoteView> {
     const enabled = this.enabled();
-    const provider = this.settings.providerFeeKobo;
-    if (enabled && provider === null) {
+    if (
+      enabled &&
+      this.settings.providerFeeKobo === null &&
+      this.settings.providerFeeUsdCents === null
+    ) {
       throw new MoneyError('fees_not_set', FEE_MESSAGE);
     }
+    const provider = enabled
+      ? await this.issuerFeeKobo(wallet.wawuUserId)
+      : null;
     const c = await this.counts(wallet.wawuUserId);
     const fee = {
       providerFeeKobo: provider ?? 0,
@@ -305,9 +331,11 @@ export class WalletCardService implements OnModuleInit {
    * balance is the provider's, read now; a read that fails is the provider's
    * refusal, nothing is taken. The key is given back (nothing was attached).
    */
-  private async assertCanAfford(wallet: OpenWallet): Promise<void> {
-    const need =
-      (this.settings.providerFeeKobo ?? 0) + this.settings.wawuFeeKobo;
+  private async assertCanAfford(
+    wallet: OpenWallet,
+    issuerFeeKobo: number,
+  ): Promise<void> {
+    const need = issuerFeeKobo + this.settings.wawuFeeKobo;
     if (need <= 0) return;
     let available: bigint;
     try {
@@ -626,7 +654,8 @@ export class WalletCardService implements OnModuleInit {
   ): Promise<CardView> {
     this.assertCreatable();
     const cards = this.cards();
-    await this.assertCanAfford(wallet);
+    const issuerFeeKobo = await this.issuerFeeKobo(wallet.wawuUserId);
+    await this.assertCanAfford(wallet, issuerFeeKobo);
     const kind: CardKind = dto.kind;
     const name = cleanCardName(dto.name) ?? DEFAULT_NAMES[kind];
     const reference = `wawu-card-${randomBytes(6).toString('hex')}`;
@@ -644,7 +673,7 @@ export class WalletCardService implements OnModuleInit {
           type: kind,
           name,
           state: 'creating',
-          providerFeeKobo: BigInt(this.settings.providerFeeKobo ?? 0),
+          providerFeeKobo: BigInt(issuerFeeKobo),
           wawuFeeKobo: BigInt(this.settings.wawuFeeKobo),
         },
       });
@@ -981,7 +1010,10 @@ export class WalletCardService implements OnModuleInit {
         }
         return this.notFound();
       case 'insufficient_funds': {
-        const fee = this.settings.providerFeeKobo;
+        const fee =
+          (row.providerFeeKobo ?? 0n) > 0n
+            ? Number(row.providerFeeKobo)
+            : this.settings.providerFeeKobo;
         return new MoneyError(
           'insufficient_funds',
           fee === null

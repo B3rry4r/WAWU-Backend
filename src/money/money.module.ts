@@ -135,6 +135,7 @@ import { AdminCardsController } from './cards/admin-cards.controller';
 import { AdminCardsService } from './cards/admin-cards.service';
 import { CardCreatableGuard } from './cards/card-creatable.guard';
 import { CardSettings } from './cards/card-config';
+import { CardFeeRateService } from './cards/card-fee-rate.service';
 import { WalletCardPurge } from './cards/card-purge.service';
 import {
   CardRevealLimitGuard,
@@ -373,6 +374,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     FxAdminService,
     // The WAWU card (task WALLET-31).
     CardSettings,
+    CardFeeRateService,
     WalletCardService,
     CardCreatableGuard,
     CardRevealLimiter,

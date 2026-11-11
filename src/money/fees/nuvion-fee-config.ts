@@ -1,3 +1,4 @@
+import { isPercentSetting, parsePercentFee, percentFeeOf } from './percent-fee';
 import {
   type FeeBand,
   FeeConfigError,
@@ -26,9 +27,12 @@ import {
  *   NUVION_FEE_INFLOW         money arriving by bank transfer into a person's
  *                             account number (adding money, R-42)
  *
- * Each is kobo, written one of two ways: one whole number for any amount
- * (`2500`), or `from:fee` bands, comma separated, the first from 0 and each
- * `from` above the one before (`0:1000,500000:2000`). A value that is set but
+ * Each is kobo, written one of three ways: one whole number for any amount
+ * (`2500`), `from:fee` bands, comma separated, the first from 0 and each
+ * `from` above the one before (`0:1000,500000:2000`), or a percentage of the
+ * amount with an optional floor and cap in kobo (`pct:0.2,min:5000,max:50000`,
+ * task NUV-FEES: Nuvion's live payout and inflow charges are of this kind;
+ * percent-fee.ts has the rounding). A value that is set but
  * unusable stops the server at boot naming the setting; it is read only when
  * Nuvion is the running provider, so a rollback to Fintava never trips on it.
  *
@@ -45,11 +49,19 @@ export type NuvionFeeName = keyof typeof NUVION_FEE_CONFIG_KEYS;
 /** One charge: the same for any amount, or by amount band. */
 export type FeeRule =
   | { kind: 'flat'; feeKobo: number }
-  | { kind: 'bands'; bands: readonly FeeBand[] };
+  | { kind: 'bands'; bands: readonly FeeBand[] }
+  | {
+      kind: 'percent';
+      /** Millionths of the amount (0.2% is 2000). */
+      ppm: number;
+      minKobo: number;
+      maxKobo: number | null;
+    };
 
 /** The charge a rule puts on this amount. */
 export function feeOf(rule: FeeRule, amountKobo: number): number {
   if (rule.kind === 'flat') return rule.feeKobo;
+  if (rule.kind === 'percent') return percentFeeOf(rule, amountKobo);
   let fee = rule.bands[0].feeKobo;
   for (const band of rule.bands) {
     if (amountKobo >= band.fromKobo) fee = band.feeKobo;
@@ -71,11 +83,14 @@ export function feeRuleSetting(
 ): FeeRule | null {
   if (blank(raw)) return null;
   const text = raw!.trim();
+  if (isPercentSetting(text)) {
+    return { kind: 'percent', ...parsePercentFee(text, key) };
+  }
   if (!text.includes(':')) {
     const feeKobo = koboSetting(text, key, Number.NaN);
     return { kind: 'flat', feeKobo };
   }
-  const shape = `${key} must be one whole number of kobo, or from:fee pairs in kobo, comma separated, the first from 0.`;
+  const shape = `${key} must be one whole number of kobo, from:fee pairs in kobo (comma separated, the first from 0), or pct:0.2,min:5000,max:50000.`;
   const bands: FeeBand[] = [];
   for (const pair of text.split(',')) {
     const [from, fee, ...rest] = pair.trim().split(':');
