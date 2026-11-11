@@ -13,7 +13,6 @@
  * payments in flight; those tables (WalletHold, WalletPayment, EarningSettlement, FintavaWallet, ...) are sandbox-only
  * and are not listed here.
  */
-import { isRowOf } from '../../src/wallet-provider/provider-rows';
 import type { WalletProviderName } from '../../src/wallet-provider/wallet-provider.interface';
 import type { PrismaService } from '../../src/common/prisma/prisma.service';
 
@@ -215,10 +214,12 @@ export const REAL_MONEY_TABLES: MoneyTable[] = [
     model: 'ServiceApplication',
     columns: ['applicantWawuId'],
     klass: 'live',
-    why: `${FW} CAC fee (an application that carries a payment)`,
+    why: `${FW} CAC fee (an application that carries a payment, or waits for one)`,
     status: 'status',
     amount: { field: 'amountPaid', unit: 'naira' },
-    only: { amountPaid: { not: null } },
+    only: {
+      OR: [{ amountPaid: { not: null } }, { status: 'awaiting_payment' }],
+    },
   },
   {
     model: 'StorePurchase',
@@ -429,6 +430,21 @@ export async function findRealMoneyRows(
           AND: [
             { OR: t.columns.map((c) => ({ [c]: id })) },
             ...(t.only ? [t.only] : []),
+            // A provider table reads only the rows NOT of the running provider, so `take` cannot hide one.
+            ...(t.klass === 'provider'
+              ? [
+                  {
+                    // SQL: NOT (provider = x) skips NULL, and a NULL provider is Fintava's.
+                    OR: [
+                      { NOT: { provider: running } },
+                      ...(t.model === 'FintavaLedgerEntry' &&
+                      running !== 'fintava'
+                        ? [{ provider: null }]
+                        : []),
+                    ],
+                  },
+                ]
+              : []),
           ],
         },
         take: 100,
@@ -445,11 +461,6 @@ export async function findRealMoneyRows(
       continue;
     }
     for (const r of rows) {
-      if (
-        t.klass === 'provider' &&
-        isRowOf(running, r.provider as string | null)
-      )
-        continue;
       let kobo = '-';
       if (t.amount) {
         const v = r[t.amount.field];
