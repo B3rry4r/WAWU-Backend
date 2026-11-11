@@ -24,6 +24,10 @@ import { WawuJwtStrategy } from '../../../common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../fees/engine/tests/seed-fees';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
@@ -221,10 +225,13 @@ describe('Send to a WAWU user (WALLET-07) on the provider seam, Nuvion stood in'
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env).
+    await seedFlatFees(moduleRef, { feeKobo: 3325, providerKobo: 2325 });
     transfers = moduleRef.get(WalletTransferService);
   });
 
   afterAll(async () => {
+    await removeSpecFees(moduleRef);
     if (prisma) {
       const rows = await prisma.walletTransfer.findMany({
         where: {
@@ -305,7 +312,7 @@ describe('Send to a WAWU user (WALLET-07) on the provider seam, Nuvion stood in'
       status: 'completed',
       amountKobo: 200_000,
       totalKobo: 203_325,
-      fee: { providerFeeKobo: 2325, wawuFeeKobo: 1000, totalFeeKobo: 3325 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: 3325, totalFeeKobo: 3325 },
       statusMessage: null,
     });
     expect(available(to)).toBe(200_000n);

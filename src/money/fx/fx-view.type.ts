@@ -46,6 +46,11 @@ export interface FxCurrencyView {
 export interface FxCurrenciesView {
   currencies: FxCurrencyView[];
   products: FxProductsView;
+  /**
+   * FEE-01 (R-139 point 3), additive: whether dollars received from local banks are on. Off until the
+   * owner confirms. A sibling of `products` so that object keeps its three keys.
+   */
+  localUsdIn: boolean;
   /** The naira wallet, which a swap can start from or end in. */
   naira: { code: 'NGN'; decimals: 2 };
 }
@@ -129,6 +134,10 @@ export interface FxTransactionView {
   occurredAt: string;
   /** Set when the line was a conversion. */
   conversion: FxConversionView | null;
+  /** FEE-01, additive: on a dollar wire received, WAWU's fee, the VAT on it and what landed (amount less both). Absent otherwise. */
+  wawuFeeMinor?: number;
+  vatMinor?: number;
+  receiveMinor?: number;
 }
 
 export interface FxConversionView {
@@ -179,6 +188,17 @@ export interface FxQuoteView {
   expiresAt: string;
   /** Seconds left now. */
   validForSeconds: number;
+  /** FEE-01 (R-139), additive: the quote in the same words every fee quote uses. */
+  currency: string;
+  /** WAWU's fee, in `currency`'s smallest unit. */
+  feeMinor: number;
+  /** VAT on it; 0 until VAT is applied to this move. */
+  vatMinor: number;
+  vatOn: boolean;
+  /** What the person pays. */
+  totalMinor: number;
+  /** What the receiver gets. */
+  receiveMinor: number;
 }
 
 export type FxOperationStatus = 'pending' | 'completed' | 'failed';

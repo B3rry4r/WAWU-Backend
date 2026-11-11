@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { type INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -151,6 +155,12 @@ export async function bootCreditApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here from the option (not env).
+  await seedFlatFees(
+    app,
+    { feeKobo: opts.nuvionFeeKobo ?? 0, providerKobo: opts.nuvionFeeKobo ?? 0 },
+    opts.nuvionFeeKobo ?? 0,
+  );
   await app.listen(0, '127.0.0.1');
   const prisma = moduleRef.get(PrismaService);
   const payments = moduleRef.get(WalletPaymentService);
@@ -264,6 +274,7 @@ export async function bootCreditApp(
       await prisma.creditsState.deleteMany({
         where: { userWawuId: { in: users } },
       });
+      await removeSpecFees(app);
       await app.close();
       await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {

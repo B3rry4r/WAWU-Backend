@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -242,7 +246,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(res.status).toBe(200);
     const q = body<PaymentQuoteView>(res).data!;
     // Nuvion charges what its settings say, which is what the quote says.
-    const fee = BigInt(q.fee.providerFeeKobo);
+    const fee = BigInt(q.fee.totalFeeKobo);
     nuvion.feeKobo = () => fee;
     return q;
   }
@@ -351,6 +355,8 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env).
+    await seedFlatFees(app, { feeKobo: 1500, providerKobo: 1500 });
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     payments = moduleRef.get(WalletPaymentService);
@@ -465,6 +471,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
   });
 
   afterAll(async () => {
+    await removeSpecFees(app);
     if (prisma) {
       const rows = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },
@@ -617,14 +624,23 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     const q = await quoted(p, 'content_unlock', 'n-1000');
     expect(q).toMatchObject({
       priceKobo: PRICE,
-      totalKobo: PRICE + q.fee.providerFeeKobo,
+      totalKobo: PRICE + q.fee.totalFeeKobo,
       balanceKobo: 500_000,
       shortfallKobo: 0,
-      fee: { wawuFeeKobo: 0 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: q.fee.totalFeeKobo },
       withinDailyLimit: true,
       remainingTodayKobo: DAILY_PURCHASE_LIMIT_KOBO,
     });
-    expect(q.fee.providerFeeKobo).toBeGreaterThan(0);
+    // FEE-01: the payment quote carries the added fields under Nuvion, and no provider charge.
+    expect(q).toMatchObject({
+      currency: 'NGN',
+      vatMinor: 0,
+      vatOn: false,
+      totalMinor: q.totalKobo,
+      receiveMinor: PRICE,
+    });
+    expect(q.feeMinor).toBe(q.fee.totalFeeKobo);
+    expect(q.fee.totalFeeKobo).toBeGreaterThan(0);
     const operationalBefore = nuvion.operational.availableKobo;
 
     const res = await pay(p, q);
@@ -715,7 +731,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
         direction: 'out',
         status: 'completed',
         amount: BigInt(PRICE),
-        fee: BigInt(q.fee.providerFeeKobo),
+        fee: BigInt(q.fee.totalFeeKobo),
         total: BigInt(q.totalKobo),
         account: p.account.accountNumber,
         transactionId: transferId,
@@ -1094,7 +1110,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
   it('short of money by our read of Nuvion (more than the price, less than price plus fee): 402 with the exact shortfall, nothing sent, nothing stored', async () => {
     const p = await buyer(500_000);
     const q = await quoted(p, 'content_unlock', 'n-short');
-    const balance = PRICE + Math.floor(q.fee.providerFeeKobo / 2);
+    const balance = PRICE + Math.floor(q.fee.totalFeeKobo / 2);
     p.account.availableKobo = BigInt(balance);
     const res = await pay(p, q);
     expect(res.status).toBe(402);
@@ -1194,14 +1210,14 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     const p = await buyer(1_000_000);
     nuvion.mode = 'successful';
     const q = await quoted(p, 'content_unlock', 'n-feehigh');
-    const higher = BigInt(q.fee.providerFeeKobo + 250);
+    const higher = BigInt(q.fee.totalFeeKobo + 250);
     nuvion.feeKobo = () => higher;
     const paid = body<PaymentView>(await pay(p, q)).data!;
     const realTotal = PRICE + Number(higher);
     expect(paid).toMatchObject({
       status: 'completed',
       totalKobo: realTotal,
-      fee: { providerFeeKobo: Number(higher) },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: Number(higher) },
     });
     let row = await rowOf(paid.id);
     expect(row.totalKobo).toBe(BigInt(realTotal));
@@ -1358,7 +1374,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     feeDelta: number,
   ): Promise<{ q: PaymentQuoteView; paid: PaymentView }> {
     const q = await quoted(p, 'content_unlock', item);
-    const fee = BigInt(q.fee.providerFeeKobo + feeDelta);
+    const fee = BigInt(q.fee.totalFeeKobo + feeDelta);
     nuvion.feeKobo = () => fee;
     const paid = body<PaymentView>(await pay(p, q)).data!;
     expect(paid.status).toBe('pending');
@@ -1383,7 +1399,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(row.status).toBe('completed');
     expect([row.totalKobo, row.providerFeeKobo]).toEqual([
       BigInt(real),
-      BigInt(q.fee.providerFeeKobo + 700),
+      BigInt(q.fee.totalFeeKobo + 700),
     ]);
     expect(row.debitReviewSince).not.toBeNull();
     expect(row.discrepancy).toContain(`took ${real} kobo`);
@@ -1399,9 +1415,9 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       out.providerFeeKobo,
     ]).toEqual([
       'completed',
-      BigInt(q.fee.providerFeeKobo + 700),
+      BigInt(q.fee.totalFeeKobo + 700),
       BigInt(real),
-      BigInt(q.fee.providerFeeKobo + 700),
+      BigInt(q.fee.totalFeeKobo + 700),
     ]);
     expect(out.completedAt).not.toBeNull();
     // The flag and both figures stay on the payment, for NUV-08.
@@ -1420,7 +1436,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     const row = await rowOf(paid.id);
     expect(row.status).toBe('completed');
     expect(row.totalKobo).toBe(BigInt(real));
-    expect(row.providerFeeKobo).toBe(BigInt(q.fee.providerFeeKobo - 500));
+    expect(row.providerFeeKobo).toBe(BigInt(q.fee.totalFeeKobo - 500));
     expect(row.debitReviewSince).toBeNull();
     expect(row.discrepancy).toContain('debit differs from the quote');
     expect(row.discrepancy).toContain(`took ${real} kobo`);
@@ -1435,8 +1451,8 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     ]).toEqual([
       'completed',
       BigInt(real),
-      BigInt(q.fee.providerFeeKobo - 500),
-      BigInt(q.fee.providerFeeKobo - 500),
+      BigInt(q.fee.totalFeeKobo - 500),
+      BigInt(q.fee.totalFeeKobo - 500),
     ]);
     expect([inn.status, inn.totalKobo]).toEqual(['completed', BigInt(PRICE)]);
     expect(out.completedAt).not.toBeNull();
@@ -1446,7 +1462,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     const p = await buyer(2_000_000);
     nuvion.mode = 'successful';
     const below = await quoted(p, 'content_unlock', 'n-receipt-below');
-    nuvion.feeKobo = () => BigInt(below.fee.providerFeeKobo - 500);
+    nuvion.feeKobo = () => BigInt(below.fee.totalFeeKobo - 500);
     const low = body<PaymentView>(await pay(p, below)).data!;
     expect(low).toMatchObject({
       status: 'completed',
@@ -1461,7 +1477,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect((await rowOf(low.id)).debitReviewSince).toBeNull();
 
     const above = await quoted(p, 'content_unlock', 'n-receipt-above');
-    nuvion.feeKobo = () => BigInt(above.fee.providerFeeKobo + 700);
+    nuvion.feeKobo = () => BigInt(above.fee.totalFeeKobo + 700);
     const high = body<PaymentView>(await pay(p, above)).data!;
     expect(high).toMatchObject({
       status: 'completed',
@@ -1475,9 +1491,9 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       rows.out.providerFeeKobo,
     ]).toEqual([
       'completed',
-      BigInt(above.fee.providerFeeKobo + 700),
+      BigInt(above.fee.totalFeeKobo + 700),
       BigInt(above.totalKobo + 700),
-      BigInt(above.fee.providerFeeKobo + 700),
+      BigInt(above.fee.totalFeeKobo + 700),
     ]);
     expect(rows.inn.status).toBe('completed');
     const highRow = await rowOf(high.id);
@@ -1511,7 +1527,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(above.debitReviewSince).not.toBeNull();
     // The status check's note, already copied onto the payment, is kept once.
     expect(above.discrepancy).toContain(
-      `feeKobo ${qa.fee.providerFeeKobo} vs ${qa.fee.providerFeeKobo + 700}`,
+      `feeKobo ${qa.fee.totalFeeKobo} vs ${qa.fee.totalFeeKobo + 700}`,
     );
     const aboveRows = await bothRows(pa.reference);
     expect([
@@ -1520,7 +1536,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       aboveRows.out.totalKobo,
     ]).toEqual([
       'completed',
-      BigInt(qa.fee.providerFeeKobo + 700),
+      BigInt(qa.fee.totalFeeKobo + 700),
       BigInt(qa.totalKobo + 700),
     ]);
     expect(aboveRows.inn.status).toBe('completed');
@@ -1557,12 +1573,12 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
         'content_unlock',
         `n-f1-r${delta}`,
       );
-      nuvion.feeKobo = () => BigInt(qr.fee.providerFeeKobo + delta);
+      nuvion.feeKobo = () => BigInt(qr.fee.totalFeeKobo + delta);
       const byAnswer = body<PaymentView>(await pay(byAnswerBuyer, qr)).data!;
       expect(byAnswer.status).toBe('completed');
       cases.push({
         reference: byAnswer.reference,
-        quotedFee: qr.fee.providerFeeKobo,
+        quotedFee: qr.fee.totalFeeKobo,
       });
       nuvion.mode = 'pending';
 
@@ -1575,7 +1591,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       await sweepLater();
       cases.push({
         reference: bySweep.paid.reference,
-        quotedFee: bySweep.q.fee.providerFeeKobo,
+        quotedFee: bySweep.q.fee.totalFeeKobo,
       });
 
       const byCheck = await pendingAt(
@@ -1589,7 +1605,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       await sweepLater();
       cases.push({
         reference: byCheck.paid.reference,
-        quotedFee: byCheck.q.fee.providerFeeKobo,
+        quotedFee: byCheck.q.fee.totalFeeKobo,
       });
 
       for (const c of cases) {
@@ -1608,7 +1624,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
   it("R6-1, a buyer's row MONEY-08 failed as absent, and Nuvion then shows the transfer below the quote: the row is revived and completed at the real figures", async () => {
     const p = await buyer(500_000);
     const q = await quoted(p, 'content_unlock', 'n-absent-below');
-    nuvion.feeKobo = () => BigInt(q.fee.providerFeeKobo - 500);
+    nuvion.feeKobo = () => BigInt(q.fee.totalFeeKobo - 500);
     nuvion.mode = 'timeout';
     const paid = body<PaymentView>(await pay(p, q)).data!;
     expect(paid.status).toBe('pending');
@@ -1953,7 +1969,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
       'creator-x',
       `&amountKobo=${DAILY_PURCHASE_LIMIT_KOBO}`,
     );
-    expect(qe.fee.providerFeeKobo).toBeGreaterThan(0);
+    expect(qe.fee.totalFeeKobo).toBeGreaterThan(0);
     const ok = await pay(exact, qe, randomUUID(), {
       amountKobo: DAILY_PURCHASE_LIMIT_KOBO,
     });

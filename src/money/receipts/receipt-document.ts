@@ -160,6 +160,8 @@ export function receiptLines(
   tx: TransactionView,
   parties: { from: ReceiptPartyView | null; to: ReceiptPartyView | null },
   bankName: string,
+  /** FEE-01: true under the fee engine only; Fintava's receipt is exactly main's. */
+  oneFee = false,
 ): ReceiptLineView[] {
   const lines: ReceiptLineView[] = [{ label: 'Type', value: typeLabelOf(tx) }];
   if (parties.from)
@@ -168,10 +170,13 @@ export function receiptLines(
   lines.push({ label: 'Bank', value: bankName });
   if (tx.direction === 'out') {
     lines.push({ label: 'Amount', value: naira(tx.amountKobo) });
-    lines.push({
-      label: "Fintava's charge",
-      value: naira(tx.fee.providerFeeKobo),
-    });
+    // Under the fee engine the person sees one fee (WAWU's), so there is no provider line.
+    if (!(oneFee && tx.fee.providerFeeKobo === 0 && tx.fee.wawuFeeKobo > 0)) {
+      lines.push({
+        label: "Fintava's charge",
+        value: naira(tx.fee.providerFeeKobo),
+      });
+    }
     if (tx.fee.wawuFeeKobo > 0)
       lines.push({ label: "WAWU's fee", value: naira(tx.fee.wawuFeeKobo) });
     lines.push({ label: 'Total paid', value: naira(tx.totalKobo) });

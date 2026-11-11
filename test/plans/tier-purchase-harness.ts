@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   type INestApplication,
@@ -40,6 +44,7 @@ import { mintToken, QuietLogger } from '../payments/poll-helpers';
 import {
   NuvionHarnessRig,
   runsOnFintavaDouble,
+  HARNESS_FLAT_FEE_KOBO,
 } from '../nuvion/harness-wallets';
 
 /**
@@ -55,8 +60,16 @@ import {
 
 export const PIN = '4826';
 /** The dashboard's balance-transfer charge (docs/fintava/fees.md), in kobo. */
-export const liveFee = (amountKobo: number) =>
+/** Fintava's dashboard balance-transfer charge: stepped at NGN 5,000 (docs/fintava/fees.md). */
+export const fintavaDashboardFee = (amountKobo: number): number =>
   amountKobo < 500_000 ? 2325 : 1575;
+
+export const liveFee = (amountKobo = 0): number =>
+  runsOnFintavaDouble()
+    ? amountKobo < 500_000
+      ? 2325
+      : 1575
+    : HARNESS_FLAT_FEE_KOBO;
 
 /** Fintava's record by our reference, with the ids that belong to ONE transfer. */
 export function recordFor(
@@ -157,7 +170,8 @@ export function installFintava(double: FintavaDouble, wallets: Wallets): void {
       };
     }
     const amountKobo = Math.round(b.amount * 100);
-    const feeKobo = liveFee(amountKobo);
+    // The Fintava double scripts the dashboard's own charge (stepped), whatever runs the spec.
+    const feeKobo = fintavaDashboardFee(amountKobo);
     const have = wallets.kobo.get(b.senderAccount) ?? 0;
     if (have < amountKobo + feeKobo) {
       return {
@@ -327,6 +341,9 @@ export async function bootTierApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here from the option (not env).
+  const flat = opts.nuvionFeeKobo ?? (nuv ? HARNESS_FLAT_FEE_KOBO : 0);
+  await seedFlatFees(app, { feeKobo: flat, providerKobo: flat }, flat);
   await app.listen(0, '127.0.0.1');
   const prisma = moduleRef.get(PrismaService);
   const payments = moduleRef.get(WalletPaymentService);
@@ -459,6 +476,7 @@ export async function bootTierApp(
         where: { wawuUserId: { in: users } },
       });
       for (const id of users) await purgePersonPoints(prisma, id);
+      await removeSpecFees(app);
       await app.close();
       await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {

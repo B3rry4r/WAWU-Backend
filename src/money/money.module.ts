@@ -22,6 +22,8 @@ import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
 import { FeeQuoteService } from './fees/fee-quote.service';
+import { AdminFeesController } from './fees/engine/admin-fees.controller';
+import { FeeEngineModule } from './fees/engine/fee-engine.module';
 import { MoneyFeesController } from './fees/money-fees.controller';
 import { WalletGate, WalletGateGuard } from './gate/wallet-gate';
 import { IdentityHasher } from './identity/identity-config';
@@ -306,6 +308,8 @@ import { WalletCardService } from './cards/wallet-card.service';
     // Limits (task NUV-07): validates the WAWU_LIMIT_* settings at boot and gives the
     // quote today's standing.
     MoneyLimitsModule,
+    // The fee schedule, the provider's rates and the fee record (FEE-01, R-139).
+    FeeEngineModule,
     // Identity documents and the hosted selfie for a Nuvion opening (task NUV-03,
     // SHARED-CHANGES NUV-03 #1).
     NuvionDocumentsModule,
@@ -349,6 +353,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     AbroadController,
     AbroadAdminController,
     AdminMoneyController,
+    AdminFeesController,
     // WALLET-21 (R-83, R-84): foreign accounts, swaps and crypto sends, and the
     // admin reads and the freeze.
     FxController,

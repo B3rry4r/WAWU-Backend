@@ -128,7 +128,7 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
         kind: 'legal_fee',
         priceKobo: CONSULT,
         totalKobo: CONSULT + FEE,
-        fee: { providerFeeKobo: FEE, wawuFeeKobo: 0 },
+        fee: { providerFeeKobo: 0, wawuFeeKobo: FEE },
         willBeHeld: false,
       },
     });

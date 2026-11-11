@@ -126,6 +126,14 @@ export function quoteView(
       0,
       Math.floor((q.expiresAt.getTime() - now.getTime()) / 1000),
     ),
+    currency: from,
+    feeMinor: num(q.wawuFeeMinor),
+    vatMinor: 0,
+    vatOn: false,
+    totalMinor: num(
+      q.amountFromMinor + (q.providerFeeMinor ?? 0n) + q.wawuFeeMinor,
+    ),
+    receiveMinor: num(q.amountToMinor),
   };
 }
 

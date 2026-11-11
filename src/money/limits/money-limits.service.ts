@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -7,6 +7,7 @@ import {
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
 import { feesNotSet } from '../fees/fees-not-set';
+import { FeeScheduleService } from '../fees/engine/fee-schedule.service';
 import { unsetFeeSettings } from '../fees/provider-fee-schedule';
 import { AccountLimits } from './account-limits.service';
 import { lagosDayStart, lagosMonthStart } from './lagos-window';
@@ -112,6 +113,7 @@ const KIND_WHERE: Record<MoneyLimitKind, Prisma.FintavaLedgerEntryWhereInput> =
 export class MoneyLimits {
   /** The running provider's fee settings still unset, read once at boot. */
   private readonly unsetFees: readonly string[];
+  private readonly engine: boolean;
 
   constructor(
     private readonly settings: MoneyLimitSettings,
@@ -120,7 +122,10 @@ export class MoneyLimits {
     config: ConfigService,
     /** The provider's own limit on the account (WALLET-23). Absent: only WAWU's limits. */
     private readonly accounts?: AccountLimits,
+    /** FEE-01: under Nuvion the fees are set when the schedule has a row in force (replaces the NUVION_FEE_* settings). */
+    @Optional() private readonly schedule?: FeeScheduleService,
   ) {
+    this.engine = provider.name === 'nuvion' && schedule !== undefined;
     this.unsetFees = unsetFeeSettings(provider.name, (key) =>
       config.get<string>(key),
     );
@@ -138,7 +143,11 @@ export class MoneyLimits {
     // A programming error, whatever the settings: refused before fees_not_set
     // so it is met in the caller's own specs and not only once fees are set.
     assertOwnTransaction(opts?.tx, this.prisma);
-    if (this.unsetFees.length > 0) throw feesNotSet();
+    if (this.engine) {
+      if (!this.schedule?.coreSet()) throw feesNotSet();
+    } else if (this.unsetFees.length > 0) {
+      throw feesNotSet();
+    }
     await this.assertWithinLimits(input, opts);
   }
 

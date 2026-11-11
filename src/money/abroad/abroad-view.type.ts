@@ -155,6 +155,17 @@ export interface AbroadQuoteView {
   speed: string;
   expiresAt: string;
   validForSeconds: number;
+  /** FEE-01 (R-139), additive: the quote in the same words every fee quote uses. */
+  currency: string;
+  /** WAWU's fee, in `currency`'s smallest unit (kobo for a naira send). */
+  feeMinor: number;
+  /** VAT on it; 0 until VAT is applied to this move. */
+  vatMinor: number;
+  vatOn: boolean;
+  /** What the person pays. */
+  totalMinor: number;
+  /** What the receiver gets. */
+  receiveMinor: number;
 }
 
 export type AbroadSendStatus =
@@ -182,6 +193,14 @@ export interface AbroadSendView {
   wawuFeeKobo: number;
   /** WAWU's fee taken from the foreign account the money left, in its currency's smallest unit (WALLET-42); 0 otherwise. */
   wawuFeeMinor: number;
+  /** FEE-01, additive: VAT on that fee for a dollar payout priced from the schedule; under Nuvion always present (0 when none). */
+  vatMinor?: number;
+  /** FEE-01, additive, under Nuvion only: the sending currency. */
+  currency?: string;
+  /** FEE-01, additive, under Nuvion only: WAWU's one fee with any partner fee folded, excluding VAT; equal to the quote the person confirmed. */
+  feeMinor?: number;
+  /** FEE-01, additive, under Nuvion only: what left the account, `amountFromMinor` + `feeMinor` + `vatMinor`. */
+  totalMinor?: number;
   narration: string | null;
   /** In plain words when the send failed, was reversed or was cancelled; else null. */
   failureReason: string | null;

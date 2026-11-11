@@ -98,6 +98,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // Default (agent), owner may override: 403, as daily_limit_exceeded. The
   // request is understood; this person may not move that much now.
   limit_reached: 403,
+  // FEE-01 (R-139): the request is understood and refused, nothing is sent.
+  below_minimum_withdrawal: 422,
+  fee_exceeds_amount: 422,
+  product_off: 409,
   // NUV-02. Default (agent), owner may override: 409, as wallet_opening. The
   // request is understood; the person waits for the review to end.
   identity_under_review: 409,

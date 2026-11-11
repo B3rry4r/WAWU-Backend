@@ -1,3 +1,9 @@
+import { FeeScheduleService } from '../../src/money/fees/engine/fee-schedule.service';
+import { PlanSettingsService } from '../../src/plan-settings/plan-settings.service';
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -271,6 +277,20 @@ export abstract class CashOutBase {
     // Another plan (its cash-out rate and minimum): the answers follow the
     // config and nothing else.
     if (plans) builder = builder.overrideProvider(PLANS_CONFIG).useValue(plans);
+    // R-139: "fees not set" is "no fee schedule row in force". A boot that blanks the
+    // Nuvion fee settings stands for an empty schedule (the database holds the
+    // migration's seed rows and is append-only), so it reads a schedule with no rows.
+    const noFees = env.NUVION_FEE_BANK_PAYOUT === '';
+    if (noFees) {
+      builder = builder.overrideProvider(FeeScheduleService).useFactory({
+        factory: (plan: PlanSettingsService) =>
+          new FeeScheduleService(
+            { feeSchedule: { findMany: () => Promise.resolve([]) } } as never,
+            plan,
+          ),
+        inject: [PlanSettingsService],
+      });
+    }
     const over = this.providerOverride();
     if (over && 'factory' in over) {
       builder = builder.overrideProvider(WALLET_PROVIDER).useFactory({
@@ -297,6 +317,12 @@ export abstract class CashOutBase {
     this.app.useGlobalFilters(new AllExceptionsFilter());
     this.app.useGlobalInterceptors(new ResponseInterceptor());
     await this.app.init();
+    // R-139: the Nuvion fee comes from rows, seeded here (not env).
+    const flat = this.flatFeeKobo();
+    if (flat !== null && !noFees) {
+      await seedFlatFees(this.app, { feeKobo: flat, providerKobo: flat }, flat);
+      this.seeded = true;
+    }
     await this.app.listen(0, '127.0.0.1');
     this.prisma = this.moduleRef.get(PrismaService);
     this.points = this.moduleRef.get(PointsService);
@@ -305,7 +331,14 @@ export abstract class CashOutBase {
     this.afterBoot();
   }
 
+  /** The one flat Nuvion charge this harness stands for, in kobo; null when it is not on Nuvion. */
+  protected flatFeeKobo(): number | null {
+    return null;
+  }
+  private seeded = false;
+
   async close(): Promise<void> {
+    if (this.seeded) await removeSpecFees(this.app);
     if (this.prisma) await this.clean();
     if (this.app) await this.app.close();
     await this.stopProvider();
@@ -733,6 +766,9 @@ export { MERCHANT_ACCOUNT };
  */
 export class NuvionCashOut extends CashOutBase {
   static readonly FEES = '0:1500,500000:2500';
+  protected flatFeeKobo(): number | null {
+    return 1_500;
+  }
   readonly nuvion = new NuvionSeamStandIn();
   readonly fintavaHits: string[] = [];
   private fintavaCounter!: Server;
@@ -812,6 +848,9 @@ export class NuvionCashOut extends CashOutBase {
  */
 export class NuvionAdapterCashOut extends CashOutBase {
   static readonly FEES = '0:1500,500000:2500';
+  protected flatFeeKobo(): number | null {
+    return 1_500;
+  }
   readonly standin = new NuvionStandin();
   readonly accounts = new NuvionAccountsStandin(this.standin);
   readonly book = new NuvionBookStandin(this.standin, this.accounts);

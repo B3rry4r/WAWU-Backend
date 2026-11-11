@@ -6,6 +6,7 @@ import {
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
 import type { BillCategory, FeeQuoteKind } from '../dto/money-enums';
+import type { FeeKind } from './engine/fee-kinds';
 import { MoneyError } from '../money-error';
 import type {
   FeeBreakdown,
@@ -14,8 +15,11 @@ import type {
   TransferInView,
 } from '../money-view.type';
 import { FeeSettings } from './fee-config';
+import { FeeScheduleService } from './engine/fee-schedule.service';
+import { ProviderRateService } from './engine/provider-rate.service';
 import { feesNotSet } from './fees-not-set';
 import {
+  engineFeeSchedule,
   providerFeeSchedule,
   type ProviderFeeSchedule,
 } from './provider-fee-schedule';
@@ -104,6 +108,9 @@ export class FeeQuoteService {
   /** The running provider's part of every quote (NUV-07). */
   readonly providerFees: ProviderFeeSchedule;
 
+  /** True when the fee schedule decides the fee (Nuvion running, FEE-01). */
+  private readonly engine: boolean;
+
   /** How long a bank transfer takes, as set (FIX-109): the app writes no figure of its own. */
   readonly timing: TransferTiming;
 
@@ -123,13 +130,23 @@ export class FeeQuoteService {
     @Inject(WALLET_PROVIDER)
     provider?: Pick<WalletProvider, 'name'>,
     @Optional() config?: ConfigService,
+    /**
+     * FEE-01 (R-139): WAWU's fee schedule and the provider's rates. Present
+     * and running Nuvion, every fee comes from them; absent (or running
+     * Fintava), the quote is exactly what it was.
+     */
+    @Optional() private readonly schedule?: FeeScheduleService,
+    @Optional() private readonly rates?: ProviderRateService,
   ) {
     const get = (key: string) => config?.get<string>(key);
-    this.providerFees = providerFeeSchedule(
-      provider?.name ?? 'fintava',
-      settings,
-      get,
-    );
+    this.engine =
+      provider?.name === 'nuvion' &&
+      schedule !== undefined &&
+      rates !== undefined;
+    this.providerFees =
+      this.engine && rates && schedule
+        ? engineFeeSchedule(rates, schedule)
+        : providerFeeSchedule(provider?.name ?? 'fintava', settings, get);
     this.timing = readTransferTiming(get);
     this.transferIn = transferInOf(
       provider?.name ?? 'fintava',
@@ -143,7 +160,7 @@ export class FeeQuoteService {
     return this.providerFees.unset.length === 0;
   }
 
-  /** `503 fees_not_set` while any of the running provider's fee settings is unset. */
+  /** `503 fees_not_set` while any of the running provider's fee settings is unset (or, under the fee engine, no schedule row is in force). */
   assertFeesSet(): void {
     if (!this.feesSet) throw feesNotSet();
   }
@@ -161,6 +178,7 @@ export class FeeQuoteService {
     if (input.kind === 'bill' && !this.providerFees.bills) {
       throw new MoneyError('target_not_payable', BILLS_UNAVAILABLE_MESSAGE);
     }
+    this.assertWithdrawalSafe(input);
     const lines = this.compute(input);
     const cap = this.capFor(input.kind);
     if (lines.totalKobo > cap) {
@@ -179,6 +197,9 @@ export class FeeQuoteService {
     subject?: string,
   ): FeeQuoteView {
     const { fee, parts, totalKobo } = this.lines(input);
+    const vatKobo = parts
+      .filter((p) => p.code === 'vat')
+      .reduce((n, p) => n + p.amountKobo, 0);
     const billCategory =
       input.kind === 'bill' ? (input.billCategory ?? null) : null;
     const expires = now.getTime() + this.settings.quoteSeconds * 1000;
@@ -209,6 +230,18 @@ export class FeeQuoteService {
       // time, and only when it is set. Absent otherwise, so nothing is drawn.
       ...(input.kind === 'bank_transfer' && this.timing.bankOutMinutes !== null
         ? { arrivalMinutes: this.timing.bankOutMinutes }
+        : {}),
+      // FEE-01, additive and only under the fee engine (Nuvion): under
+      // Fintava the answer stays byte-identical to main (NUV-07's golden).
+      ...(this.engine
+        ? {
+            currency: 'NGN',
+            feeMinor: fee.totalFeeKobo - vatKobo,
+            vatMinor: vatKobo,
+            vatOn: this.schedule!.vat().on,
+            totalMinor: totalKobo,
+            receiveMinor: input.amountKobo,
+          }
         : {}),
     };
   }
@@ -260,6 +293,15 @@ export class FeeQuoteService {
       amountKobo: number,
     ) => parts.push({ code, source, amountKobo });
 
+    if (
+      this.engine &&
+      (input.kind === 'wawu_transfer' ||
+        input.kind === 'bank_transfer' ||
+        input.kind === 'purchase')
+    ) {
+      return this.computeEngine(input);
+    }
+
     switch (input.kind) {
       case 'wawu_transfer':
         add('balance_transfer', 'provider', p.walletToWalletKobo(amount));
@@ -298,6 +340,123 @@ export class FeeQuoteService {
       parts,
       totalKobo: amount + totalFeeKobo,
     };
+  }
+
+  /**
+   * FEE-01 (R-139, lead ruling 1): under the fee engine the app sees ONE fee,
+   * WAWU's schedule fee F (plus VAT when on), and the person pays exactly
+   * amount + F + VAT. Nuvion's expected charge never appears in an answer.
+   * What the Hub moves inside is `legSplit`.
+   */
+  private computeEngine(input: FeeQuoteInput): FeeLines {
+    const sched = this.schedule!;
+    const kind: FeeKind =
+      input.kind === 'bank_transfer'
+        ? 'ngn_bank_withdrawal'
+        : 'wallet_to_wallet';
+    const amount = input.amountKobo;
+    const fee = sched.feeFor(kind, BigInt(amount));
+    const feeKobo = Number(fee.feeMinor);
+    const vatKobo = Number(fee.vatMinor);
+    // What the Hub moves inside, fixed here with the figures the person is quoted (F9): Nuvion's
+    // expected charge P comes from the same read as F and VAT, and the leg uses these exact numbers.
+    const expected = Number(
+      this.rates!.expected(kind, 'NGN', BigInt(amount)).minor,
+    );
+    const p = Math.min(expected, feeKobo);
+    if (input.kind === 'purchase' && feeKobo - p + vatKobo > 0) {
+      // A wallet payment has no fee leg: a fee above Nuvion's own charge, or any VAT, would be quoted
+      // and never collected (F4). Refused plainly until payments collect it; never quote what is not taken.
+      throw feesNotSet();
+    }
+    const parts: FeeQuotePartView[] = [
+      { code: 'wawu_fee', source: 'wawu', amountKobo: feeKobo },
+    ];
+    if (vatKobo > 0) {
+      parts.push({ code: 'vat', source: 'wawu', amountKobo: vatKobo });
+    }
+    const shown: FeeBreakdown = {
+      providerFeeKobo: 0,
+      wawuFeeKobo: feeKobo + vatKobo,
+      totalFeeKobo: feeKobo + vatKobo,
+    };
+    this.splits.set(shown, {
+      providerFeeKobo: p,
+      wawuFeeKobo: feeKobo - p + vatKobo,
+      totalFeeKobo: feeKobo + vatKobo,
+    });
+    return { fee: shown, parts, totalKobo: amount + feeKobo + vatKobo };
+  }
+
+  /** The inside split fixed when each engine quote was worked out, keyed by the quote's `fee` object. */
+  private readonly splits = new WeakMap<FeeBreakdown, FeeBreakdown>();
+
+  /** True when the fee schedule decides the fee (Nuvion running with the engine). */
+  get engineOn(): boolean {
+    return this.engine;
+  }
+
+  /**
+   * What the Hub moves for a send, inside (never shown to the app): Nuvion
+   * takes its own charge P from the account with the transfer, and the fee leg
+   * moves F - P_expected plus VAT to WAWU's operational account, so the
+   * person's total is exactly amount + F + VAT. Below zero (a fee set under
+   * Nuvion's) the leg moves only the VAT, and the Hub records a negative kept
+   * and raises the rate alert. Outside the engine it is the quote's own split.
+   */
+  legSplit(input: FeeQuoteInput, shown: FeeBreakdown): FeeBreakdown {
+    if (
+      !this.engine ||
+      (input.kind !== 'bank_transfer' &&
+        input.kind !== 'wawu_transfer' &&
+        input.kind !== 'purchase')
+    ) {
+      return shown;
+    }
+    const fixed = this.splits.get(shown);
+    if (fixed) return fixed;
+    // A breakdown this server did not work out just now (a spec's own): work it out again.
+    const kind: FeeKind =
+      input.kind === 'bank_transfer'
+        ? 'ngn_bank_withdrawal'
+        : 'wallet_to_wallet';
+    const fee = this.schedule!.feeFor(kind, BigInt(input.amountKobo));
+    const f = Number(fee.feeMinor);
+    const vat = Number(fee.vatMinor);
+    const expected = Number(
+      this.rates!.expected(kind, 'NGN', BigInt(input.amountKobo)).minor,
+    );
+    const p = Math.min(expected, f);
+    return {
+      providerFeeKobo: p,
+      wawuFeeKobo: f - p + vat,
+      totalFeeKobo: f + vat,
+    };
+  }
+
+  /**
+   * Safety (R-139 point 8), under the fee engine: a bank send below the
+   * smallest withdrawal, or whose fee is bigger than its amount, is refused
+   * before anything is sent.
+   */
+  private assertWithdrawalSafe(input: FeeQuoteInput): void {
+    if (!this.engine || input.kind !== 'bank_transfer') return;
+    const sched = this.schedule!;
+    const min = sched.minWithdrawalMinor('NGN');
+    if (min !== null && BigInt(input.amountKobo) < min) {
+      throw new MoneyError(
+        'below_minimum_withdrawal',
+        'This is less than the smallest amount you can withdraw. Try a larger amount.',
+        { minimumKobo: Number(min) },
+      );
+    }
+    const fee = sched.feeFor('ngn_bank_withdrawal', BigInt(input.amountKobo));
+    if (fee.feeMinor + fee.vatMinor > BigInt(input.amountKobo)) {
+      throw new MoneyError(
+        'fee_exceeds_amount',
+        'The fee is more than the amount. Try a larger amount.',
+      );
+    }
   }
 
   /** The largest total this kind may reach. */

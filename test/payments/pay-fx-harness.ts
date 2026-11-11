@@ -1,3 +1,9 @@
+import { PrismaService } from '../../src/common/prisma/prisma.service';
+import { PlanSettingsService } from '../../src/plan-settings/plan-settings.service';
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -137,6 +143,35 @@ export async function bootPfxApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here (not env).
+  await seedFlatFees(app, { feeKobo: 0, providerKobo: 0 }, 0);
+  // R-139 point 3: the migration switches swaps off, and paying a naira price from
+  // another currency rides the same switch (payment-fx.service.ts). This spec is
+  // about that payment, so it turns the switch on and puts it back when it closes.
+  const prisma = app.get(PrismaService);
+  const swapKey = 'fx.product.swap.on';
+  const swapBefore = await prisma.planSetting.findUnique({
+    where: { key: swapKey },
+  });
+  await prisma.planSetting.upsert({
+    where: { key: swapKey },
+    create: { key: swapKey, value: 1 },
+    update: { value: 1 },
+  });
+  await app.get(PlanSettingsService).refresh();
+  const closeApp = app.close.bind(app);
+  app.close = async () => {
+    await removeSpecFees(app);
+    if (swapBefore) {
+      await prisma.planSetting.update({
+        where: { key: swapKey },
+        data: { value: swapBefore.value as number },
+      });
+    } else {
+      await prisma.planSetting.deleteMany({ where: { key: swapKey } });
+    }
+    await closeApp();
+  };
   await app.listen(0, '127.0.0.1');
   return {
     app,

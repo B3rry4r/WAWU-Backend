@@ -38,6 +38,15 @@ export interface Kind {
 }
 
 export const KIND_TABLE: Record<string, Kind> = {
+  // ---- fee engine (FEE-01) ----
+  MoneyFeeRecord: {
+    action: 'deleted',
+    why: 'One row per test transaction: its amount, fee and what the test provider charged. Gone with the test transactions, so the live fee report starts empty.',
+  },
+  ProviderRate: {
+    action: 'untouched',
+    why: "Its `provider` column names whose rate it is (the owner's copy of Nuvion's commercials), not the wallet provider of a row. Rates are configuration and stay.",
+  },
   // ---- wallet existence, identity and BVN claims: deleted ----
   FintavaWallet: {
     action: 'deleted',
@@ -313,6 +322,15 @@ const caseHeld = (held: string, other: string, to: string) =>
  * each update that selects by `provider = 'nuvion'` is the last to touch the row.
  */
 export const STEPS: Step[] = [
+  {
+    id: 'fee_records',
+    model: 'MoneyFeeRecord',
+    verb: 'delete',
+    table: '"MoneyFeeRecord"',
+    party: [],
+    base: 'TRUE',
+    noDiscover: true,
+  },
   {
     id: 'book_transfers',
     model: 'NuvionBookTransfer',

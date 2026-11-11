@@ -36,6 +36,10 @@ import { WawuJwtStrategy } from '../../../common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../fees/engine/tests/seed-fees';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { nuvionWalletId } from '../../../nuvion/areas/accounts';
@@ -474,10 +478,13 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env).
+    await seedFlatFees(moduleRef, { feeKobo: 2650, providerKobo: 150 });
     transfers = moduleRef.get(WalletTransferService);
   });
 
   afterAll(async () => {
+    await removeSpecFees(moduleRef);
     if (prisma) {
       const rows = await prisma.walletTransfer.findMany({
         where: { payerWawuUserId: { in: users } },
@@ -538,6 +545,41 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
   afterEach(() => {
     expect(fintavaHits).toEqual([]);
     expect(guard.violations).toEqual([]);
+  });
+
+  it('FEE-01: the quote, the send, the transfer view and the history item (the receipt) all show the same one fee', async () => {
+    const { me, b, view } = await send();
+    const quotedFee = WAWU_FEE + FEE;
+    expect(b.quotedTotal).toBe(AMOUNT + quotedFee);
+    // The transfer view: one fee, WAWU's, equal to what was quoted and paid.
+    expect(view.fee).toEqual({
+      providerFeeKobo: 0,
+      wawuFeeKobo: quotedFee,
+      totalFeeKobo: quotedFee,
+    });
+    expect(view.totalKobo).toBe(AMOUNT + quotedFee);
+    // The history item a receipt is made from.
+    const list = await request(app.getHttpServer())
+      .get(`${BASE}/transactions`)
+      .set('Authorization', me.auth);
+    expect(list.status).toBe(200);
+    const items = body<{
+      items: Array<{
+        reference: string;
+        fee: {
+          providerFeeKobo: number;
+          wawuFeeKobo: number;
+          totalFeeKobo: number;
+        };
+        totalKobo: number;
+      }>;
+    }>(list).data!.items.filter((i) => i.reference === view.reference);
+    expect(items.length).toBeGreaterThan(0);
+    for (const i of items) {
+      expect(i.fee.providerFeeKobo).toBe(0);
+      expect(i.fee.totalFeeKobo).toBe(quotedFee);
+      expect(i.totalKobo).toBe(AMOUNT + quotedFee);
+    }
   });
 
   it('is pending until Nuvion says completed; the money has left, the fee is moved once, and nothing the Hub does on its own finishes it', async () => {

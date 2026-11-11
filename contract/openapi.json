@@ -22256,6 +22256,177 @@
         "x-wawu-built-by": "DASH-B-HUB"
       }
     },
+    "/api/hub/admin/money/fees": {
+      "get": {
+        "operationId": "AdminFeesController_fees",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeKindsDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every fee kind: the fee in force, whether its product is on, and its history.",
+        "tags": [
+          "AdminFees"
+        ],
+        "x-wawu-built-by": "FEE-01"
+      },
+      "post": {
+        "operationId": "AdminFeesController_addFee",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddFeeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeRowDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Adds a fee row that applies from `startsAt`. Old rows stay in the history.",
+        "tags": [
+          "AdminFees"
+        ],
+        "x-wawu-built-by": "FEE-01"
+      }
+    },
+    "/api/hub/admin/money/fees/preview": {
+      "get": {
+        "operationId": "AdminFeesController_preview",
+        "parameters": [
+          {
+            "name": "kind",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ngn_bank_withdrawal",
+                "usd_bank_payout",
+                "intl_wire_in",
+                "usd_local_in",
+                "fx_swap",
+                "wallet_to_wallet",
+                "ngn_add_money"
+              ]
+            }
+          },
+          {
+            "name": "currency",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NGN",
+                "USD"
+              ]
+            }
+          },
+          {
+            "name": "amountMinor",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeePreviewDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a fee would be on an amount, with the fee in force and the VAT setting.",
+        "tags": [
+          "AdminFees"
+        ],
+        "x-wawu-built-by": "FEE-01"
+      }
+    },
+    "/api/hub/admin/money/provider-rates": {
+      "get": {
+        "operationId": "AdminFeesController_providerRates",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderRatesDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every provider rate, newest first. Superadmin and finance only.",
+        "tags": [
+          "AdminFees"
+        ],
+        "x-wawu-built-by": "FEE-01"
+      },
+      "post": {
+        "operationId": "AdminFeesController_addProviderRate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddProviderRateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderRateRowDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Adds a provider rate row and tells the owner by email. Superadmin and finance only.",
+        "tags": [
+          "AdminFees"
+        ],
+        "x-wawu-built-by": "FEE-01"
+      }
+    },
     "/api/hub/money/fx/currencies": {
       "get": {
         "operationId": "FxController_currencies",
@@ -49082,6 +49253,9 @@
               "recipient_search_rate_limited",
               "fees_not_set",
               "limit_reached",
+              "below_minimum_withdrawal",
+              "fee_exceeds_amount",
+              "product_off",
               "identity_under_review",
               "step_not_used",
               "open_address_limited",
@@ -50760,6 +50934,331 @@
           "split",
           "streams",
           "note"
+        ]
+      },
+      "FeeRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "percent": {
+            "type": "string"
+          },
+          "minMinor": {
+            "type": "integer"
+          },
+          "maxMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "passThrough": {
+            "type": "boolean"
+          },
+          "startsAt": {
+            "type": "string"
+          },
+          "changedBy": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "currency",
+          "percent",
+          "minMinor",
+          "maxMinor",
+          "passThrough",
+          "startsAt",
+          "changedBy",
+          "note",
+          "createdAt"
+        ]
+      },
+      "FeeKindViewDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "current": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeeRowDto"
+              }
+            ],
+            "nullable": true
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeeRowDto"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "currency",
+          "on",
+          "current",
+          "history"
+        ]
+      },
+      "FeeKindsDto": {
+        "type": "object",
+        "properties": {
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeeKindViewDto"
+            }
+          }
+        },
+        "required": [
+          "kinds"
+        ]
+      },
+      "AddFeeDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ngn_bank_withdrawal",
+              "usd_bank_payout",
+              "intl_wire_in",
+              "usd_local_in",
+              "fx_swap",
+              "wallet_to_wallet",
+              "ngn_add_money"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "percent": {
+            "type": "string",
+            "description": "A decimal string such as \"0.4\", up to four decimals, at most 100. Left out for a pass-through kind."
+          },
+          "minMinor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "maxMinor": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "passThrough": {
+            "type": "boolean",
+            "description": "true for ngn_add_money (the provider's charge is passed on)."
+          },
+          "startsAt": {
+            "type": "string",
+            "description": "ISO 8601. The fee applies from this time."
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "kind",
+          "currency",
+          "startsAt"
+        ]
+      },
+      "FeePreviewDto": {
+        "type": "object",
+        "properties": {
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "feeMinor",
+          "vatMinor",
+          "totalMinor",
+          "receiveMinor",
+          "currency"
+        ]
+      },
+      "ProviderRateRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "percent": {
+            "type": "string"
+          },
+          "minMinor": {
+            "type": "integer"
+          },
+          "maxMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "fixedMinor": {
+            "type": "integer"
+          },
+          "startsAt": {
+            "type": "string"
+          },
+          "changedBy": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "kind",
+          "currency",
+          "percent",
+          "minMinor",
+          "maxMinor",
+          "fixedMinor",
+          "startsAt",
+          "changedBy",
+          "note",
+          "createdAt"
+        ]
+      },
+      "ProviderRatesDto": {
+        "type": "object",
+        "properties": {
+          "rates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderRateRowDto"
+            }
+          }
+        },
+        "required": [
+          "rates"
+        ]
+      },
+      "AddProviderRateDto": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,31}$",
+            "example": "nuvion"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ngn_bank_withdrawal",
+              "usd_bank_payout",
+              "intl_wire_in",
+              "usd_local_in",
+              "fx_swap",
+              "wallet_to_wallet",
+              "ngn_add_money",
+              "card_issuance",
+              "card_maintenance",
+              "card_decline"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3,5}$"
+          },
+          "percent": {
+            "type": "string"
+          },
+          "minMinor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "maxMinor": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "fixedMinor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startsAt": {
+            "type": "string",
+            "description": "ISO 8601."
+          },
+          "note": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "provider",
+          "kind",
+          "currency",
+          "percent",
+          "minMinor",
+          "maxMinor",
+          "fixedMinor",
+          "startsAt"
         ]
       },
       "OpenFxAccountDto": {
@@ -56203,7 +56702,8 @@
               "bank_transfer",
               "balance_transfer",
               "bill_charge",
-              "wawu_fee"
+              "wawu_fee",
+              "vat"
             ]
           },
           "source": {
@@ -56275,6 +56775,30 @@
           },
           "arrivalMinutes": {
             "type": "number",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "feeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatOn": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "totalMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "receiveMinor": {
+            "type": "integer",
             "nullable": true
           }
         },
@@ -57721,6 +58245,30 @@
           "expiresAt": {
             "type": "string"
           },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "feeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatOn": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "totalMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "receiveMinor": {
+            "type": "integer",
+            "nullable": true
+          },
           "source": {
             "allOf": [
               {
@@ -58792,6 +59340,21 @@
           },
           "chargeKobo": {
             "type": "integer"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "vatOn": {
+            "type": "boolean"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
           }
         },
         "required": [
@@ -58801,7 +59364,12 @@
           "providerFeeKobo",
           "wawuFeeKobo",
           "feeKobo",
-          "chargeKobo"
+          "chargeKobo",
+          "feeMinor",
+          "vatMinor",
+          "vatOn",
+          "totalMinor",
+          "receiveMinor"
         ]
       },
       "AddMoneyView": {
@@ -59511,6 +60079,24 @@
           },
           "validForSeconds": {
             "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "vatOn": {
+            "type": "boolean"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
           }
         },
         "required": [
@@ -59529,7 +60115,13 @@
           "wawuFeeMinor",
           "speed",
           "expiresAt",
-          "validForSeconds"
+          "validForSeconds",
+          "currency",
+          "feeMinor",
+          "vatMinor",
+          "vatOn",
+          "totalMinor",
+          "receiveMinor"
         ]
       },
       "AbroadSendView": {
@@ -59584,6 +60176,22 @@
           },
           "wawuFeeMinor": {
             "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "feeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalMinor": {
+            "type": "integer",
+            "nullable": true
           },
           "narration": {
             "type": "string",
@@ -60268,6 +60876,9 @@
           "products": {
             "$ref": "#/components/schemas/FxProductsView"
           },
+          "localUsdIn": {
+            "type": "boolean"
+          },
           "naira": {
             "type": "object",
             "properties": {
@@ -60293,6 +60904,7 @@
         "required": [
           "currencies",
           "products",
+          "localUsdIn",
           "naira"
         ]
       },
@@ -60524,6 +61136,18 @@
               }
             ],
             "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "receiveMinor": {
+            "type": "integer",
+            "nullable": true
           }
         },
         "required": [
@@ -60635,6 +61259,24 @@
           },
           "validForSeconds": {
             "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "vatMinor": {
+            "type": "integer"
+          },
+          "vatOn": {
+            "type": "boolean"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "receiveMinor": {
+            "type": "integer"
           }
         },
         "required": [
@@ -60652,7 +61294,13 @@
           "wawuFeeMinor",
           "totalFromMinor",
           "expiresAt",
-          "validForSeconds"
+          "validForSeconds",
+          "currency",
+          "feeMinor",
+          "vatMinor",
+          "vatOn",
+          "totalMinor",
+          "receiveMinor"
         ]
       },
       "FxSwapView": {

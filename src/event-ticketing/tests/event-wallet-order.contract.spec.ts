@@ -26,7 +26,7 @@ import type {
 const REGULAR = 750_000;
 const VIP = 2_000_000;
 const PRICE = REGULAR + VIP;
-const FEE = 1_575;
+const FEE = 2_325;
 const TOTAL = PRICE + FEE;
 const START = 10_000_000;
 
@@ -137,8 +137,8 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
         payee: { wawuUserId: e.hostId },
       });
       expect(q.payment!.fee).toMatchObject({
-        providerFeeKobo: FEE,
-        wawuFeeKobo: 0,
+        providerFeeKobo: 0,
+        wawuFeeKobo: FEE,
       });
       // Quoted, not reserved: no seat taken, no payment, no debit.
       expect(await sold(e)).toEqual([0, 0]);
@@ -711,7 +711,7 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
       });
       expect(q.payment).toMatchObject({
         priceKobo: 1_000_000,
-        totalKobo: 1_001_575,
+        totalKobo: 1_002_325,
       });
       const done = body<EventWalletOrderView>(
         await r.pay(p, payBody(q)).expect(201),

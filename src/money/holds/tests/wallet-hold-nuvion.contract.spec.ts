@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -169,7 +173,7 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
     expect(qres.status).toBe(200);
     const q = body<PaymentQuoteView>(qres).data!;
     // Nuvion charges what its settings say, which is what the quote says.
-    nuvion.feeKobo = () => BigInt(q.fee.providerFeeKobo);
+    nuvion.feeKobo = () => BigInt(q.fee.totalFeeKobo);
     const res = await request(app.getHttpServer())
       .post(`${BASE}/payments`)
       .set('Authorization', p.auth)
@@ -249,6 +253,8 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env).
+    await seedFlatFees(app, { feeKobo: 1500, providerKobo: 1500 });
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     holds = moduleRef.get(WalletHoldService);
@@ -287,6 +293,7 @@ describe('Hold, release and refund (MONEY-18) on the provider seam, Nuvion stood
   });
 
   afterAll(async () => {
+    await removeSpecFees(app);
     if (prisma) {
       const rows = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },

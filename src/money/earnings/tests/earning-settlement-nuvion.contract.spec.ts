@@ -191,7 +191,7 @@ describe('Earnings land in the wallet by themselves (WALLET-16), Nuvion stood in
     expect(qres.status).toBe(200);
     const q = body<PaymentQuoteView>(qres).data!;
     // Nuvion charges what its settings say, which is what the quote says.
-    nuvion.feeKobo = () => BigInt(q.fee.providerFeeKobo);
+    nuvion.feeKobo = () => BigInt(q.fee.totalFeeKobo);
     const res = await request(app.getHttpServer())
       .post(`${BASE}/payments`)
       .set('Authorization', p.auth)

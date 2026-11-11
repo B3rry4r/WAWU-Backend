@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
+import { FeeEngineModule } from '../fees/engine/fee-engine.module';
 import { AccountLimits } from './account-limits.service';
 import { MoneyLimitSettings } from './money-limit-config';
 import { MoneyLimits } from './money-limits.service';
@@ -23,7 +24,7 @@ import { MoneyLimits } from './money-limits.service';
  * is mounted.
  */
 @Module({
-  imports: [ConfigModule, WalletProviderModule],
+  imports: [ConfigModule, WalletProviderModule, FeeEngineModule],
   providers: [MoneyLimitSettings, AccountLimits, MoneyLimits],
   exports: [MoneyLimitSettings, AccountLimits, MoneyLimits],
 })

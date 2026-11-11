@@ -60,6 +60,7 @@ import type {
   FeeQuoteView,
   HoldView,
   PaymentQuoteView,
+  PaymentSourceView,
   PaymentStatus,
   PaymentView,
 } from '../money-view.type';
@@ -586,10 +587,22 @@ export class WalletPaymentService implements OnModuleInit {
       title: target.title.slice(0, 200),
       payeeWawuUserId: target.payee?.wawuUserId ?? null,
       priceKobo: BigInt(price),
-      providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
+      // FEE-01: under the fee engine the quote shows one fee; the split between
+      // Nuvion's charge and WAWU's stays inside, on the row.
+      providerFeeKobo: BigInt(
+        this.fees.legSplit(
+          { kind: 'purchase', amountKobo: target.priceKobo },
+          fee.fee,
+        ).providerFeeKobo,
+      ),
       // WAWU's fee riding inside the price (a bill's) is recorded here too, so
       // fee reports see it; the total the person pays is the quote's.
-      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo + (target.wawuFeeKobo ?? 0)),
+      wawuFeeKobo: BigInt(
+        this.fees.legSplit(
+          { kind: 'purchase', amountKobo: target.priceKobo },
+          fee.fee,
+        ).wawuFeeKobo + (target.wawuFeeKobo ?? 0),
+      ),
       totalKobo: BigInt(fee.totalKobo),
       payeeShareKobo: BigInt(split.payeeShareKobo),
       wawuShareKobo: BigInt(split.wawuShareKobo),
@@ -1820,7 +1833,49 @@ export class WalletPaymentService implements OnModuleInit {
       remainingTodayKobo: standing.remainingTodayKobo,
       quoteToken: this.fx().tokenOf(sq.row),
       expiresAt: sq.row.expiresAt.toISOString(),
-      source: sq.view,
+      ...this.foreignFields(sq.view),
+    };
+  }
+
+  /**
+   * FEE-01 (R-139, lead ruling 1): under the fee engine the app sees one fee, so the provider's charge on
+   * a payment from another currency is folded into WAWU's line (the total is unchanged) and never shown
+   * apart. Outside the engine the view is returned as it is.
+   */
+  private foldCharge<
+    T extends { providerFeeMinor: number; wawuFeeMinor: number },
+  >(view: T): T {
+    if (!this.fees.engineOn) return view;
+    return {
+      ...view,
+      providerFeeMinor: 0,
+      wawuFeeMinor: view.wawuFeeMinor + view.providerFeeMinor,
+    };
+  }
+
+  /** The quote's `source` and, under the engine, the six added fields in the source currency. */
+  private foreignFields(
+    view: PaymentSourceView,
+  ): Pick<
+    PaymentQuoteView,
+    | 'source'
+    | 'currency'
+    | 'feeMinor'
+    | 'vatMinor'
+    | 'vatOn'
+    | 'totalMinor'
+    | 'receiveMinor'
+  > {
+    const source = this.foldCharge(view);
+    if (!this.fees.engineOn) return { source };
+    return {
+      source,
+      currency: source.currency,
+      feeMinor: source.wawuFeeMinor,
+      vatMinor: 0,
+      vatOn: false,
+      totalMinor: source.totalMinor,
+      receiveMinor: source.amountMinor,
     };
   }
 
@@ -2161,6 +2216,17 @@ export class WalletPaymentService implements OnModuleInit {
       remainingTodayKobo: fee.remainingTodayKobo,
       quoteToken: fee.quoteToken,
       expiresAt: fee.expiresAt,
+      // FEE-01, additive: the fee quote's own figures, present under Nuvion only.
+      ...(fee.feeMinor === undefined
+        ? {}
+        : {
+            currency: fee.currency,
+            feeMinor: fee.feeMinor,
+            vatMinor: fee.vatMinor,
+            vatOn: fee.vatOn,
+            totalMinor: fee.totalMinor,
+            receiveMinor: target.priceKobo,
+          }),
     };
   }
 
@@ -2645,13 +2711,20 @@ export class WalletPaymentService implements OnModuleInit {
     hold: HoldView | null = null,
     fx: WalletPaymentFx | null = null,
   ): PaymentView {
-    const providerFeeKobo = koboNumber(p.providerFeeKobo);
+    // FEE-01: under the fee engine the person sees one fee, WAWU's.
+    const providerFeeKobo = this.fees.engineOn
+      ? 0
+      : koboNumber(p.providerFeeKobo);
+    const engineExtra = this.fees.engineOn ? koboNumber(p.providerFeeKobo) : 0;
     // A WAWU fee that rides inside the price (a bill's) is not an extra charge
     // on top of it: the fee shown is the one that adds up to the total.
     const wawuOnTop =
-      koboNumber(p.priceKobo) + providerFeeKobo + koboNumber(p.wawuFeeKobo) ===
+      koboNumber(p.priceKobo) +
+        providerFeeKobo +
+        engineExtra +
+        koboNumber(p.wawuFeeKobo) ===
       koboNumber(p.totalKobo);
-    const wawuFeeKobo = wawuOnTop ? koboNumber(p.wawuFeeKobo) : 0;
+    const wawuFeeKobo = wawuOnTop ? koboNumber(p.wawuFeeKobo) + engineExtra : 0;
     const status = p.status as PaymentStatus;
     // The buyer's claim on the item (`openKey`) is given up exactly when what
     // was paid for is delivered, or when there is nothing to deliver
@@ -2683,7 +2756,9 @@ export class WalletPaymentService implements OnModuleInit {
             : null,
       createdAt: p.createdAt.toISOString(),
       completedAt: p.completedAt ? p.completedAt.toISOString() : null,
-      ...(fx && this.foreign ? { source: this.foreign.paidFrom(fx) } : {}),
+      ...(fx && this.foreign
+        ? { source: this.foldCharge(this.foreign.paidFrom(fx)) }
+        : {}),
     };
   }
 }

@@ -472,6 +472,25 @@ export interface FeeQuoteView {
    * Hub makes no promise and the screen draws no line.
    */
   arrivalMinutes?: number;
+  /**
+   * FEE-01 (R-139), additive. Present when the fee engine prices the move (Nuvion); absent under Fintava. The move's currency (`NGN` for every kind the
+   * wallet quotes today).
+   */
+  currency?: string;
+  /**
+   * WAWU's fee on this move, in minor units, as the fee schedule works it
+   * out (R-139 point 1). Under a provider with no schedule it is the fee
+   * the quote already showed.
+   */
+  feeMinor?: number;
+  /** VAT on that fee, in minor units; 0 while VAT is off. Shown apart from the fee. */
+  vatMinor?: number;
+  /** Whether VAT is switched on. */
+  vatOn?: boolean;
+  /** What the person pays: the amount, the fee and VAT. Equals `totalKobo` for a naira quote. */
+  totalMinor?: number;
+  /** Exactly what the receiver gets. Equals `amountKobo` for a naira quote. */
+  receiveMinor?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -596,6 +615,20 @@ export interface PaymentQuoteView {
   quoteToken: string;
   /** After this the quote is no longer honoured; ask for a new one. */
   expiresAt: string;
+  /**
+   * FEE-01 (R-139), additive. Present always under Nuvion, absent under
+   * Fintava (main's answer stays byte-identical). A payment from the wallet is
+   * a move inside the app, priced by `wallet_to_wallet`; the provider's
+   * book-transfer charge is in none of these.
+   */
+  currency?: string;
+  feeMinor?: number;
+  vatMinor?: number;
+  vatOn?: boolean;
+  /** What the person pays: the price, the fee and VAT. */
+  totalMinor?: number;
+  /** What the payee gets: the price. */
+  receiveMinor?: number;
   /**
    * PAY-FX (R-91): present only when the quote was asked for with a
    * `sourceCurrency`. The price above stays naira; this is what the buyer's

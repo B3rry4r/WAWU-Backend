@@ -1929,12 +1929,56 @@ export function buildRegistry(
     onOff,
   );
   other(
+    'fx.product.local_usd_in.on',
+    'Receiving dollars from local banks: 1 is on, 0 is off',
+    'count',
+    [
+      'GET /money/fx/products, the dollar receiving routes (FEE-01, R-139 point 3)',
+    ],
+    onOff,
+  );
+  other(
     'fx.product.crypto_send.on',
     'Sending USDT, USDC or RLUSD to an outside address: 1 is on, 0 is off',
     'count',
     ['POST /money/fx/sends (WALLET-21, R-84)'],
     onOff,
   );
+
+  // ---- Fees: tax and the smallest withdrawal (FEE-01, R-139 points 8 and 10) ----
+  other(
+    'tax.vat_on',
+    "VAT on WAWU's fee: 1 is on, 0 is off (off until the tax adviser confirms)",
+    'count',
+    ['GET /money/fees/quote, GET /admin/money/fees/preview (FEE-01, R-139)'],
+    onOff,
+  );
+  other(
+    'tax.vat_percent',
+    'VAT rate, as a percent with up to four decimals (for example 7.5)',
+    'percent',
+    ['GET /money/fees/quote, GET /admin/money/fees/preview (FEE-01, R-139)'],
+    (raw) => {
+      if (typeof raw !== 'string' || !/^\d{1,3}(\.\d{1,4})?$/.test(raw)) {
+        throw new SettingInvalid(
+          'needs a percent written in digits, such as 7.5',
+        );
+      }
+      if (Number(raw) > 100) throw new SettingInvalid('cannot be above 100');
+      return raw;
+    },
+  );
+  add({
+    key: 'money.min_withdrawal_minor',
+    group: 'Fees',
+    label:
+      'The smallest withdrawal or payout, per currency, in its smallest unit (lines like "NGN 100000" or "USD 500")',
+    unit: 'lines',
+    usedBy: ['Bank sends and dollar payouts (FEE-01, R-139 point 8)'],
+    provisional: null,
+    default: extra('money.min_withdrawal_minor', []),
+    parse: currencyLimits,
+  });
 
   // ---- A wallet for a person outside Nigeria (WALLET-41, R-87) ----
   other(

@@ -47,9 +47,10 @@ import type { Wallets } from '../plans/tier-purchase-harness';
  */
 
 /** Spec values for Nuvion's three fee settings, kobo by band (nuvion-fee-config.ts). */
-export const HARNESS_NUVION_FEE_BANDS = '0:2325,500000:1575';
-const harnessFee = (amountKobo: bigint): bigint =>
-  amountKobo < 500_000n ? 2325n : 1575n;
+/** One flat charge: the fee schedule (R-139) has no steps, so the stand-in's charge has none either. */
+export const HARNESS_NUVION_FEE_BANDS = '2325';
+export const HARNESS_FLAT_FEE_KOBO = 2325;
+const harnessFee = (): bigint => BigInt(HARNESS_FLAT_FEE_KOBO);
 
 /** WAWU's operational account starts with this much, kobo (the double's merchant wallet held more than any spec spends). */
 const OPERATIONAL_START_KOBO = 5_000_000_000n;

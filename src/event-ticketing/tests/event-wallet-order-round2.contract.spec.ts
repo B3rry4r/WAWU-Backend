@@ -25,7 +25,7 @@ import type {
 const REGULAR = 750_000;
 const VIP = 2_000_000;
 const PRICE = REGULAR + VIP;
-const FEE = 1_575;
+const FEE = 2_325;
 const TOTAL = PRICE + FEE;
 const START = 10_000_000;
 const LATER = () => new Date(Date.now() + 6 * 60 * 60_000);

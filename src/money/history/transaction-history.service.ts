@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { FeeQuoteService } from '../fees/fee-quote.service';
 import { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type {
@@ -280,7 +281,11 @@ function checkedMonth(month: string): string {
  */
 @Injectable()
 export class TransactionHistoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** FEE-01: under the fee engine the person sees one fee (R-139, lead ruling 1). */
+    @Optional() private readonly fees?: FeeQuoteService,
+  ) {}
 
   async list(
     wallet: OpenWallet,
@@ -524,6 +529,11 @@ export class TransactionHistoryService {
           ? null
           : koboFromText(r.wawuFeeKobo),
     });
+    // One fee in the app: what was quoted and paid, never Nuvion's part apart from WAWU's.
+    if (this.fees?.engineOn && r.direction === 'out') {
+      fee.wawuFeeKobo += fee.providerFeeKobo;
+      fee.providerFeeKobo = 0;
+    }
     const isKind = (k: string | null): k is PaymentKind =>
       k !== null && (PAYMENT_KINDS as readonly string[]).includes(k);
     const link =

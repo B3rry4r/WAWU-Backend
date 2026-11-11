@@ -1,6 +1,8 @@
 import type { WalletProviderName } from '../../wallet-provider/wallet-provider.interface';
 import type { BillCategory } from '../dto/money-enums';
 import type { FeeSettings } from './fee-config';
+import { FeeScheduleService } from './engine/fee-schedule.service';
+import type { ProviderRateService } from './engine/provider-rate.service';
 import {
   feeOf,
   type FeeRule,
@@ -117,4 +119,32 @@ export function unsetFeeSettings(
   get: (key: string) => string | undefined | null,
 ): readonly string[] {
   return provider === 'nuvion' ? readNuvionFees(get).unset : [];
+}
+
+/**
+ * Nuvion's part of a quote under the fee engine (FEE-01): the charge the
+ * provider is expected to make, from the provider-rate table, never from the
+ * NUVION_FEE_* settings. `unset` is the kinds with no WAWU fee row in force:
+ * the quote answers `fees_not_set` while it is not empty.
+ */
+export function engineFeeSchedule(
+  rates: ProviderRateService,
+  schedule: FeeScheduleService,
+): ProviderFeeSchedule {
+  const charge = (kind: string, amount: number): number =>
+    Number(rates.expected(kind, 'NGN', BigInt(amount)).minor);
+  return {
+    provider: 'nuvion',
+    get unset(): readonly string[] {
+      return FeeScheduleService.CORE_KINDS.filter((k) => !schedule.isSet(k));
+    },
+    bills: false,
+    merchantMaxPerTxnKobo: null,
+    walletToWalletKobo: (amountKobo) => charge('wallet_to_wallet', amountKobo),
+    bankTransferKobo: (amountKobo) => charge('ngn_bank_withdrawal', amountKobo),
+    billChargeKobo: () => {
+      throw new Error('Nuvion has no bill payments.');
+    },
+    inflowKobo: (amountKobo) => charge('ngn_add_money', amountKobo),
+  };
 }

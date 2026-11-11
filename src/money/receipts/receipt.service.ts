@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { FeeQuoteService } from '../fees/fee-quote.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { OpenWallet } from '../gate/wallet-gate';
 import { TransactionHistoryService } from '../history/transaction-history.service';
@@ -53,6 +54,8 @@ export class ReceiptService {
     private readonly history: TransactionHistoryService,
     private readonly wallets: WalletOpeningSettings,
     private readonly settings: ReceiptSettings,
+    /** FEE-01: under the fee engine a receipt shows one fee. */
+    @Optional() private readonly fees?: FeeQuoteService,
   ) {
     this.drawing = new DrawLimiter(
       settings.renderConcurrency,
@@ -183,7 +186,12 @@ export class ReceiptService {
       to: parties.to,
       bankName: this.wallets.bankName,
       licenceLine: this.wallets.licenceLine,
-      lines: receiptLines(tx, parties, this.wallets.bankName),
+      lines: receiptLines(
+        tx,
+        parties,
+        this.wallets.bankName,
+        this.fees?.engineOn === true,
+      ),
       issuedAt: receipt.createdAt.toISOString(),
     };
   }

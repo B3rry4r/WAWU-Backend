@@ -9,7 +9,8 @@ import {
 } from './fx-currencies';
 
 /** The three products an admin switches off one by one. */
-export type FxProduct = 'open_account' | 'swap' | 'crypto_send';
+export type FxProduct =
+  'open_account' | 'swap' | 'crypto_send' | 'local_usd_in';
 
 /** The currencies a fee or a daily limit can be set for: ours, and the naira side of a swap. */
 const CONFIGURABLE: readonly string[] = [

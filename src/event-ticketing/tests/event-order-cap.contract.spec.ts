@@ -29,7 +29,7 @@ import type {
  */
 
 const REGULAR = 750_000;
-const FEE = 1_575;
+const FEE = 2_325;
 const TOTAL = REGULAR + FEE;
 const START = 100_000_000;
 const ADMIN = {
