@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { THUMB_SIZES, type ThumbSize } from './thumb-keys';
+import type { ThumbSize } from './thumb-keys';
 
 /**
  * HUB-THUMBS: makes the two small copies of a picture with `sharp` (libvips, its prebuilt linux-x64 binary).
@@ -16,13 +16,37 @@ import { THUMB_SIZES, type ThumbSize } from './thumb-keys';
  * orientation to the pixels, so a phone photo taken sideways is not turned on its side once the tag is gone.
  */
 export const MAX_THUMB_SOURCE_BYTES = 25 * 1024 * 1024;
-export const MAX_THUMB_SOURCE_PIXELS = 50_000_000;
+/** The most pixels a picture may have (25 megapixels: a 5000 x 5000 photo; phone cameras of 12 to 24 MP pass). */
+export const MAX_THUMB_SOURCE_PIXELS = 25_000_000;
+/**
+ * The most memory, in bytes, the decoded picture may take (HUB-THUMBS round 1). A picture is decoded ONCE, and what it
+ * takes is pixels x channels x bytes per sample, doubled for an interlaced PNG (the decoder holds the whole image
+ * and a second pass). 120 MB is a 25 MP 8-bit RGB photo (75 MB) or a 15 MP 8-bit RGBA PNG; a 16-bit or interlaced
+ * picture of the same size is refused (it gets no copies and uploads as it always did). Measured in
+ * make-thumbs memory table of tasks/history/HUB-THUMBS.md.
+ */
+export const MAX_THUMB_DECODE_BYTES = 120 * 1024 * 1024;
 const WEBP_QUALITY = 78;
 
 /** A picture the Hub will not (or cannot) make copies of: the same bytes will fail again. */
 export class UnreadablePicture extends Error {}
 
 sharp.cache(false);
+
+/** Bytes the decoded picture takes in memory, from its header. */
+export function decodedBytes(m: sharp.Metadata): number {
+  const bytesPerSample =
+    m.depth === 'ushort' || m.depth === 'short'
+      ? 2
+      : m.depth === 'float' || m.depth === 'uint' || m.depth === 'int'
+        ? 4
+        : 1;
+  const channels = Math.max(m.channels ?? 4, 1);
+  const interlaced = m.format === 'png' && m.isProgressive ? 2 : 1;
+  return (
+    (m.width ?? 0) * (m.height ?? 0) * channels * bytesPerSample * interlaced
+  );
+}
 
 export async function makeThumbs(
   input: Buffer,
@@ -34,35 +58,39 @@ export async function makeThumbs(
       animated: false,
       sequentialRead: true,
     });
-  let width: number | undefined;
-  let height: number | undefined;
   try {
-    ({ width, height } = await open().metadata());
+    const m = await open().metadata();
+    if (!m.width || !m.height)
+      throw new UnreadablePicture('the picture has no size');
+    if (m.width * m.height > MAX_THUMB_SOURCE_PIXELS)
+      throw new UnreadablePicture('the picture has too many pixels');
+    if (decodedBytes(m) > MAX_THUMB_DECODE_BYTES)
+      throw new UnreadablePicture(
+        'the picture would take too much memory to read',
+      );
+    // Decoded ONCE: the 640 px copy comes from the original, the 96 px copy from the 640 px result.
+    const big = await open()
+      .rotate()
+      .resize({
+        width: 640,
+        height: 640,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: WEBP_QUALITY })
+      .toBuffer();
+    const small = await sharp(big)
+      .resize({
+        width: 96,
+        height: 96,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: WEBP_QUALITY })
+      .toBuffer();
+    return { 96: small, 640: big };
   } catch (e) {
-    throw new UnreadablePicture(e instanceof Error ? e.message : String(e));
-  }
-  if (!width || !height) throw new UnreadablePicture('the picture has no size');
-  if (width * height > MAX_THUMB_SOURCE_PIXELS)
-    throw new UnreadablePicture('the picture has too many pixels');
-  try {
-    const made = await Promise.all(
-      THUMB_SIZES.map((size) =>
-        open()
-          .rotate()
-          .resize({
-            width: size,
-            height: size,
-            fit: 'inside',
-            withoutEnlargement: true,
-          })
-          .webp({ quality: WEBP_QUALITY })
-          .toBuffer(),
-      ),
-    );
-    return Object.fromEntries(
-      THUMB_SIZES.map((s, i) => [s, made[i]]),
-    ) as Record<ThumbSize, Buffer>;
-  } catch (e) {
+    if (e instanceof UnreadablePicture) throw e;
     throw new UnreadablePicture(e instanceof Error ? e.message : String(e));
   }
 }

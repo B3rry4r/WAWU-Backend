@@ -44,7 +44,8 @@ export type ThumbOutcome = 'made' | 'have' | 'skipped' | 'busy' | 'left';
 
 /** The most time the picture work may take (decode, resize, encode of both copies). */
 export const THUMB_WORK_MS = 8_000;
-const AT_ONCE = 2;
+/** One picture at a time in the whole process: the confirm only waits 2.5 s, the rest is background work. */
+const AT_ONCE = 1;
 /** More than this waiting: the work is skipped and the sweep picks the picture up later. */
 const MAX_WAITING = 40;
 const REMEMBER = 5000;

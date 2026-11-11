@@ -18,7 +18,9 @@ import { StorageService } from '../storage.service';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import { AppClientMiddleware } from '../../price-list/app-client';
 import {
+  decodedBytes,
   makeThumbs,
+  MAX_THUMB_DECODE_BYTES,
   MAX_THUMB_SOURCE_PIXELS,
   UnreadablePicture,
 } from '../thumbs/make-thumbs';
@@ -486,6 +488,8 @@ describe('a bad picture never fails or slows the path (4)', () => {
     const started = Date.now();
     await w.service.ensureThumbs(SLOW);
     expect(Date.now() - started).toBeLessThan(4000);
+    // The copy job is still holding the process-wide queue: let it end before the next test.
+    await new Promise((r) => setTimeout(r, 4500));
   }, 15000);
 });
 
@@ -515,5 +519,70 @@ describe('serving the copies (5)', () => {
   it('serves nothing for a picture with only one of its two copies', async () => {
     const w = world({}, [own(AVATAR), own(`avatars/${OWNER}/a1.t96.webp`)]);
     expect(await asApp(() => w.service.thumbsFor([AVATAR]))).toEqual([null]);
+  });
+});
+
+describe('memory (round 1): the worst picture accepted stays small', () => {
+  it('counts what a picture takes once decoded, doubled for an interlaced PNG', () => {
+    const png16il = {
+      width: 7000,
+      height: 7000,
+      channels: 4,
+      depth: 'ushort',
+      format: 'png',
+      isProgressive: true,
+    } as sharp.Metadata;
+    expect(decodedBytes(png16il)).toBe(7000 * 7000 * 4 * 2 * 2);
+    expect(decodedBytes(png16il)).toBeGreaterThan(MAX_THUMB_DECODE_BYTES);
+    const photo = {
+      width: 5000,
+      height: 5000,
+      channels: 3,
+      depth: 'uchar',
+      format: 'jpeg',
+    } as sharp.Metadata;
+    expect(decodedBytes(photo)).toBeLessThanOrEqual(MAX_THUMB_DECODE_BYTES);
+  });
+
+  it('refuses a 16-bit interlaced RGBA PNG whose decode would take over the budget, before decoding it', async () => {
+    const png = await sharp(Buffer.alloc(3000 * 3000 * 4 * 2, 0x40), {
+      raw: { width: 3000, height: 3000, channels: 4, depth: 'ushort' },
+    } as unknown as sharp.SharpOptions)
+      .toColourspace('rgb16')
+      .png({ bitdepth: 16, progressive: true } as sharp.PngOptions)
+      .toBuffer();
+    const started = Date.now();
+    await expect(makeThumbs(png)).rejects.toThrow('too much memory');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('makes one picture at a time in the whole process, however many confirms arrive', async () => {
+    let now = 0;
+    let most = 0;
+    const photoBuf = await photo(800, 600);
+    const mk = (k: string) =>
+      ensureThumbsFor(
+        {
+          logger: { log: () => undefined, warn: () => undefined },
+          enabled: true,
+          rowOf: async () => own(k),
+          haveRows: async () => new Set(),
+          read: async () => {
+            now += 1;
+            most = Math.max(most, now);
+            await new Promise((r) => setTimeout(r, 30));
+            return photoBuf;
+          },
+          put: async (p: { key: string }) => {
+            if (p.key.endsWith('.t640.webp')) now -= 1;
+          },
+          discard: async () => undefined,
+        },
+        k,
+      );
+    const keys = [1, 2, 3, 4, 5].map((n) => `avatars/${OWNER}/q${n}.jpg`);
+    const out = await Promise.all(keys.map(mk));
+    expect(out.every((o) => o === 'made')).toBe(true);
+    expect(most).toBe(1);
   });
 });
