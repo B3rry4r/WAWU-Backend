@@ -599,6 +599,32 @@ export class AccountDeletionSweepService {
     return removed;
   }
 
+  /**
+   * OPS-DEL-TEST: the sweep's own purge steps for ONE account, now. Used only
+   * by scripts/ops/delete-test-account.ts, which has already recorded the
+   * deletion (status `purging`, WAWU ID told). It takes no other account's row
+   * and runs nothing else the pass runs. Returns the pass's own outcome word.
+   */
+  async purgeNow(wawuUserId: string): Promise<string> {
+    const row = await this.prisma.accountDeletion.findUnique({
+      where: { wawuUserId },
+      select: {
+        wawuUserId: true,
+        purgeAttempts: true,
+        status: true,
+        identityMarkedAt: true,
+      },
+    });
+    if (!row || row.status === 'purged' || row.status === 'cancelled') {
+      return 'no_row';
+    }
+    return this.purgeOne(
+      row,
+      new Date(),
+      new PassGuard(PASS_BUDGET_MS, PASS_OUTAGE_FAILURES),
+    );
+  }
+
   private async purgeOne(
     row: DueDeletion,
     now: Date,
