@@ -10,7 +10,11 @@ import {
  * `provider` column (or one named for a provider's id), an entity id or a BVN claim must be classified in KIND_TABLE,
  * each with a reason. A new such table fails this spec until someone decides what the reset does to it.
  */
-const HOLDS_NUVION =
+export const HOLDS_NUVION =
+  /^(provider|walletProvider|paymentProvider|bvnHash|entityId|fromEntityId|toEntityId|ban|customerId|walletId|accountId)$|^nuvion|^provider(?!Fee)[A-Z]|[cC]ounterpartyId$|[pP]aymentDetailId$|^fintava[A-Z]|[tT]ransactionId$|^(merchant|destination|recipient)AccountNumber$/i;
+
+/** The regex round 0 shipped. It missed counterpartyId, paymentDetailId and fintava* columns (SchoolPayee, WalletBill). */
+const NARROW =
   /^(provider|walletProvider|paymentProvider|bvnHash|entityId|fromEntityId|toEntityId|ban)$|^nuvion|^provider(?!Fee)[A-Z]/i;
 
 /** Model name to its field names, read from the schema file. */
@@ -29,11 +33,12 @@ function schemaModels(schema: string): Map<string, string[]> {
   return out;
 }
 
-function flagged(models: Map<string, string[]>): string[] {
+function flagged(
+  models: Map<string, string[]>,
+  holds: RegExp = HOLDS_NUVION,
+): string[] {
   return [...models]
-    .filter(
-      ([n, f]) => /^Nuvion/.test(n) || f.some((x) => HOLDS_NUVION.test(x)),
-    )
+    .filter(([n, f]) => /^Nuvion/.test(n) || f.some((x) => holds.test(x)))
     .map(([n]) => n)
     .sort();
 }
@@ -56,6 +61,50 @@ describe('the Nuvion live reset covers the schema (NUV-LIVE)', () => {
       'NuvionEntity',
       'WalletCard',
     ]);
+  });
+
+  it('SchoolPayee and WalletBill are flagged, and classified', () => {
+    for (const n of ['SchoolPayee', 'WalletBill', 'SchoolSettlement']) {
+      expect(flagged(models)).toContain(n);
+      expect(classified.has(n)).toBe(true);
+    }
+  });
+
+  it('the regex fails a narrower one: a fake model with each kind of provider id column is flagged', () => {
+    const fake = (col: string) =>
+      schemaModels(`model Fake {\n  id String @id\n  ${col} String?\n}\n`);
+    for (const col of [
+      'counterpartyId',
+      'paymentDetailId',
+      'fintavaReference',
+      'fintavaTransactionId',
+      'providerTransactionId',
+      'destinationAccountNumber',
+      'merchantAccountNumber',
+      'customerId',
+      'walletId',
+      'nuvionOrderId',
+      'provider',
+    ]) {
+      expect(flagged(fake(col))).toEqual(['Fake']);
+    }
+    // The round 0 regex missed these, which is how SchoolPayee got through: a narrower regex fails here.
+    for (const col of [
+      'counterpartyId',
+      'paymentDetailId',
+      'fintavaReference',
+    ]) {
+      expect(flagged(fake(col), NARROW)).toEqual([]);
+    }
+    // And a column with no provider id in it is not flagged.
+    expect(flagged(fake('title'))).toEqual([]);
+    // Run over the real schema, the narrow regex leaves models unclassified that the wide one finds.
+    const missed = flagged(models).filter(
+      (n) => !flagged(models, NARROW).includes(n),
+    );
+    expect(missed).toEqual(
+      expect.arrayContaining(['SchoolPayee', 'WalletBill']),
+    );
   });
 
   it('every classified model exists, has a reason, and every step names a classified model', () => {

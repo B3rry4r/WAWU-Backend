@@ -14,12 +14,17 @@
  * Refuses unless proveTestProvider (delete-test-account.ts) shows WALLET_PROVIDER=nuvion on Nuvion's sandbox host. On live
  * keys it refuses, so it can never touch a live wallet.
  *
- * A person is KEPT, untouched, and listed, when they hold a row that is not provably Nuvion test money: Flutterwave, a store
- * purchase that is not a store sandbox one, credits bought with money, any row of another wallet provider, or a table whose
- * provider is unclear (scripts/ops/real-money-rows.ts, the same rows OPS-DEL-TEST refuses on). Also kept: a person with a
- * payment, hold, transfer or refund in motion with a kept person (closing it would touch the kept person's side). There is
- * no flag that overrides it. A kept person still carries test records: do not move the server to live keys until each is
- * settled by hand (the command says so at the end).
+ * The unit retired is the Nuvion TEST WALLET of every person who has one: wallet, entity, accounts, opening, onboarding,
+ * documents, identity rows, BVN and phone claims, and every Nuvion-provider money row that is provably test money. Real
+ * money (Flutterwave, a store purchase that is not a sandbox one, Fintava, other providers) is never a Nuvion row, so no
+ * step reaches it, and a person holding real money is retired all the same. WAWU Credits and Studio points are counts and
+ * are never touched. A credit balance is never a reason to keep anything.
+ *
+ * What stays untouched, and is listed row by row, is a Nuvion-provider row that cannot be proven test money: an earning
+ * of a REAL store purchase waiting for a wallet (R-11), a store-refund debt, a payout of such an earning. If such a row
+ * holds a Nuvion test id that a live sweep would use (an unfinished store payout: it carries the test merchant account and
+ * the test destination account), that person's apply is REFUSED and the row is listed. No flag overrides it; the owner
+ * settles that row first.
  *
  * What it does to each kind of row is in scripts/ops/nuvion-live-reset-kinds.ts (KIND_TABLE and STEPS), one reason each. A
  * retired row's provider reads `nuvion_test`, which no server runs.
@@ -37,15 +42,12 @@ import { PointsService } from '../../src/points/points.service';
 import { PrismaModule } from '../../src/common/prisma/prisma.module';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { proveTestProvider } from './delete-test-account';
-import { findRealMoneyRows, type RealMoneyRow } from './real-money-rows';
 import {
   CLOSED_WORDS,
   KIND_TABLE,
   type Mode,
-  PROVIDER_PARTY_TABLES,
   POINT_CONVERSION_STEP,
-  RETIRED_PROVIDER,
-  SHARED_IN_MOTION,
+  SANDBOX_STORE_PURCHASES,
   STEPS,
   type Step,
 } from './nuvion-live-reset-kinds';
@@ -191,127 +193,131 @@ async function discover(db: Db): Promise<string[]> {
   parts.push(
     `SELECT "wawuUserId" AS id FROM "PointConversion" WHERE "provider" = 'nuvion' AND "status" = 'held'`,
   );
+  // An unfinished payout of a REAL store purchase holds test account numbers: its person must be seen, to be refused.
+  parts.push(
+    `SELECT "payeeWawuUserId" AS id FROM "StoreEarningPayout" WHERE "provider" = 'nuvion' AND "status" NOT IN ('paid', 'cancelled')`,
+  );
   const rows = await db.$queryRawUnsafe<Array<{ id: string | null }>>(
     `SELECT DISTINCT id FROM (${parts.join(' UNION ')}) x WHERE id IS NOT NULL ORDER BY id`,
   );
   return rows.map((r) => r.id!);
 }
 
-const TABLE_OF_MODEL: Record<string, string> = Object.fromEntries(
-  PROVIDER_PARTY_TABLES.map((t) => [t.table.replace(/"/g, ''), t.table]),
-);
+/** A Nuvion-provider row that is not provably test money: it stays, untouched, and is listed. */
+export interface StayRow {
+  person: string;
+  table: string;
+  id: string;
+  status: string;
+  amountKobo: string;
+  /** True when the row holds or points at a Nuvion test id that a live sweep, retry or webhook would use. */
+  refuses: boolean;
+  why: string;
+}
 
-/** The rows that make a person not provably test money. Run on the Hub's handle or inside the transaction. */
-export async function keepReasons(db: Db, id: string): Promise<RealMoneyRow[]> {
-  const found = await findRealMoneyRows(db as PrismaService, id, 'nuvion');
-  const out: RealMoneyRow[] = [];
-  for (const r of found) {
-    // The command's own cache columns on a payout account are not money.
-    if (r.table === 'MoneyPayoutAccount') continue;
-    // A row this command already retired is not another provider's money.
-    const t = TABLE_OF_MODEL[r.table];
-    if (r.klass === 'provider' && t && r.id !== '?') {
-      const p = await db.$queryRawUnsafe<Array<{ provider: string | null }>>(
-        `SELECT "provider" FROM ${t} WHERE "id" = $1`,
-        r.id,
-      );
-      if (p[0]?.provider === RETIRED_PROVIDER) continue;
-    }
-    out.push(r);
-  }
-  for (const t of PROVIDER_PARTY_TABLES) {
-    const rows = await db.$queryRawUnsafe<Array<{ k: string }>>(
-      `SELECT ${t.id}::text AS k FROM ${t.table} WHERE (${t.party.map((c) => `${c} = $1`).join(' OR ')}) AND "provider" IS DISTINCT FROM 'nuvion' AND "provider" IS DISTINCT FROM '${RETIRED_PROVIDER}' LIMIT 3`,
-      id,
-    );
-    for (const r of rows)
-      out.push({
-        table: t.table.replace(/"/g, ''),
-        id: r.k,
-        status: '-',
-        amountKobo: '-',
-        klass: 'provider',
-        why: 'a row of a wallet provider other than Nuvion, or with no provider',
-      });
-  }
+const NOT_FINAL_PAYOUT = `p."status" NOT IN ('paid', 'cancelled')`;
+
+/**
+ * The Nuvion-provider rows of these people that cannot be proven test money (R-138, NUV-LIVE). Three kinds, and only these:
+ *  - StoreEarning of a store purchase that is not a sandbox one: real money owed, waits for a wallet (R-11). No id.
+ *  - EarningDeduction of a store refund of such a purchase: a real debt, taken from the next live move. No id.
+ *  - StoreEarningPayout of such an earning. A final one (paid, cancelled) is history and holds nothing a sweep reads. An
+ *    unfinished one carries the TEST merchant account and the TEST destination account and is sent from them once the
+ *    person has a live wallet, so it REFUSES the person.
+ * Every other Nuvion-provider row is a row of a test wallet or of money paid from one: provable, and retired.
+ */
+export async function stayingRows(db: Db, ids: string[]): Promise<StayRow[]> {
+  if (ids.length === 0) return [];
+  const out: StayRow[] = [];
+  const real = `NOT (e."storePurchaseId" IN (${SANDBOX_STORE_PURCHASES}))`;
+  const earnings = await db.$queryRawUnsafe<
+    Array<{ id: string; person: string; status: string; kobo: string }>
+  >(
+    `SELECT e."id", e."payeeWawuUserId" AS person, e."status", e."amountKobo"::text AS kobo FROM "StoreEarning" e
+      WHERE e."provider" = 'nuvion' AND e."status" = 'owed' AND ${real} AND e."payeeWawuUserId" = ANY(${IDS}) ORDER BY e."id"`,
+    ids,
+  );
+  for (const r of earnings)
+    out.push({
+      person: r.person,
+      table: 'StoreEarning',
+      id: r.id,
+      status: r.status,
+      amountKobo: r.kobo,
+      refuses: false,
+      why: 'real store money waiting for a wallet (R-11); no Nuvion id; stays owed and lands on the live wallet',
+    });
+  const debts = await db.$queryRawUnsafe<
+    Array<{ id: string; person: string; kobo: string }>
+  >(
+    `SELECT d."id", d."payeeWawuUserId" AS person, d."amountKobo"::text AS kobo FROM "EarningDeduction" d
+      WHERE d."provider" = 'nuvion' AND d."passRefundId" IS NULL AND d."storePurchaseId" IS NOT NULL
+        AND NOT (d."storePurchaseId" IN (${SANDBOX_STORE_PURCHASES})) AND d."payeeWawuUserId" = ANY(${IDS}) ORDER BY d."id"`,
+    ids,
+  );
+  for (const r of debts)
+    out.push({
+      person: r.person,
+      table: 'EarningDeduction',
+      id: r.id,
+      status: '-',
+      amountKobo: r.kobo,
+      refuses: false,
+      why: 'debt from a refund of a real store purchase; no Nuvion id; taken from the next live move',
+    });
+  const payouts = await db.$queryRawUnsafe<
+    Array<{ id: string; person: string; status: string; kobo: string }>
+  >(
+    `SELECT p."id", p."payeeWawuUserId" AS person, p."status", p."amountKobo"::text AS kobo FROM "StoreEarningPayout" p
+       JOIN "StoreEarning" e ON e."id" = p."storeEarningId"
+      WHERE p."provider" = 'nuvion' AND ${NOT_FINAL_PAYOUT} AND ${real} AND p."payeeWawuUserId" = ANY(${IDS}) ORDER BY p."id"`,
+    ids,
+  );
+  for (const r of payouts)
+    out.push({
+      person: r.person,
+      table: 'StoreEarningPayout',
+      id: r.id,
+      status: r.status,
+      amountKobo: r.kobo,
+      refuses: true,
+      why: 'real store money, payout not finished: it holds the TEST merchant account and TEST destination account and would be sent from them on live. Settle this row first',
+    });
   return out;
-}
-
-async function sharedEdges(db: Db): Promise<Array<[string, string]>> {
-  const edges: Array<[string, string]> = [];
-  for (const t of SHARED_IN_MOTION) {
-    const rows = await db.$queryRawUnsafe<Array<{ a: string; b: string }>>(
-      `SELECT ${t.a} AS a, ${t.b} AS b FROM ${t.table} WHERE ${t.open} AND ${t.a} IS NOT NULL AND ${t.b} IS NOT NULL AND ${t.a} <> ${t.b}`,
-    );
-    for (const r of rows) edges.push([r.a, r.b]);
-  }
-  return edges;
-}
-
-/** Closes the kept set over rows in motion: whoever shares one with a kept person is kept. */
-function closeKept(
-  kept: Map<string, string[]>,
-  edges: Array<[string, string]>,
-): void {
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const [a, b] of edges) {
-      for (const [x, y] of [
-        [a, b],
-        [b, a],
-      ]) {
-        if (kept.has(x) && !kept.has(y)) {
-          kept.set(y, [
-            'a payment, hold, transfer or refund in motion with a kept person',
-          ]);
-          changed = true;
-        }
-      }
-    }
-  }
 }
 
 interface Plan {
   persons: string[];
   retire: string[];
-  kept: Map<string, string[]>;
-  keptRows: Map<string, RealMoneyRow[]>;
+  /** People whose apply is refused, with the rows that refuse them. */
+  refused: Map<string, StayRow[]>;
+  stay: StayRow[];
 }
 
 async function makePlan(deps: Deps): Promise<Plan> {
   const { prisma } = deps;
   let persons = await discover(prisma);
   if (deps.onlyIds) persons = persons.filter((p) => deps.onlyIds!.includes(p));
-  const kept = new Map<string, string[]>();
-  const keptRows = new Map<string, RealMoneyRow[]>();
-  for (const id of persons) {
-    const rows = await keepReasons(prisma, id);
-    if (rows.length > 0) {
-      keptRows.set(id, rows);
-      kept.set(id, ['holds money that is not provably Nuvion test money']);
-    }
-  }
-  closeKept(kept, await sharedEdges(prisma));
+  const stay = await stayingRows(prisma, persons);
+  const refused = new Map<string, StayRow[]>();
+  for (const r of stay)
+    if (r.refuses) refused.set(r.person, [...(refused.get(r.person) ?? []), r]);
   return {
     persons,
-    retire: persons.filter((p) => !kept.has(p)),
-    kept,
-    keptRows,
+    retire: persons.filter((p) => !refused.has(p)),
+    refused,
+    stay,
   };
 }
 
 export interface ApplyResult {
-  kept?: string;
+  /** Why this person was refused (rows listed by the caller), when they were. */
+  refused?: StayRow[];
   counts: Record<string, number>;
 }
 
 /** One person, one transaction: lock, check again, retire. */
-async function retirePerson(
-  deps: Deps,
-  id: string,
-  keptIds: string[],
-): Promise<ApplyResult> {
+async function retirePerson(deps: Deps, id: string): Promise<ApplyResult> {
   const counts: Record<string, number> = {};
   return deps.prisma.$transaction(
     async (tx) => {
@@ -325,21 +331,14 @@ async function retirePerson(
           ids,
         );
       }
-      // 2. Checks again, now that nothing can change under us.
-      const rows = await keepReasons(tx, id);
-      if (rows.length > 0)
-        return {
-          kept: `real money appeared (${[...new Set(rows.map((r) => r.table))].join(', ')})`,
-          counts,
-        };
-      const edges = await sharedEdges(tx);
-      const kept = new Map(keptIds.map((k) => [k, ['kept']]));
-      closeKept(kept, edges);
-      if (kept.has(id))
-        return {
-          kept: 'a payment, hold, transfer or refund in motion with a kept person',
-          counts,
-        };
+      // 2. Check again, now that nothing can change under us. A payout is planned under a lock on the earning, so the
+      //    earnings are locked first, as the payout service does.
+      await tx.$queryRawUnsafe(
+        `SELECT 1 FROM "StoreEarning" WHERE "payeeWawuUserId" = ANY(${IDS}) FOR UPDATE`,
+        ids,
+      );
+      const blocking = (await stayingRows(tx, ids)).filter((r) => r.refuses);
+      if (blocking.length > 0) return { refused: blocking, counts };
       // 3. Retire.
       for (const s of stepsFor('persons')) {
         if (s.id === 'pass_refunds') {
@@ -361,9 +360,12 @@ async function retirePerson(
 export async function runUnowned(
   db: Db,
   keptIds: string[],
+  /** A test hook: run only these steps. */
+  only?: string[],
 ): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   for (const s of stepsFor('orphans')) {
+    if (only && !only.includes(s.id)) continue;
     counts[s.id] = await runStep(db, s, 'orphans', keptIds);
   }
   return counts;
@@ -394,7 +396,20 @@ async function countAll(
   return c;
 }
 
-/** Runs the command. Returns the exit code: 0 done or nothing to do, 1 refused, 2 failed. */
+/** Nuvion's live keys start with this. A key of that shape is never run against, whatever host it sits with. */
+const LIVE_KEY_PREFIX = /^["']?\s*nv_live_/i;
+
+/** The refusal for a live-shaped key, or null. The key is read here and never printed. */
+export function liveKeyRefusal(
+  get: (key: string) => string | undefined,
+): string | null {
+  const key = get('NUVION_API_KEY');
+  return key !== undefined && LIVE_KEY_PREFIX.test(key)
+    ? 'NUVION_API_KEY starts with nv_live_, the shape of a live key (the key is not printed). This command only runs while the server is still on the test keys.'
+    : null;
+}
+
+/** Runs the command. Returns the exit code: 0 done or nothing to do, 1 refused, 2 not finished (safe to run again). */
 export async function nuvionLiveReset(
   deps: Deps,
   opts: Options,
@@ -414,24 +429,28 @@ export async function nuvionLiveReset(
     return refuse(
       `the wallet provider is ${proof.provider}, not nuvion. This command retires Nuvion test records only.`,
     );
+  const keyWhy = liveKeyRefusal(deps.getEnv);
+  if (keyWhy) return refuse(keyWhy);
 
   const plan = await makePlan(deps);
-  const keptIds = [...plan.kept.keys()];
+  const heldBack = [...plan.refused.keys()];
   const personTotals = await countAll(prisma, 'persons', plan.retire);
   // With a test hook narrowing the people, the unowned rows of a shared test database are not this run's.
   const orphanTotals = deps.onlyIds
     ? {}
-    : await countAll(prisma, 'orphans', [...keptIds, ...plan.retire]);
+    : await countAll(prisma, 'orphans', [...heldBack, ...plan.retire]);
   const phrase = phraseFor(plan.retire.length);
 
   out(opts.apply ? 'APPLY' : 'DRY RUN (nothing is written)');
-  out(`Provider: ${proof.provider}, ${proof.environment}. ${proof.proof}`);
+  out(
+    `Provider: ${proof.provider}, ${proof.environment}. ${proof.proof}. The key does not start with nv_live_ (it is not printed).`,
+  );
   out(
     'This command calls no provider. It reads and writes the Hub database only.',
   );
   out(`People with a record of the test system: ${plan.persons.length}`);
   out(`  to retire: ${plan.retire.length}`);
-  out(`  kept (not provably test money): ${plan.kept.size}`);
+  out(`  refused (a row that cannot be proven test money): ${heldBack.length}`);
 
   const names: Record<string, string> = {};
   for (const s of STEPS) names[s.id] = `${s.model} (${s.id})`;
@@ -445,7 +464,7 @@ export async function nuvionLiveReset(
   for (const [id, n] of Object.entries(personTotals))
     if (n > 0) line(id, n, '');
   out(
-    "And for rows that belong to no kept person (unowned, WAWU's own test account, logs):",
+    "And for rows that belong to no refused person (unowned, WAWU's own test account, logs):",
   );
   for (const [id, n] of Object.entries(orphanTotals))
     if (n > 0) line(id, n, '');
@@ -457,25 +476,31 @@ export async function nuvionLiveReset(
       .map(([k, n]) => `${k} ${n}`);
     out(`Person ${id}: ${parts.join(', ') || 'nothing'}`);
   }
-  for (const [id, why] of plan.kept) {
-    out(`KEPT ${id}: ${why.join('; ')}`);
-    for (const r of plan.keptRows.get(id) ?? [])
+  if (plan.stay.length > 0) {
+    out(
+      'Rows that STAY untouched (Nuvion rows that cannot be proven test money; real store money, kept for the live wallet):',
+    );
+    for (const r of plan.stay)
       out(
-        `    ${r.table} ${r.id} status ${r.status} amount ${r.amountKobo} kobo [${r.klass}: ${r.why}]`,
+        `  ${r.refuses ? 'REFUSES ' : ''}${r.table} ${r.id} of ${r.person} status ${r.status} amount ${r.amountKobo} kobo: ${r.why}`,
       );
   }
+  for (const id of heldBack)
+    out(
+      `REFUSED ${id}: ${plan.refused.get(id)!.length} row(s) above hold a Nuvion test id that live Nuvion would be sent. This person is not retired.`,
+    );
   out(
     `Totals: ${plan.retire.length} people, ${sum(personTotals)} rows for them, ${sum(orphanTotals)} unowned rows`,
   );
   if (plan.retire.length === 0 && sum(orphanTotals) === 0) {
     out('Nothing to retire.');
-    if (plan.kept.size > 0) keptWarning(out, plan.kept.size);
-    return 0;
+    if (heldBack.length > 0) refusedWarning(out, heldBack.length);
+    return opts.apply && heldBack.length > 0 ? 2 : 0;
   }
   out(`Confirmation phrase: ${phrase}`);
   if (!opts.apply) {
     out('Dry run only. To retire: add --apply --confirm "<the phrase above>".');
-    if (plan.kept.size > 0) keptWarning(out, plan.kept.size);
+    if (heldBack.length > 0) refusedWarning(out, heldBack.length);
     return 0;
   }
   if (opts.confirm === undefined)
@@ -489,10 +514,12 @@ export async function nuvionLiveReset(
   for (const id of plan.retire) {
     try {
       await deps.beforePerson?.(id);
-      const res = await retirePerson(deps, id, keptIds);
-      if (res.kept) {
+      const res = await retirePerson(deps, id);
+      if (res.refused) {
         stopped.push(id);
-        out(`Kept ${id}: ${res.kept}.`);
+        out(
+          `Refused ${id}: a row appeared that holds a Nuvion test id (${res.refused.map((r) => `${r.table} ${r.id}`).join(', ')}). Not retired.`,
+        );
       } else {
         done++;
         out(
@@ -511,10 +538,10 @@ export async function nuvionLiveReset(
       );
     }
   }
-  const allKept = [...keptIds, ...stopped, ...failures];
+  const allHeld = [...heldBack, ...stopped, ...failures];
   try {
     // With a test hook narrowing the people, the unowned rows of a shared test database are not this run's to touch.
-    const c = deps.onlyIds ? {} : await retireUnowned(deps, allKept);
+    const c = deps.onlyIds ? {} : await retireUnowned(deps, allHeld);
     out(
       `Unowned rows: ${
         Object.entries(c)
@@ -529,24 +556,29 @@ export async function nuvionLiveReset(
       `FAILED unowned rows: ${(e as Error).message.slice(0, 200)} (unchanged)`,
     );
   }
-  // What is left: nothing of the test system may remain for anyone who is not kept.
-  const left = deps.onlyIds ? {} : await countAll(prisma, 'orphans', allKept);
+  // What is left: nothing of the test system may remain for anyone who is not held back.
+  const left = deps.onlyIds ? {} : await countAll(prisma, 'orphans', allHeld);
   const leftN = sum(left);
   out(
-    `Audit: retired ${done} people at ${new Date().toISOString()}; kept ${allKept.length}; failed ${failures.length}; rows still on the test system outside kept people ${leftN}`,
+    `Audit: retired ${done} people at ${new Date().toISOString()}; refused ${heldBack.length + stopped.length}; failed ${failures.length}; rows still on the test system outside refused people ${leftN}`,
   );
   if (failures.length > 0 || leftN > 0) {
-    out('Not finished. It is safe to run the same command again.');
+    out(
+      'Not finished. It is safe to run the same command again. (If someone opened a wallet while this ran, the audit counts it and this ends here; run it again.)',
+    );
+    return 2;
+  }
+  if (heldBack.length + stopped.length > 0) {
+    refusedWarning(out, heldBack.length + stopped.length);
     return 2;
   }
   out('Done. Running the dry run again finds nothing to retire.');
-  if (allKept.length > 0) keptWarning(out, allKept.length);
   return 0;
 }
 
-function keptWarning(out: (l: string) => void, n: number) {
+function refusedWarning(out: (l: string) => void, n: number) {
   out(
-    `WARNING: ${n} kept ${n === 1 ? 'person still carries' : 'people still carry'} test records (listed above). Do not move the server to live keys until each is settled by hand, or live Nuvion will be asked about test ids and test earnings could be paid.`,
+    `NOT FINISHED: ${n} ${n === 1 ? 'person was' : 'people were'} refused (rows listed above) and still carry a test wallet. Settle each listed row, then run the command again. Do not move the server to live keys until a dry run says "Nothing to retire" with no refused person.`,
   );
 }
 
@@ -582,6 +614,12 @@ async function main(): Promise<number> {
     console.log(
       `REFUSED: the wallet provider is not proven to be on Nuvion test credentials (${early.why}).`,
     );
+    console.log('Nothing was changed.');
+    return 1;
+  }
+  const keyWhy = liveKeyRefusal((k) => process.env[k]);
+  if (keyWhy) {
+    console.log(`REFUSED: ${keyWhy}`);
     console.log('Nothing was changed.');
     return 1;
   }

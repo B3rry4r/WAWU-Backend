@@ -106,15 +106,15 @@ export const KIND_TABLE: Record<string, Kind> = {
   },
   EarningDeduction: {
     action: 'relabelled',
-    why: 'A debt to be taken from future earnings. Relabelled so a test debt is never taken from live earnings. The take rows stay.',
+    why: 'A debt to be taken from future earnings. A test debt (a community pass refund, or a store SANDBOX purchase) is relabelled so it is never taken from live earnings; the take rows stay. A debt from a refund of a REAL store purchase is real money: it stays, is listed, and is taken from the next live move.',
   },
   StoreEarning: {
     action: 'closed',
-    why: 'Only an earning of a store SANDBOX purchase (not Nuvion money, but test money all the same): owed or sending becomes cancelled, relabelled. An earning of a real store purchase is never touched, and its person is kept.',
+    why: 'Only an earning of a store SANDBOX purchase (not Nuvion money, but test money all the same): owed or sending becomes cancelled, relabelled. An earning of a real store purchase is never touched: it stays owed, is listed, and lands on the live wallet of that person (R-11). It holds no Nuvion id.',
   },
   StoreEarningPayout: {
     action: 'closed',
-    why: 'Of a store sandbox purchase only: pending becomes cancelled, timers cleared, relabelled.',
+    why: 'Of a store sandbox purchase only: pending becomes cancelled, timers cleared, relabelled. A payout of a REAL store purchase that is not final (paid or cancelled) holds the TEST merchant and destination account numbers and would be sent from them on live: it is never touched, and it REFUSES its person (listed by row). A final one is history and is left alone.',
   },
   PointConversion: {
     action: 'closed',
@@ -173,6 +173,10 @@ export const KIND_TABLE: Record<string, Kind> = {
     action: 'cleared',
     why: 'A payout bank account. Same: the cached Nuvion ids and check time are emptied (six columns). The account stays. It is not counted as real money (only its cache is touched).',
   },
+  SchoolPayee: {
+    action: 'cleared',
+    why: "Where a school is paid. Its Nuvion counterparty and payment detail ids (test ids) are emptied; the bank, account and name stay. The first live school payout sends from WAWU's live account and makes a fresh counterparty, and the school's bank name check path (school-payee.service.ts) caches the new ones. The row belongs to a school, not a person, so it is cleared with the unowned rows.",
+  },
   // ---- logs of the test system ----
   MoneyCheckRun: {
     action: 'relabelled',
@@ -211,6 +215,22 @@ export const KIND_TABLE: Record<string, Kind> = {
   EventOrder: {
     action: 'untouched',
     why: "paymentProvider names who took the payment. A ticket paid from a wallet is held in a WalletHold, closed above; the order and the ticket stay the buyer's.",
+  },
+  WalletBill: {
+    action: 'follows',
+    why: "A bill (fintavaTransactionId, fintavaReference are Fintava's purchase record). Bills ride on Fintava only (R-45): a Nuvion server answers a bill target_not_payable, so no Nuvion-era bill exists. A bill has no provider column; its late-success look joins the bill's WalletPayment and acts only on that payment's provider, and its delivery runs from the payment. Probed in ops-nuvion-live-reset-bills.contract.spec.ts: a bill hung on a retired payment is neither looked for nor delivered.",
+  },
+  PaymentWebhookReceipt: {
+    action: 'untouched',
+    why: "A Flutterwave delivery log keyed by tx_ref (transactionId is Flutterwave's). Real money, not a Nuvion row.",
+  },
+  StorePurchase: {
+    action: 'untouched',
+    why: "The store's own transaction id (storeTransactionId), App Store or Play. Not a wallet provider id. A purchase the store marked sandbox has its earnings cancelled (StoreEarning, StoreEarningPayout); the purchase stays.",
+  },
+  FintavaWebhookEvent: {
+    action: 'untouched',
+    why: "A stored delivery from Fintava (fintavaStatus is Fintava's). Not a Nuvion row; the Fintava webhook is not run on a Nuvion server.",
   },
   PlanSettingNuvionFixBackup: {
     action: 'untouched',
@@ -282,7 +302,7 @@ export interface Step {
 }
 
 const P = `"provider" = 'nuvion'`;
-const SANDBOX_STORE_PURCHASES = `SELECT "id" FROM "StorePurchase" WHERE "environment" = 'sandbox'`;
+export const SANDBOX_STORE_PURCHASES = `SELECT "id" FROM "StorePurchase" WHERE "environment" = 'sandbox'`;
 const WORDS = `'${CLOSED_WORDS}'`;
 const R = `'${RETIRED_PROVIDER}'`;
 const caseHeld = (held: string, other: string, to: string) =>
@@ -351,7 +371,9 @@ export const STEPS: Step[] = [
     verb: 'update',
     table: '"EarningDeduction"',
     party: ['"payeeWawuUserId"'],
-    base: P,
+    // Test money only: a debt from a community pass refund (a wallet row), or from a store SANDBOX purchase. A debt from
+    // a refund of a real store purchase is real money and stays (stayingRows in nuvion-live-reset.ts lists it).
+    base: `${P} AND ("passRefundId" IS NOT NULL OR "storePurchaseId" IN (${SANDBOX_STORE_PURCHASES}))`,
     set: `"provider" = ${R}`,
   },
   {
@@ -606,6 +628,17 @@ export const STEPS: Step[] = [
     base: 'TRUE',
     noDiscover: true,
   },
+  // ---- ids cached on a row that belongs to no person ----
+  {
+    id: 'school_payee_ids',
+    model: 'SchoolPayee',
+    verb: 'update',
+    table: '"SchoolPayee"',
+    party: [],
+    base: `("counterpartyId" IS NOT NULL OR "paymentDetailId" IS NOT NULL)`,
+    set: `"counterpartyId" = NULL, "paymentDetailId" = NULL`,
+    noDiscover: true,
+  },
   // ---- logs of the test system (no person) ----
   {
     id: 'money_check_runs',
@@ -646,87 +679,3 @@ export const POINT_CONVERSION_STEP = 'point_conversions';
 export function stepModels(): string[] {
   return [...new Set(STEPS.map((s) => s.model))];
 }
-
-/** The tables that carry a `provider` column and name a person, for the "another provider" check. */
-export const PROVIDER_PARTY_TABLES: Array<{
-  table: string;
-  party: string[];
-  id: string;
-}> = [
-  { table: '"FintavaWallet"', party: ['"wawuUserId"'], id: '"wawuUserId"' },
-  {
-    table: '"FintavaWalletOpening"',
-    party: ['"wawuUserId"'],
-    id: '"wawuUserId"',
-  },
-  { table: '"FintavaLedgerEntry"', party: ['"wawuUserId"'], id: '"id"' },
-  {
-    table: '"WalletPayment"',
-    party: ['"payerWawuUserId"', '"payeeWawuUserId"'],
-    id: '"id"',
-  },
-  {
-    table: '"WalletHold"',
-    party: ['"payerWawuUserId"', '"payeeWawuUserId"'],
-    id: '"id"',
-  },
-  {
-    table: '"WalletTransfer"',
-    party: ['"payerWawuUserId"', '"recipientWawuUserId"'],
-    id: '"id"',
-  },
-  { table: '"AddMoneySession"', party: ['"wawuUserId"'], id: '"id"' },
-  { table: '"EarningSettlement"', party: ['"payeeWawuUserId"'], id: '"id"' },
-  { table: '"EarningMove"', party: ['"payeeWawuUserId"'], id: '"id"' },
-  { table: '"EarningDeduction"', party: ['"payeeWawuUserId"'], id: '"id"' },
-  { table: '"StoreEarning"', party: ['"payeeWawuUserId"'], id: '"id"' },
-  { table: '"StoreEarningPayout"', party: ['"payeeWawuUserId"'], id: '"id"' },
-  { table: '"PointConversion"', party: ['"wawuUserId"'], id: '"id"' },
-  {
-    table: '"CommunityPassRefund"',
-    party: ['"userWawuId"', '"hostWawuId"'],
-    id: '"id"',
-  },
-  { table: '"WalletCard"', party: ['"wawuUserId"'], id: '"id"' },
-  { table: '"CapitalOrder"', party: ['"wawuUserId"'], id: '"id"' },
-  { table: '"FxAccount"', party: ['"wawuUserId"'], id: '"id"' },
-  { table: '"FxOperation"', party: ['"wawuUserId"'], id: '"id"' },
-  { table: '"FxQuote"', party: ['"wawuUserId"'], id: '"id"' },
-  { table: '"FxMovement"', party: ['"wawuUserId"'], id: '"id"' },
-];
-
-/**
- * Rows in motion that name two people. A person whose in-motion row names a KEPT person is kept as well, because
- * closing the row would touch the kept person's side.
- */
-export const SHARED_IN_MOTION: Array<{
-  table: string;
-  a: string;
-  b: string;
-  open: string;
-}> = [
-  {
-    table: '"WalletPayment"',
-    a: '"payerWawuUserId"',
-    b: '"payeeWawuUserId"',
-    open: `${P} AND ("status" = 'pending' OR ("status" = 'completed' AND "fulfilledAt" IS NULL))`,
-  },
-  {
-    table: '"WalletHold"',
-    a: '"payerWawuUserId"',
-    b: '"payeeWawuUserId"',
-    open: `${P} AND "status" = 'held'`,
-  },
-  {
-    table: '"WalletTransfer"',
-    a: '"payerWawuUserId"',
-    b: '"recipientWawuUserId"',
-    open: `${P} AND "status" = 'pending'`,
-  },
-  {
-    table: '"CommunityPassRefund"',
-    a: '"userWawuId"',
-    b: '"hostWawuId"',
-    open: `${P} AND "status" = 'pending'`,
-  },
-];
