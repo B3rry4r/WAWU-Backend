@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -135,7 +139,7 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
     expect(res.status).toBe(200);
     const q = body<PaymentQuoteView>(res).data!;
     // Nuvion charges what its settings say, which is what the quote says.
-    const fee = BigInt(q.fee.providerFeeKobo);
+    const fee = BigInt(q.fee.totalFeeKobo);
     nuvion.feeKobo = () => fee;
     return q;
   }
@@ -241,6 +245,8 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env).
+    await seedFlatFees(app, { feeKobo: 2325, providerKobo: 2325 });
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     payments = moduleRef.get(WalletPaymentService);
@@ -287,6 +293,7 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
   });
 
   afterAll(async () => {
+    await removeSpecFees(app);
     if (prisma) {
       const rows = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },
@@ -350,7 +357,7 @@ describe('Not enough money, and still confirming (MONEY-19), Nuvion stood in', (
       totalKobo: 102_325,
       balanceKobo: 50_000,
       shortfallKobo: 52_325,
-      fee: { providerFeeKobo: FEE_KOBO, wawuFeeKobo: 0 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: FEE_KOBO },
     });
 
     const key = randomUUID();

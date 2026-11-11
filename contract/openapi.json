@@ -58245,6 +58245,30 @@
           "expiresAt": {
             "type": "string"
           },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "feeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatOn": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "totalMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "receiveMinor": {
+            "type": "integer",
+            "nullable": true
+          },
           "source": {
             "allOf": [
               {

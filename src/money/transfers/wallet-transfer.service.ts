@@ -416,8 +416,18 @@ export class WalletTransferService implements OnModuleInit {
       payerName: names.payer,
       recipientName: names.recipient,
       amountKobo: BigInt(dto.amountKobo),
-      providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
-      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
+      providerFeeKobo: BigInt(
+        this.fees.legSplit(
+          { kind: 'wawu_transfer', amountKobo: dto.amountKobo },
+          fee.fee,
+        ).providerFeeKobo,
+      ),
+      wawuFeeKobo: BigInt(
+        this.fees.legSplit(
+          { kind: 'wawu_transfer', amountKobo: dto.amountKobo },
+          fee.fee,
+        ).wawuFeeKobo,
+      ),
       totalKobo: BigInt(fee.totalKobo),
       note,
       customerReference: `wawu-send-${id}`,
@@ -527,8 +537,18 @@ export class WalletTransferService implements OnModuleInit {
       bankAccountNumber: target.accountNumber,
       bankAccountName: target.accountName,
       amountKobo: BigInt(dto.amountKobo),
-      providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
-      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
+      providerFeeKobo: BigInt(
+        this.fees.legSplit(
+          { kind: 'bank_transfer', amountKobo: dto.amountKobo },
+          fee.fee,
+        ).providerFeeKobo,
+      ),
+      wawuFeeKobo: BigInt(
+        this.fees.legSplit(
+          { kind: 'bank_transfer', amountKobo: dto.amountKobo },
+          fee.fee,
+        ).wawuFeeKobo,
+      ),
       totalKobo: BigInt(fee.totalKobo),
       note,
       customerReference: `${BANK_SEND_REFERENCE_PREFIX}${id}`,
@@ -2322,8 +2342,13 @@ export class WalletTransferService implements OnModuleInit {
 
   async view(t: TransferRow): Promise<TransferView> {
     const status = t.status as TransferStatus;
-    const providerFeeKobo = koboNumber(t.providerFeeKobo);
-    const wawuFeeKobo = koboNumber(t.wawuFeeKobo);
+    // FEE-01 (lead ruling 1): under the fee engine the person sees one fee,
+    // WAWU's; the split between Nuvion's charge and WAWU's stays inside.
+    const hide = this.fees.engineOn && t.provider === 'nuvion';
+    const providerFeeKobo = hide ? 0 : koboNumber(t.providerFeeKobo);
+    const wawuFeeKobo = hide
+      ? koboNumber(t.providerFeeKobo) + koboNumber(t.wawuFeeKobo)
+      : koboNumber(t.wawuFeeKobo);
     const bank = t.kind === 'bank_account';
     const [party, ledgerRow] = await Promise.all([
       bank ? Promise.resolve(null) : this.recipientParty(t),

@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -169,7 +173,7 @@ describe('N2 on the provider seam, Nuvion stood in: a charge that is not believe
       .set('Authorization', p.auth);
     expect(qres.status).toBe(200);
     const q = body<PaymentQuoteView>(qres).data!;
-    expect(q.fee.providerFeeKobo).toBe(QUOTE_FEE);
+    expect(q.fee.totalFeeKobo).toBe(QUOTE_FEE);
     nuvion.feeKobo = () => BigInt(fee);
     nuvion.mode = mode;
     const res = await request(app.getHttpServer())
@@ -297,6 +301,8 @@ describe('N2 on the provider seam, Nuvion stood in: a charge that is not believe
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env).
+    await seedFlatFees(app, { feeKobo: 1500, providerKobo: 1500 });
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     payments = moduleRef.get(WalletPaymentService);
@@ -319,6 +325,7 @@ describe('N2 on the provider seam, Nuvion stood in: a charge that is not believe
   });
 
   afterAll(async () => {
+    await removeSpecFees(app);
     if (prisma) {
       const rows = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },

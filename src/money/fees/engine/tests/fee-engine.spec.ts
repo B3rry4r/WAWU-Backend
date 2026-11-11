@@ -333,7 +333,8 @@ describe('the quote', () => {
   const USER = '0f0a5a3e-6a35-4c35-9a1b-6a8f2f3f9a01';
 
   it('NGN 100,000 to a bank: fee 400, wallet pays 100,400, the bank gets 100,000', async () => {
-    const q = (await quoteService()).quote(USER, {
+    const svc = await quoteService();
+    const q = svc.quote(USER, {
       kind: 'bank_transfer',
       amountKobo: 10_000_000,
     });
@@ -345,8 +346,23 @@ describe('the quote', () => {
     expect(q.receiveMinor).toBe(10_000_000);
     expect(q.currency).toBe('NGN');
     expect(q.fee.totalFeeKobo).toBe(40_000);
-    // Nuvion's 0.2% (NGN 200) is inside the fee, not on top of it.
-    expect(q.fee.providerFeeKobo + q.fee.wawuFeeKobo).toBe(40_000);
+    // One fee in the app: Nuvion's charge is never in an answer.
+    expect(q.fee).toEqual({
+      providerFeeKobo: 0,
+      wawuFeeKobo: 40_000,
+      totalFeeKobo: 40_000,
+    });
+    expect(q.parts).toEqual([
+      { code: 'wawu_fee', source: 'wawu', amountKobo: 40_000 },
+    ]);
+    // Inside, Nuvion takes its expected charge and the fee leg moves the rest.
+    expect(
+      svc.legSplit({ kind: 'bank_transfer', amountKobo: 10_000_000 }, q.fee),
+    ).toEqual({
+      providerFeeKobo: 20_000,
+      wawuFeeKobo: 20_000,
+      totalFeeKobo: 40_000,
+    });
   });
 
   it('VAT on: shown apart, added on top', async () => {
@@ -522,5 +538,59 @@ describe('provider rates stay out of the app', () => {
     }
     expect(roles('fees')).toContain(AdminRole.support);
     expect(roles('fees')).not.toContain(AdminRole.reviewer);
+  });
+});
+
+describe('a fee set under the provider charge', () => {
+  it('the leg moves nothing but VAT, kept is negative and the rate alert fires', async () => {
+    // NGN 1,000: WAWU fee is the NGN 100 minimum, Nuvion's expected charge is its NGN 50 floor;
+    // here WAWU's fee is set to NGN 20 so it is under Nuvion's.
+    const low = row({
+      kind: 'ngn_bank_withdrawal',
+      currency: 'NGN',
+      percentPpm: 0,
+      minMinor: 2000n,
+      maxMinor: 2000n,
+      startsAt: new Date('2026-11-11T01:00:00Z'),
+    });
+    const s = await schedule([...SEED, low], { 'tax.vat_on': 1 });
+    const r = await rates();
+    const settings = new FeeSettings(
+      new ConfigService({ [FEE_CONFIG_KEYS.quoteKey]: 'k'.repeat(40) }),
+    );
+    const svc = new FeeQuoteService(
+      settings,
+      { name: 'nuvion' } as never,
+      new ConfigService({}),
+      s,
+      r,
+    );
+    const input = { kind: 'bank_transfer' as const, amountKobo: 1_000_000 };
+    const q = svc.quote('u', input);
+    expect(q.totalKobo).toBe(1_000_000 + 2000 + 150);
+    const split = svc.legSplit(input, q.fee);
+    expect(split.providerFeeKobo).toBe(2000); // never more than the fee in the row
+    expect(split.wawuFeeKobo).toBe(150); // VAT only
+    expect(split.totalFeeKobo).toBe(2150);
+
+    const mismatch = jest.spyOn(r, 'mismatch').mockResolvedValue();
+    const rows: Record<string, unknown>[] = [];
+    const prisma = {
+      moneyFeeRecord: {
+        upsert: ({ create }: { create: Record<string, unknown> }) => {
+          rows.push(create);
+          return Promise.resolve();
+        },
+      },
+    };
+    await new FeeRecordService(prisma as never, s, r).record({
+      provider: 'nuvion',
+      reference: 'low1',
+      kind: 'ngn_bank_withdrawal',
+      amountMinor: 1_000_000n,
+      at: new Date('2026-11-12T00:00:00Z'),
+    });
+    expect(rows[0].keptMinor).toBe(2000n - 5000n);
+    expect(mismatch).toHaveBeenCalledTimes(1);
   });
 });

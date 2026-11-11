@@ -86,7 +86,7 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03), Nuvion stood i
     expect(q.payment).toMatchObject({
       priceKobo: price,
       totalKobo: price + NUVION_FEE,
-      fee: { providerFeeKobo: NUVION_FEE, wawuFeeKobo: 0 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: NUVION_FEE },
     });
     const res = await call.buy(p, request(t, q));
     expect(res.status).toBe(201);

@@ -1,3 +1,7 @@
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../src/money/fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import {
   type INestApplication,
@@ -187,6 +191,12 @@ export async function bootPayApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here (not env).
+  await seedFlatFees(
+    app,
+    { feeKobo: STAND_IN_FEE_KOBO, providerKobo: STAND_IN_FEE_KOBO },
+    STAND_IN_FEE_KOBO,
+  );
   await app.listen(0, '127.0.0.1');
   if (opts.extra) await opts.extra(app);
   const prisma = moduleRef.get(PrismaService);
@@ -349,6 +359,7 @@ export async function bootPayApp(
       await prisma.fintavaWallet.deleteMany({
         where: { wawuUserId: { in: users } },
       });
+      await removeSpecFees(app);
       await app.close();
       await new Promise<void>((r) => counter.close(() => r()));
       for (const [k, v] of Object.entries(previous)) {

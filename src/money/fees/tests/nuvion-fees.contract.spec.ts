@@ -28,6 +28,9 @@ import type { FeeQuoteView } from '../../money-view.type';
 import { FEE_CONFIG_KEYS } from '../fee-config';
 import { FEES_NOT_SET_MESSAGE } from '../fees-not-set';
 import { NUVION_FEE_CONFIG_KEYS } from '../nuvion-fee-config';
+import { FeeScheduleService } from '../engine/fee-schedule.service';
+import { removeSpecFees, seedFees } from '../engine/tests/seed-fees';
+import { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
 
 /**
  * Fees as settings over HTTP (task NUV-07, R-42): the real MoneyModule, a
@@ -43,11 +46,6 @@ import { NUVION_FEE_CONFIG_KEYS } from '../nuvion-fee-config';
 
 const BASE = '/api/hub/money';
 const K = NUVION_FEE_CONFIG_KEYS;
-const SET = {
-  [K.bookTransfer]: '1234',
-  [K.bankPayout]: '0:3100,500000:4200',
-  [K.inflow]: '0',
-};
 
 function mintToken(sub: string): string {
   const privateKey = readFileSync(
@@ -173,11 +171,12 @@ function nuban(): string {
 async function boot(
   env: Record<string, string>,
   provider: WalletProvider,
+  noSchedule = false,
 ): Promise<INestApplication<App>> {
   for (const key of Object.values(K)) delete process.env[key];
   Object.assign(process.env, env);
   try {
-    return await bootApp(provider);
+    return await bootApp(provider, noSchedule);
   } finally {
     for (const key of Object.values(K)) delete process.env[key];
   }
@@ -185,8 +184,9 @@ async function boot(
 
 async function bootApp(
   provider: WalletProvider,
+  noSchedule: boolean,
 ): Promise<INestApplication<App>> {
-  const moduleRef = await Test.createTestingModule({
+  const builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({
         isGlobal: true,
@@ -208,8 +208,21 @@ async function bootApp(
     providers: [WawuJwtStrategy, WawuIdClient],
   })
     .overrideProvider(WALLET_PROVIDER)
-    .useValue(provider)
-    .compile();
+    .useValue(provider);
+  // R-139: "fees not set" is "no schedule row in force". The database holds the
+  // migration's seed rows (and is append-only), so the server that stands for
+  // an empty schedule reads a schedule with no rows.
+  if (noSchedule) {
+    builder.overrideProvider(FeeScheduleService).useFactory({
+      factory: (plan: PlanSettingsService) =>
+        new FeeScheduleService(
+          { feeSchedule: { findMany: () => Promise.resolve([]) } } as never,
+          plan,
+        ),
+      inject: [PlanSettingsService],
+    });
+  }
+  const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     logger: new QuietLogger(),
   });
@@ -265,12 +278,18 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
   }
 
   beforeAll(async () => {
-    appUnset = await boot({}, unset.provider);
-    appSet = await boot(SET, filled.provider);
+    appUnset = await boot({}, unset.provider, true);
+    appSet = await boot({}, filled.provider);
     prisma = appUnset.get(PrismaService);
+    // R-139: the spec's own fees (WAWU's fee F and Nuvion's charge P), from rows.
+    await seedFees(appSet, {
+      wallet_to_wallet: { feeKobo: 2234, providerKobo: 1234 },
+      ngn_bank_withdrawal: { feeKobo: 6700, providerKobo: 4200 },
+    });
   });
 
   afterAll(async () => {
+    await removeSpecFees(appSet);
     await prisma.fintavaWallet.deleteMany({
       where: { wawuUserId: { in: users } },
     });
@@ -278,7 +297,7 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
     await appSet.close();
   });
 
-  describe('no Nuvion fee setting (production until the owner fills them in)', () => {
+  describe('no fee schedule row in force (R-139)', () => {
     it('every quote, of every kind, answers 503 fees_not_set, and Nuvion receives no call', async () => {
       const a = await withWallet();
       unset.calls.length = 0;
@@ -343,8 +362,8 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
     });
   });
 
-  describe('the Nuvion fee settings filled in (the spec’s own figures)', () => {
-    it("a quote shows Nuvion's charge and WAWU's fee, adding up to one Fees row, and asks Nuvion nothing", async () => {
+  describe('the fee schedule filled in (the spec’s own rows)', () => {
+    it("a quote shows one fee, WAWU's, and none of Nuvion's, and asks Nuvion nothing", async () => {
       const a = await withWallet();
       filled.calls.length = 0;
       const res = await get(
@@ -358,11 +377,8 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
         kind: 'wawu_transfer',
         billCategory: null,
         amountKobo: 2_000_000,
-        parts: [
-          { code: 'balance_transfer', source: 'provider', amountKobo: 1234 },
-          { code: 'wawu_fee', source: 'wawu', amountKobo: 1000 },
-        ],
-        fee: { providerFeeKobo: 1234, wawuFeeKobo: 1000, totalFeeKobo: 2234 },
+        parts: [{ code: 'wawu_fee', source: 'wawu', amountKobo: 2234 }],
+        fee: { providerFeeKobo: 0, wawuFeeKobo: 2234, totalFeeKobo: 2234 },
         totalKobo: 2_002_234,
         withinDailyLimit: true,
         remainingTodayKobo: null,
@@ -376,11 +392,35 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
         ).expect(200),
       ).data!;
       expect(bank.parts).toEqual([
-        { code: 'bank_transfer', source: 'provider', amountKobo: 4200 },
-        { code: 'wawu_fee', source: 'wawu', amountKobo: 2500 },
+        { code: 'wawu_fee', source: 'wawu', amountKobo: 6700 },
       ]);
       expect(bank.totalKobo).toBe(500_000 + 6700);
       expect(filled.calls).toEqual([]);
+    });
+
+    it("Nuvion's charge is in no app answer: not as a part, not as providerFeeKobo, not as any figure", async () => {
+      const a = await withWallet();
+      for (const q of [
+        'kind=wawu_transfer&amountKobo=2000000',
+        'kind=bank_transfer&amountKobo=500000',
+        'kind=purchase&amountKobo=500000',
+      ]) {
+        const res = await get(appSet, a.auth, `fees/quote?${q}`).expect(200);
+        const v = body<FeeQuoteView>(res).data!;
+        expect(v.fee.providerFeeKobo).toBe(0);
+        // The added fields are always present under Nuvion.
+        expect(v).toMatchObject({
+          currency: 'NGN',
+          vatMinor: 0,
+          vatOn: false,
+          totalMinor: v.totalKobo,
+          receiveMinor: v.amountKobo,
+        });
+        expect(v.feeMinor).toBe(v.fee.totalFeeKobo);
+        expect(v.parts.filter((p) => p.source === 'provider')).toEqual([]);
+        // The spec's Nuvion charges are 1234 and 4200 kobo: neither appears.
+        expect(JSON.stringify(res.body)).not.toMatch(/\b(1234|4200)\b/);
+      }
     });
 
     it('a bill is 409 target_not_payable under Nuvion (no bill payments); the gate still answers a person with no wallet', async () => {

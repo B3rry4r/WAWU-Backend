@@ -1,3 +1,4 @@
+import { seedFlatFees } from '../../src/money/fees/engine/tests/seed-fees';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -137,6 +138,8 @@ export async function bootPfxApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  // R-139: the fee comes from rows, seeded here (not env).
+  await seedFlatFees(app, { feeKobo: 0, providerKobo: 0 }, 0);
   await app.listen(0, '127.0.0.1');
   return {
     app,

@@ -69,7 +69,7 @@ describe('Buy WAWU Credits from the wallet (INBOX-16), Nuvion stood in', () => {
     expect(q.payment).toMatchObject({
       priceKobo: 100_000,
       totalKobo: 100_000 + NUVION_FEE,
-      fee: { providerFeeKobo: NUVION_FEE, wawuFeeKobo: 0 },
+      fee: { providerFeeKobo: 0, wawuFeeKobo: NUVION_FEE },
     });
     const res = await call.buy(p, request('popular', q));
     expect(res.status).toBe(201);

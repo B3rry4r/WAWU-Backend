@@ -295,7 +295,9 @@ export class FeeQuoteService {
 
     if (
       this.engine &&
-      (input.kind === 'wawu_transfer' || input.kind === 'bank_transfer')
+      (input.kind === 'wawu_transfer' ||
+        input.kind === 'bank_transfer' ||
+        input.kind === 'purchase')
     ) {
       return this.computeEngine(input);
     }
@@ -341,13 +343,10 @@ export class FeeQuoteService {
   }
 
   /**
-   * FEE-01 (R-139): the fee is WAWU's schedule row applied to the amount
-   * (plus VAT when it is on); the person pays that and no more. The part of
-   * it Nuvion keeps (its expected charge, from the rate table) is the
-   * `provider` line and the rest is WAWU's, so the legs that move a send
-   * (the provider takes its own charge, WAWU's fee leg moves the rest) are
-   * the ones that already exist. A fee smaller than the provider's expected
-   * charge is all provider (WAWU's part is 0), never negative.
+   * FEE-01 (R-139, lead ruling 1): under the fee engine the app sees ONE fee,
+   * WAWU's schedule fee F (plus VAT when on), and the person pays exactly
+   * amount + F + VAT. Nuvion's expected charge never appears in an answer.
+   * What the Hub moves inside is `legSplit`.
    */
   private computeEngine(input: FeeQuoteInput): FeeLines {
     const sched = this.schedule!;
@@ -359,31 +358,60 @@ export class FeeQuoteService {
     const fee = sched.feeFor(kind, BigInt(amount));
     const feeKobo = Number(fee.feeMinor);
     const vatKobo = Number(fee.vatMinor);
-    const expected = Number(
-      this.rates!.expected(kind, 'NGN', BigInt(amount)).minor,
-    );
-    const providerPart = Math.min(expected, feeKobo);
-    const wawuPart = feeKobo - providerPart;
     const parts: FeeQuotePartView[] = [
-      {
-        code:
-          input.kind === 'bank_transfer' ? 'bank_transfer' : 'balance_transfer',
-        source: 'provider',
-        amountKobo: providerPart,
-      },
-      { code: 'wawu_fee', source: 'wawu', amountKobo: wawuPart },
+      { code: 'wawu_fee', source: 'wawu', amountKobo: feeKobo },
     ];
-    if (vatKobo > 0)
+    if (vatKobo > 0) {
       parts.push({ code: 'vat', source: 'wawu', amountKobo: vatKobo });
-    const wawuFeeKobo = wawuPart + vatKobo;
+    }
     return {
       fee: {
-        providerFeeKobo: providerPart,
-        wawuFeeKobo,
-        totalFeeKobo: providerPart + wawuFeeKobo,
+        providerFeeKobo: 0,
+        wawuFeeKobo: feeKobo + vatKobo,
+        totalFeeKobo: feeKobo + vatKobo,
       },
       parts,
       totalKobo: amount + feeKobo + vatKobo,
+    };
+  }
+
+  /** True when the fee schedule decides the fee (Nuvion running with the engine). */
+  get engineOn(): boolean {
+    return this.engine;
+  }
+
+  /**
+   * What the Hub moves for a send, inside (never shown to the app): Nuvion
+   * takes its own charge P from the account with the transfer, and the fee leg
+   * moves F - P_expected plus VAT to WAWU's operational account, so the
+   * person's total is exactly amount + F + VAT. Below zero (a fee set under
+   * Nuvion's) the leg moves only the VAT, and the Hub records a negative kept
+   * and raises the rate alert. Outside the engine it is the quote's own split.
+   */
+  legSplit(input: FeeQuoteInput, shown: FeeBreakdown): FeeBreakdown {
+    if (
+      !this.engine ||
+      (input.kind !== 'bank_transfer' &&
+        input.kind !== 'wawu_transfer' &&
+        input.kind !== 'purchase')
+    ) {
+      return shown;
+    }
+    const kind: FeeKind =
+      input.kind === 'bank_transfer'
+        ? 'ngn_bank_withdrawal'
+        : 'wallet_to_wallet';
+    const fee = this.schedule!.feeFor(kind, BigInt(input.amountKobo));
+    const f = Number(fee.feeMinor);
+    const vat = Number(fee.vatMinor);
+    const expected = Number(
+      this.rates!.expected(kind, 'NGN', BigInt(input.amountKobo)).minor,
+    );
+    const p = Math.min(expected, f);
+    return {
+      providerFeeKobo: p,
+      wawuFeeKobo: f - p + vat,
+      totalFeeKobo: f + vat,
     };
   }
 

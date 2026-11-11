@@ -616,6 +616,20 @@ export interface PaymentQuoteView {
   /** After this the quote is no longer honoured; ask for a new one. */
   expiresAt: string;
   /**
+   * FEE-01 (R-139), additive. Present always under Nuvion, absent under
+   * Fintava (main's answer stays byte-identical). A payment from the wallet is
+   * a move inside the app, priced by `wallet_to_wallet`; the provider's
+   * book-transfer charge is in none of these.
+   */
+  currency?: string;
+  feeMinor?: number;
+  vatMinor?: number;
+  vatOn?: boolean;
+  /** What the person pays: the price, the fee and VAT. */
+  totalMinor?: number;
+  /** What the payee gets: the price. */
+  receiveMinor?: number;
+  /**
    * PAY-FX (R-91): present only when the quote was asked for with a
    * `sourceCurrency`. The price above stays naira; this is what the buyer's
    * own account in that currency pays for it, firm until `source.expiresAt`.

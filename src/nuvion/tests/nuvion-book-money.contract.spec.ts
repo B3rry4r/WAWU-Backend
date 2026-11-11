@@ -33,6 +33,10 @@ import { WawuJwtStrategy } from '../../common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import {
+  removeSpecFees,
+  seedFlatFees,
+} from '../../money/fees/engine/tests/seed-fees';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../hub-app-options';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
@@ -474,6 +478,9 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    // R-139: the fee comes from the schedule and the rate table, seeded here (not env). A wallet payment
+    // pays WAWU's wallet_to_wallet fee F; the spec's old book charge is Nuvion's P, and F is set equal to it.
+    await seedFlatFees(moduleRef, { feeKobo: 1_500, providerKobo: 1_500 });
     payments = moduleRef.get(WalletPaymentService);
     holds = moduleRef.get(WalletHoldService);
     dispatcher = moduleRef.get(NuvionWebhookDispatcher);
@@ -519,6 +526,7 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
   });
 
   afterAll(async () => {
+    await removeSpecFees(app);
     if (prisma) {
       const pays = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },
@@ -722,7 +730,11 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
       const buyer = await person(PRICE + 1_000);
       const id = item();
       const q = await quoted(buyer, 'content_unlock', id);
-      expect(q.fee.providerFeeKobo).toBe(1_500);
+      expect(q.fee).toEqual({
+        providerFeeKobo: 0,
+        wawuFeeKobo: 1_500,
+        totalFeeKobo: 1_500,
+      });
       const res = await payRequest(buyer, q);
       expect(res.status).toBe(402);
       expect(body<unknown>(res).reason?.code).toBe('insufficient_funds');

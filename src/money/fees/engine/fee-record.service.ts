@@ -77,6 +77,8 @@ export class FeeRecordService {
         },
         update: {},
       });
+      // A fee set under the provider's own charge: kept is negative, say so.
+      if (kept < 0n) await this.rates.mismatch(input.kind, input.reference);
     } catch (e) {
       this.logger.warn(
         `A fee record was not written (${e instanceof Error ? e.name : 'error'}).`,
