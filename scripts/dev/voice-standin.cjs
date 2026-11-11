@@ -299,6 +299,7 @@ function startVoiceStandin({
     deletedKnowledge: [],
     signedUrls: 0,
     chats: [],
+    nextAgentReplies: [],
     deletedConversations: [],
     /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500 (a spec sets it). */
     conversationDeleteRefusals: 0,
@@ -1520,6 +1521,8 @@ function startVoiceStandin({
     textOnlyOverride: body.platform_settings?.overrides?.conversation_config_override?.conversation?.text_only === true,
     // REC-PRIVACY: the privacy settings as last sent (null when none were); `socketId` marks an agent whose link names no conversation.
     privacy: body.platform_settings?.privacy ?? null,
+    // LEGAL-ELEVEN: which parts of the agent a conversation may replace (`prompt`, `llm`), as last sent (null when none).
+    overrides: body.platform_settings?.overrides?.conversation_config_override?.agent?.prompt ?? null,
     socketId: /\[\[socket-id\]\]/.test(`${body.name ?? ''} ${body.conversation_config?.agent?.prompt?.prompt ?? ''}`),
   });
   function agentCreate(req, res, _m, raw) {
@@ -1706,7 +1709,7 @@ function startVoiceStandin({
     let textOnly = false;
     let needPong = false;
     let pending = null;
-    const record = { agent: agentId, textOnly: false, earlier: false, chars: 0, keyLeak: false, pongs: 0 };
+    const record = { agent: agentId, textOnly: false, earlier: false, chars: 0, keyLeak: false, pongs: 0, override: null, message: '' };
     // REC-DELETE: the conversation this socket carries; it finishes (as chatConversationStatus says) when the chat ends.
     let chatConvo = url.searchParams.get('conversation_id');
     const finishChat = () => {
@@ -1727,7 +1730,13 @@ function startVoiceStandin({
         ws.send(
           JSON.stringify({
             type: 'agent_response',
-            agent_response_event: { agent_response: `I know ${docs.length} things${docs.length ? `: ${docs.join(', ')}` : ''}.` },
+            // LEGAL-ELEVEN: a spec queues the words the agent answers with (state.nextAgentReplies, first in first out).
+            agent_response_event: {
+              agent_response:
+                state.nextAgentReplies.length > 0
+                  ? state.nextAgentReplies.shift()
+                  : `I know ${docs.length} things${docs.length ? `: ${docs.join(', ')}` : ''}.`,
+            },
           }),
         );
         finishChat();
@@ -1739,6 +1748,14 @@ function startVoiceStandin({
       if (event.type === 'conversation_initiation_client_data') {
         textOnly = event.conversation_config_override?.conversation?.text_only === true;
         record.textOnly = textOnly && Boolean(agent?.textOnlyOverride);
+        // LEGAL-ELEVEN: the prompt and model this one conversation replaced (kept only when the agent allows it).
+        const asked = event.conversation_config_override?.agent?.prompt;
+        if (asked && typeof asked === 'object')
+          record.override = {
+            prompt: typeof asked.prompt === 'string' ? asked.prompt : null,
+            llm: typeof asked.llm === 'string' ? asked.llm : null,
+            allowed: Boolean(agent?.overrides?.prompt || agent?.overrides?.llm),
+          };
         let convo = url.searchParams.get('conversation_id');
         if (!convo && agent?.socketId) {
           convo = `convo-${++convoSeq}`;
@@ -1749,6 +1766,7 @@ function startVoiceStandin({
       } else if (event.type === 'user_message') {
         const text = String(event.text ?? '');
         record.chars = text.length;
+        record.message = text;
         record.earlier = /\nThe person now writes: /.test(text);
         if (text.includes('[[ping]]') && !needPong) {
           needPong = true;

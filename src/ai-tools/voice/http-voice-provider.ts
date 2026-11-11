@@ -1989,12 +1989,27 @@ export class HttpVoiceProvider implements AiVoiceProvider {
             })),
           },
         },
-        tts: { voice_id: this.voiceIdFor({ voiceId: spec.voiceId }) },
+        // LEGAL-ELEVEN: a typed-only agent (no voice named, overrides allowed) keeps the platform's own default voice.
+        ...(spec.voiceId === '' && spec.allowOverrides
+          ? {}
+          : { tts: { voice_id: this.voiceIdFor({ voiceId: spec.voiceId }) } }),
         conversation: { text_only: false },
       },
       platform_settings: {
         overrides: {
-          conversation_config_override: { conversation: { text_only: true } },
+          conversation_config_override: {
+            conversation: { text_only: true },
+            ...(spec.allowOverrides
+              ? {
+                  agent: {
+                    prompt: {
+                      ...(spec.allowOverrides.prompt ? { prompt: true } : {}),
+                      ...(spec.allowOverrides.llm ? { llm: true } : {}),
+                    },
+                  },
+                }
+              : {}),
+          },
         },
         // REC-PRIVACY: the provider keeps nothing longer than it must (sent on every create and every update).
         privacy: { ...AGENT_PRIVACY },
@@ -2155,7 +2170,12 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   }
 
   async askAgent(
-    req: { agentId: string; message: string; earlier: readonly ChatTurn[] },
+    req: {
+      agentId: string;
+      message: string;
+      earlier: readonly ChatTurn[];
+      override?: { prompt?: string; llm?: string };
+    },
     opts: {
       signal?: AbortSignal;
       onConversation?: (conversationId: string) => void | Promise<void>;
@@ -2163,6 +2183,12 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   ): Promise<{ reply: string; conversationId: string }> {
     if (!this.agentsConfigured || !PROVIDER_ID.test(req.agentId))
       throw new AiVoiceProviderError('rejected', 'agents are not available');
+    const llmOverride = req.override?.llm;
+    if (
+      llmOverride !== undefined &&
+      !/^[a-z0-9][a-z0-9._@-]{1,60}$/i.test(llmOverride)
+    )
+      throw new AiVoiceProviderError('rejected', 'model');
     // REC-PRIVACY: the link is asked for with the conversation's id (the API file: `include_conversation_id`), so the Hub
     // can delete the chat afterwards. A provider that names none here may still name it on the socket (below).
     const link = await this.signedLink(req.agentId, true, opts.signal, true);
@@ -2218,6 +2244,21 @@ export class HttpVoiceProvider implements AiVoiceProvider {
             type: 'conversation_initiation_client_data',
             conversation_config_override: {
               conversation: { text_only: true },
+              ...(req.override?.prompt !== undefined ||
+              req.override?.llm !== undefined
+                ? {
+                    agent: {
+                      prompt: {
+                        ...(req.override.prompt !== undefined
+                          ? { prompt: req.override.prompt }
+                          : {}),
+                        ...(req.override.llm !== undefined
+                          ? { llm: req.override.llm }
+                          : {}),
+                      },
+                    },
+                  }
+                : {}),
             },
           }),
         );

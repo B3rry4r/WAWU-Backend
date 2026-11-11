@@ -414,6 +414,11 @@ export interface AgentSpec {
   voiceId: string;
   /** The documents it knows, by the provider's id. */
   knowledge: { id: string; name: string; kind: 'text' | 'url' | 'file' }[];
+  /**
+   * LEGAL-ELEVEN: which parts of an agent a single conversation may replace (`platform_settings.overrides`). Absent for
+   * the Receptionist, whose agents allow only the text-only switch, exactly as before.
+   */
+  allowOverrides?: { prompt?: boolean; llm?: boolean };
 }
 
 /** One earlier message of a Receptionist chat, sent again so the next reply has context. */
@@ -886,7 +891,13 @@ export interface AiVoiceProvider {
    * before the socket opens, so the caller can note it even when the answer never comes; it must not throw.
    */
   askAgent(
-    req: { agentId: string; message: string; earlier: readonly ChatTurn[] },
+    req: {
+      agentId: string;
+      message: string;
+      earlier: readonly ChatTurn[];
+      /** LEGAL-ELEVEN: replaces the agent's prompt and/or model for this one conversation (the agent must allow it). */
+      override?: { prompt?: string; llm?: string };
+    },
     opts?: {
       signal?: AbortSignal;
       onConversation?: (conversationId: string) => void | Promise<void>;

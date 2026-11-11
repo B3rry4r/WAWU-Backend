@@ -11,7 +11,7 @@ import {
   GEMINI_CLIENT,
   type GeminiClient,
 } from '../../common/ai/gemini-client.interface';
-import { GEMINI_MODEL } from '../../common/ai/real-gemini.adapter';
+import { modelLabelOf } from '../ai/legal-ai.client';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { legalService } from '../../legal/legal-catalogue';
 import { LegalChatService } from '../legal-chat.service';
@@ -554,7 +554,7 @@ export class LegalAssistantService {
       facts,
       documentCount: 0,
       analysis,
-      generatedBy: GEMINI_MODEL,
+      generatedBy: modelLabelOf(this.gemini),
       generatedAt: new Date().toISOString(),
     };
 
