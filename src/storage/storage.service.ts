@@ -71,6 +71,7 @@ import {
 import { PublishingGate } from '../plans/publishing-gate.service';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { READ_URL_SECONDS, signReadLink } from './read-link';
 
 /**
  * S3-compatible object storage (Railway bucket / R2 / S3).
@@ -95,8 +96,6 @@ const RECONCILE_GRACE_MS = 15 * 60 * 1000;
 /** How long a presigned PUT URL can still start an upload. */
 const UPLOAD_URL_SECONDS = 300;
 
-/** How long the long-lived read link lives (`readUrlFor`): seven days. A caller that wants a shorter one passes its own. */
-const READ_URL_SECONDS = 604800;
 /** Copies of one Studio result into content that the person may have made and released (AITOOLS-08). */
 const COPY_ATTEMPTS = 10;
 /**
@@ -734,6 +733,7 @@ export class StorageService {
   async readUrlFor(
     key: string,
     expiresInSeconds = READ_URL_SECONDS,
+    options: { atCurrentSecond?: boolean } = {},
   ): Promise<string> {
     if (key.startsWith('http://') || key.startsWith('https://')) return key;
     if (!this.client) {
@@ -741,20 +741,13 @@ export class StorageService {
         'File uploads are not available on this environment yet.',
       );
     }
-    // Force both the type and the disposition on the way out. The uploader
-    // cannot influence either, so bytes that were smuggled in under a false
-    // Content-Type are still served as the kind of file the key says.
-    const { contentType, inline } = serveAs(key);
-    return getSignedUrl(
-      this.client,
-      new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        ResponseContentType: contentType,
-        ResponseContentDisposition: inline ? 'inline' : 'attachment',
-      }),
-      { expiresIn: expiresInSeconds },
-    );
+    // The one signing helper (read-link.ts): a link is the same for the whole day.
+    return signReadLink(this.client, {
+      bucket: this.bucket,
+      key,
+      expiresInSeconds,
+      atCurrentSecond: options.atCurrentSecond,
+    });
   }
 
   /**
@@ -768,14 +761,20 @@ export class StorageService {
    * service's own URLs): a possibly-stale link is still a link, and a public
    * feed rendering nothing beats it 500ing because storage hiccuped.
    */
-  async freshUrlFor(stored: string | null): Promise<string | null> {
+  async freshUrlFor(
+    stored: string | null,
+    options: { atCurrentSecond?: boolean } = {},
+  ): Promise<string | null> {
     if (!stored) return stored;
     if (!this.client) return stored;
     const key = objectKeyFrom(stored);
     try {
       // A profile picture's position (R-96) rides on the link as a fragment:
       // signing gives a fresh link without it, so it is put back.
-      return keepPhotoPosition(stored, await this.readUrlFor(key));
+      return keepPhotoPosition(
+        stored,
+        await this.readUrlFor(key, undefined, options),
+      );
     } catch (e) {
       this.logger.warn(
         `Could not refresh storage URL for ${key}: ${String(e)}`,
