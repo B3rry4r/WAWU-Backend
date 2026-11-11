@@ -27,15 +27,14 @@ export const PODCAST_MAX_RUN_SETTING = 'ai.podcast_max_run_seconds';
  */
 export const PODCAST_STUDIO_OK_SETTING = 'ai.podcast_studio_api_ok';
 
-/** How long a refusal from the provider keeps the Podcast maker unlisted, and how long a pass is remembered. */
+/** How long a refusal from the provider keeps the Podcast maker unlisted. */
 export const PODCAST_REFUSAL_MS = 60 * 60 * 1000;
-export const PODCAST_PASS_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The Hub's own proof that our account may use the Studio API (STUDIO-ON). The provider's documented Studio reads
  * (`GET /v1/studio/projects`) do not say they are gated by the allowlist, so no read proves it and none is made. The
  * proof is the real answer: a 403 on a real run (`refused`) unlists the tool for an hour, then it is tried again; a run
- * the provider accepted (`passed`) clears a refusal and is remembered for a day. Kept in memory, per process.
+ * the provider accepted (`passed`) clears a refusal. Kept in memory, per process.
  */
 export class PodcastStudioProof {
   private state: { ok: boolean; at: number } | null = null;
