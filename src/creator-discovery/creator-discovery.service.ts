@@ -4,8 +4,9 @@ import {
   deriveVerificationState,
   type VerificationState,
 } from '../common/verification/verification-state';
-import { StorageService } from '../storage/storage.service';
-import { freshOwnImage } from '../storage/own-image';
+import { StorageService, type Thumbs } from '../storage/storage.service';
+import { freshOwnImage, ownThumbs } from '../storage/own-image';
+import { isAppRequest } from '../price-list/app-client';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { AccountType, ContentStatus } from '../../generated/prisma/enums';
@@ -18,6 +19,8 @@ export interface CreatorDiscoveryItem {
   name: string;
   handle: string | null;
   avatarUrl: string | null;
+  /** HUB-THUMBS: the avatar's small copies; the app's requests only (X-Wawu-Client: app), null when none. */
+  avatarThumbs?: Thumbs | null;
   /** What they do — their first interest. Null when they have listed none. */
   field: string | null;
   /** Live pieces only. A draft or rejected upload is not something to browse. */
@@ -184,6 +187,16 @@ export class CreatorDiscoveryService {
           )) ?? p.avatarUrl,
       ),
     );
+    const thumbs = isAppRequest()
+      ? await ownThumbs(
+          this.storage,
+          profiles.map((p) => ({
+            stored: p.avatarUrl,
+            folder: 'avatars',
+            ownerId: p.wawuUserId,
+          })),
+        )
+      : null;
     const items: CreatorDiscoveryItem[] = profiles.map((p, idx) => {
       const identity = identities.get(p.wawuUserId);
       const fullName = [identity?.firstName, identity?.lastName]
@@ -202,6 +215,7 @@ export class CreatorDiscoveryService {
         name: fullName || p.handle || '',
         handle: p.handle,
         avatarUrl: avatars[idx],
+        ...(thumbs ? { avatarThumbs: thumbs[idx] } : {}),
         field: p.interests[0] ?? null,
         pieceCount: pieceCountBy.get(p.wawuUserId) ?? 0,
         // Read off the row already loaded for this page. No extra query, and

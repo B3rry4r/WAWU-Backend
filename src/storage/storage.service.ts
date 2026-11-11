@@ -28,6 +28,16 @@ import {
   AD_ARTWORK_TYPES,
 } from './ad-artwork';
 import { deleteFromBucket } from './bucket-delete';
+import { isAppRequest } from '../price-list/app-client';
+import { ensureThumbsFor, type ThumbDeps } from './thumbs/ensure-thumbs';
+import { removeThumbs } from './thumbs/remove-thumbs';
+import {
+  THUMB_ROW_FOLDER,
+  THUMB_SIZES,
+  thumbKey,
+  thumbKeysOf,
+  thumbSourceOk,
+} from './thumbs/thumb-keys';
 import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
 import {
@@ -305,6 +315,12 @@ export const GENERATED_KEY_FOLDERS = [
  * against this list, so a folder missing from it is a folder whose links are
  * never recognised, never re-signed and never found for a purge (FIX-71).
  */
+/** HUB-THUMBS: the links to a picture's two small copies (96 and 640 px on the long side). */
+export interface Thumbs {
+  w96: string;
+  w640: string;
+}
+
 export const KEY_FOLDERS: readonly string[] = [
   ...UPLOAD_FOLDERS,
   ...CHAT_UPLOAD_FOLDERS,
@@ -1510,6 +1526,205 @@ export class StorageService {
       },
       key,
     ).catch(() => undefined);
+    // HUB-THUMBS: a public picture gets its two small copies at the same places a video is cleaned.
+    await this.ensureThumbs(key, opts);
+  }
+
+  /**
+   * HUB-THUMBS: makes the two small copies (96 and 640 px on the long side, WebP) of a PUBLIC picture
+   * (avatar, profile cover, content cover, content preview: see thumbs/thumb-keys.ts; anything else is a
+   * no-op), stored beside the original and written only here. Never throws and never fails the caller: a
+   * picture that is broken, huge, a decompression bomb or slow is left as it is and logged.
+   *
+   * A CONFIRM NEVER WAITS FOR COPIES (lead ruling, 11 Nov 2026): the job goes to the one-at-a-time queue and
+   * this returns at once, so an upload confirms as fast as before this task. Until the copies exist the app
+   * draws the full picture (the fields are optional). Only the sweeps pass `background: true`, which awaits the
+   * job so they can count what they made.
+   */
+  async ensureThumbs(
+    key: string,
+    opts: { background?: boolean } = {},
+  ): Promise<void> {
+    if (!this.client || !thumbSourceOk(key)) return;
+    const work = ensureThumbsFor(this.thumbDeps(), key).catch(() => undefined);
+    if (opts.background) await work;
+  }
+
+  private thumbDeps(): ThumbDeps {
+    return {
+      logger: this.logger,
+      enabled: !!this.client,
+      rowOf: (key) =>
+        this.prisma.storageObject.findUnique({
+          where: { key },
+          select: {
+            wawuUserId: true,
+            status: true,
+            releasedAt: true,
+            removingAt: true,
+          },
+        }),
+      haveRows: async (keys) =>
+        new Set(
+          (
+            await this.prisma.storageObject.findMany({
+              where: { key: { in: keys }, status: 'confirmed' },
+              select: { key: true },
+            })
+          ).map((r) => r.key),
+        ),
+      read: async (key, max) => (await this.readStored(key, max)).audio,
+      put: (put) => this.putThumb(put.owner, put.key, put.body),
+      discard: async (keys) => {
+        for (const k of keys) await this.removeGenerated(k);
+      },
+    };
+  }
+
+  /** The one write of a small copy: the object, then its row (a `thumbs` row of the owner, never counted). */
+  private async putThumb(owner: string, key: string, body: Buffer) {
+    await this.client!.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: 'image/webp',
+        ContentLength: body.length,
+      }),
+    );
+    const now = new Date();
+    await this.prisma.storageObject.upsert({
+      where: { key },
+      create: {
+        wawuUserId: owner,
+        key,
+        bytes: body.length,
+        contentType: 'image/webp',
+        folder: THUMB_ROW_FOLDER,
+        status: 'confirmed',
+        confirmedAt: now,
+      },
+      update: {
+        bytes: body.length,
+        status: 'confirmed',
+        confirmedAt: now,
+        releasedAt: null,
+      },
+    });
+  }
+
+  /** HUB-THUMBS: removes the small copies of an original that was deleted. Never throws. */
+  async removeThumbsOf(key: string): Promise<void> {
+    if (!this.client || thumbKeysOf(key).length === 0) return;
+    await removeThumbs(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        prisma: this.prisma,
+        logger: this.logger,
+      },
+      key,
+    );
+  }
+
+  /**
+   * HUB-THUMBS: the links to the small copies of the pictures in `stored` (a stored link or key each), in the same
+   * order: `{ w96, w640 }`, or null when the picture has no copies (not a public family, not copied yet, or a
+   * request that is not the app's). ONLY the app's requests (`X-Wawu-Client: app`) get them, so the website's and
+   * the dashboard's answers stay as they were. One database read for the whole list, no bucket call; each link
+   * is signed through read-link.ts like any picture (the same link all day).
+   */
+  async thumbsFor(
+    stored: ReadonlyArray<string | null | undefined>,
+  ): Promise<Array<Thumbs | null>> {
+    const none = stored.map(() => null);
+    if (!isAppRequest() || !this.client) return none;
+    try {
+      const keys = stored.map((s) => {
+        if (!s) return null;
+        // A profile picture's position (R-96) rides on the stored value as a `#` fragment.
+        const key = objectKeyFrom(s.split('#')[0]);
+        return thumbSourceOk(key) ? key : null;
+      });
+      const wanted = keys.flatMap((k) => (k ? thumbKeysOf(k) : []));
+      if (wanted.length === 0) return none;
+      const rows = await this.prisma.storageObject.findMany({
+        where: {
+          key: { in: wanted },
+          status: 'confirmed',
+          releasedAt: null,
+          removingAt: null,
+        },
+        select: { key: true },
+      });
+      const have = new Set(rows.map((r) => r.key));
+      return await Promise.all(
+        keys.map(async (k): Promise<Thumbs | null> => {
+          if (!k) return null;
+          const [k96, k640] = THUMB_SIZES.map((n) => thumbKey(k, n));
+          if (!have.has(k96) || !have.has(k640)) return null;
+          const [w96, w640] = await Promise.all([
+            this.readUrlFor(k96),
+            this.readUrlFor(k640),
+          ]);
+          return { w96, w640 };
+        }),
+      );
+    } catch (e) {
+      this.logger.warn(`Could not read thumbnails: ${String(e)}`);
+      return none;
+    }
+  }
+
+  /**
+   * HUB-THUMBS: `{ thumbnailThumbs, coverThumbs }` for a card that draws a piece's preview picture and cover, to be
+   * spread into the card; `{}` (no key at all) for a request that is not the app's.
+   */
+  async pieceThumbs(
+    previewStored: string | null | undefined,
+    coverKey: string | null | undefined,
+  ): Promise<{ thumbnailThumbs?: Thumbs | null; coverThumbs?: Thumbs | null }> {
+    if (!isAppRequest()) return {};
+    const [thumbnailThumbs, coverThumbs] = await this.thumbsFor([
+      previewStored,
+      coverKey,
+    ]);
+    return { thumbnailThumbs, coverThumbs };
+  }
+
+  /**
+   * HUB-THUMBS: the safety net behind `ensureThumbs`: public pictures confirmed (or still pending, a web upload)
+   * in the last two hours that have no copies yet. A picture that has them costs one database read. Run on a
+   * timer by StorageSweepService.
+   */
+  async sweepThumbs(limit = 60): Promise<number> {
+    if (!this.client) return 0;
+    const since = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const rows = await this.prisma.storageObject.findMany({
+      where: {
+        releasedAt: null,
+        removingAt: null,
+        folder: {
+          in: ['avatars', 'profile/cover', 'content/cover', 'content/preview'],
+        },
+        OR: [
+          { status: 'confirmed', confirmedAt: { gte: since } },
+          { status: 'pending', createdAt: { gte: since } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { key: true },
+      take: limit * 10,
+    });
+    // Pictures that already have both copies are skipped BEFORE the limit is spent (round 2), so a sweep after a
+    // burst spends its looks only on pictures that need copies.
+    const keys = rows.map((r) => r.key).filter(thumbSourceOk);
+    const have = await this.thumbDeps().haveRows(keys.flatMap(thumbKeysOf));
+    const need = keys
+      .filter((k) => !thumbKeysOf(k).every((t) => have.has(t)))
+      .slice(0, limit);
+    for (const k of need) await this.ensureThumbs(k, { background: true });
+    return need.length;
   }
 
   /**

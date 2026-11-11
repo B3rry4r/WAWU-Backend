@@ -5,7 +5,8 @@ import {
   deriveVerificationState,
   type VerificationState,
 } from '../common/verification/verification-state';
-import { StorageService } from '../storage/storage.service';
+import { StorageService, type Thumbs } from '../storage/storage.service';
+import { isAppRequest } from '../price-list/app-client';
 import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
 import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
 import { replyTimesFor } from '../professional/professional-reply-time';
@@ -32,6 +33,8 @@ export interface FeedCreator {
   displayName: string | null;
   handle: string | null;
   avatarUrl: string | null;
+  /** HUB-THUMBS: the avatar's two small copies. Present on the app's requests only (X-Wawu-Client: app); null when it has none. */
+  avatarThumbs?: Thumbs | null;
   /** Both ticks, decided server-side (never a rank). */
   verification: VerificationState;
 }
@@ -56,6 +59,9 @@ export interface CardWork {
   thumbnailUrl: string | null;
   /** CONTENT-COVER (R-114): a fresh link to the piece's own cover picture; null when it has none. */
   coverUrl: string | null;
+  /** HUB-THUMBS: small copies of the preview picture and of the cover. The app's requests only; null when none. */
+  thumbnailThumbs?: Thumbs | null;
+  coverThumbs?: Thumbs | null;
   durationLabel: string | null;
   pageCount: number | null;
   /** Pictures in a photo set; 0 for anything else. */
@@ -73,6 +79,9 @@ export interface CreatorCard {
   avatarUrl: string | null;
   /** The wide image behind the profile; the card falls back to the avatar. */
   coverUrl: string | null;
+  /** HUB-THUMBS: small copies of the avatar and the wide image. The app's requests only; null when none. */
+  avatarThumbs?: Thumbs | null;
+  coverThumbs?: Thumbs | null;
   verification: VerificationState;
   /**
    * Their tier badge while a tier runs, else null (TIER-07): the pill beside
@@ -104,6 +113,9 @@ export interface ProfessionalCard {
   headline: string;
   avatarUrl: string | null;
   coverUrl: string | null;
+  /** HUB-THUMBS: small copies of the avatar and the cover. The app's requests only; null when none. */
+  avatarThumbs?: Thumbs | null;
+  coverThumbs?: Thumbs | null;
   verification: VerificationState;
   /**
    * Their tier badge while a tier runs, else null (TIER-07): the pill beside
@@ -207,6 +219,13 @@ export class FeedCardsService {
       this.wawuId.lookupPublicIdentities(unique),
     ]);
     const byId = new Map(profiles.map((p) => [p.wawuUserId, p]));
+    // HUB-THUMBS: the avatar's small copies, for the app's requests only (the key is left off otherwise).
+    const appThumbs = isAppRequest()
+      ? new Map(profiles.map((p, i) => [p.wawuUserId, i] as const))
+      : null;
+    const avatarThumbs = appThumbs
+      ? await this.storage.thumbsFor(profiles.map((p) => p.avatarUrl))
+      : [];
     for (const id of unique) {
       const p = byId.get(id);
       const name = fullName(identities.get(id));
@@ -215,6 +234,9 @@ export class FeedCardsService {
         displayName: name || p?.handle || null,
         handle: p?.handle ?? null,
         avatarUrl: await this.storage.freshUrlFor(p?.avatarUrl ?? null),
+        ...(appThumbs
+          ? { avatarThumbs: avatarThumbs[appThumbs.get(id) ?? -1] ?? null }
+          : {}),
         verification: deriveVerificationState({
           creatorVerifiedAt: p?.creatorVerifiedAt ?? null,
           creatorVerifiedUntil: p?.creatorVerifiedUntil ?? null,
@@ -423,6 +445,15 @@ export class FeedCardsService {
 
     const works = await this.worksFor(viewerWawuId, ids);
     const badgeBy = await this.badges.forMany(ids);
+    const coverThumbs = isAppRequest()
+      ? new Map(
+          (
+            await this.storage.thumbsFor(
+              ids.map((id) => profileBy.get(id)?.coverUrl ?? null),
+            )
+          ).map((t, i) => [ids[i], t] as const),
+        )
+      : null;
 
     for (const id of ids) {
       const who = creators.get(id);
@@ -437,6 +468,12 @@ export class FeedCardsService {
         headline: profile?.headline ?? null,
         avatarUrl: who.avatarUrl,
         coverUrl: await this.storage.freshUrlFor(profile?.coverUrl ?? null),
+        ...(coverThumbs
+          ? {
+              avatarThumbs: who.avatarThumbs ?? null,
+              coverThumbs: coverThumbs.get(id) ?? null,
+            }
+          : {}),
         verification: who.verification,
         badge: badgeBy.get(id) ?? null,
         followers: followersBy.get(id) ?? 0,
@@ -496,7 +533,16 @@ export class FeedCardsService {
     const boughtSet = new Set(bought.map((b) => b.contentId));
     const frameBy = new Map(frames.map((f) => [f.contentId, f._count._all]));
     const out = new Map<string, CardWork[]>();
-    for (const piece of pieces) {
+    // HUB-THUMBS: small copies of each preview picture and cover, for the app's requests only.
+    const appThumbs = isAppRequest()
+      ? {
+          preview: await this.storage.thumbsFor(
+            pieces.map((p) => p.previewAssetUrl),
+          ),
+          cover: await this.storage.thumbsFor(pieces.map((p) => p.coverKey)),
+        }
+      : null;
+    for (const [at, piece] of pieces.entries()) {
       const list = out.get(piece.creatorWawuId) ?? [];
       list.push({
         id: piece.id,
@@ -507,6 +553,12 @@ export class FeedCardsService {
         title: piece.title,
         thumbnailUrl: await this.storage.freshUrlFor(piece.previewAssetUrl),
         coverUrl: await this.storage.coverUrlFor(piece.coverKey),
+        ...(appThumbs
+          ? {
+              thumbnailThumbs: appThumbs.preview[at],
+              coverThumbs: appThumbs.cover[at],
+            }
+          : {}),
         durationLabel: piece.durationLabel,
         pageCount: piece.pageCount,
         frameCount: frameBy.get(piece.id) ?? 0,
@@ -562,6 +614,15 @@ export class FeedCardsService {
     const badgeBy = await this.badges.forMany(
       listings.map((l) => l.wawuUserId),
     );
+    const coverThumbs = isAppRequest()
+      ? new Map(
+          (
+            await this.storage.thumbsFor(
+              listings.map((l) => coverBy.get(l.wawuUserId) ?? null),
+            )
+          ).map((t, i) => [listings[i].wawuUserId, t] as const),
+        )
+      : null;
     for (const l of listings) {
       const who = creators.get(l.wawuUserId);
       const state = stateBy.get(l.wawuUserId);
@@ -576,6 +637,12 @@ export class FeedCardsService {
         coverUrl: await this.storage.freshUrlFor(
           coverBy.get(l.wawuUserId) ?? null,
         ),
+        ...(coverThumbs
+          ? {
+              avatarThumbs: who.avatarThumbs ?? null,
+              coverThumbs: coverThumbs.get(l.wawuUserId) ?? null,
+            }
+          : {}),
         verification: who.verification,
         badge: badgeBy.get(l.wawuUserId) ?? null,
         category: l.category,

@@ -5,8 +5,9 @@ import { deriveVerificationState } from '../common/verification/verification-sta
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { ContentStatus } from '../../generated/prisma/enums';
 import { Prisma } from '../../generated/prisma/client';
-import { StorageService } from '../storage/storage.service';
-import { freshOwnImage } from '../storage/own-image';
+import { StorageService, type Thumbs } from '../storage/storage.service';
+import { freshOwnImage, ownThumbs } from '../storage/own-image';
+import { isAppRequest } from '../price-list/app-client';
 import type { VerificationState } from '../common/verification/verification-state';
 import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
 import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
@@ -23,6 +24,8 @@ export interface ExploreCreatorCard {
   name: string;
   handle: string | null;
   avatarUrl: string | null;
+  /** HUB-THUMBS: the avatar's small copies; the app's requests only (X-Wawu-Client: app), null when none. */
+  avatarThumbs?: Thumbs | null;
   field: string | null;
   pieceCount: number;
   verification: VerificationState;
@@ -165,6 +168,16 @@ export class ExploreService {
         this.freshOwnImage(p.avatarUrl, 'avatars', p.wawuUserId),
       ),
     );
+    const thumbs = isAppRequest()
+      ? await ownThumbs(
+          this.storage,
+          profiles.map((p) => ({
+            stored: p.avatarUrl,
+            folder: 'avatars',
+            ownerId: p.wawuUserId,
+          })),
+        )
+      : null;
     return profiles
       .map((p, idx) => {
         const identity = identities.get(p.wawuUserId);
@@ -177,6 +190,7 @@ export class ExploreService {
           name: fullName || p.handle || '',
           handle: p.handle,
           avatarUrl: avatars[idx],
+          ...(thumbs ? { avatarThumbs: thumbs[idx] } : {}),
           field: p.interests[0] ?? null,
           pieceCount: counts.get(p.wawuUserId) ?? 0,
           verification: deriveVerificationState(p),

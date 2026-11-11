@@ -217,12 +217,22 @@ export class ContentPieceService {
       locked ? null : this.storage.freshUrlFor(row.fullAssetUrl),
       withCover ? this.storage.coverUrlFor(coverKey) : null,
     ]);
+    // HUB-THUMBS: small copies of the preview picture and cover, on the app's requests only (the keys are left off otherwise).
+    const [previewThumbs, coverThumbs] = isAppRequest()
+      ? await this.storage.thumbsFor([row.previewAssetUrl, coverKey])
+      : [];
     return {
       ...row,
       previewAssetUrl: previewAssetUrl as string,
       fullAssetUrl,
       fullAssetLocked: locked,
       ...(withCover ? { coverUrl } : {}),
+      ...(isAppRequest()
+        ? {
+            previewThumbs: previewThumbs ?? null,
+            coverThumbs: coverThumbs ?? null,
+          }
+        : {}),
     } as ContentPieceResponse;
   }
 

@@ -9,6 +9,7 @@ import type { Prisma } from '../../generated/prisma/client';
 import type { PrismaService } from '../common/prisma/prisma.service';
 import { CHAT_UPLOAD_FOLDERS } from '../chat/chat-limits';
 import { deleteFromBucket } from './bucket-delete';
+import { removeThumbs } from './thumbs/remove-thumbs';
 import {
   LOCKED_TX,
   inPersonsTurn,
@@ -208,6 +209,9 @@ export async function releaseOwnUpload(
     logger.warn(
       `Could not delete storage object ${key}: ${String(outcome.error)}`,
     );
+  } else {
+    // HUB-THUMBS: the small copies of a deleted cover or preview go with it.
+    await removeThumbs({ client, bucket, prisma, logger }, key);
   }
 
   await inPersonsTurn(

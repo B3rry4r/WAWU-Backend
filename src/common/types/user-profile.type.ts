@@ -1,6 +1,7 @@
 import type { UserProfileModel } from '../../../generated/prisma/models';
 import type { WawuJwtClaims } from '../auth/wawu-jwt-claims.interface';
 import type { VerificationState } from '../verification/verification-state';
+import type { ThumbLinks } from './content-piece.type';
 import type { ProfileExperienceView } from '../../user-profile/profile-experience.type';
 
 export type UserProfile = UserProfileModel;
@@ -33,6 +34,9 @@ export type UserProfileWithClaims = Omit<UserProfile, StoredVerificationDates> &
      * gets an empty array rather than a query.
      */
     experience: ProfileExperienceView[];
+    /** HUB-THUMBS: small copies of the avatar and cover; the app's requests only (X-Wawu-Client: app), absent otherwise. */
+    avatarThumbs?: ThumbLinks | null;
+    coverThumbs?: ThumbLinks | null;
   };
 
 /**
@@ -65,6 +69,9 @@ export interface CreatorProfile {
    */
   avatarUrl: string | null;
   coverUrl: string | null;
+  /** HUB-THUMBS: small copies of the avatar and cover; the app's requests only (X-Wawu-Client: app), absent otherwise. */
+  avatarThumbs?: ThumbLinks | null;
+  coverThumbs?: ThumbLinks | null;
   interests: string[];
   instagramHandle: string | null;
   whatsappHandle: string | null;

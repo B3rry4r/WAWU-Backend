@@ -381,16 +381,21 @@ export class SearchResponseService {
             fullAssetLocked: locked,
           } as ContentPieceResponse;
           if (!withApp) return piece;
-          const [previewAssetUrl, fullAssetUrl, coverUrl] = await Promise.all([
-            this.fresh(item.previewAssetUrl),
-            this.fresh(piece.fullAssetUrl),
-            this.storage?.coverUrlFor(coverKey),
-          ]);
+          const [previewAssetUrl, fullAssetUrl, coverUrl, thumbs] =
+            await Promise.all([
+              this.fresh(item.previewAssetUrl),
+              this.fresh(piece.fullAssetUrl),
+              this.storage?.coverUrlFor(coverKey),
+              // HUB-THUMBS: small copies of the preview picture and the cover (app requests only, as everything here).
+              this.storage?.thumbsFor([item.previewAssetUrl, coverKey]),
+            ]);
           return {
             ...piece,
             previewAssetUrl: previewAssetUrl ?? item.previewAssetUrl,
             fullAssetUrl,
             coverUrl: coverUrl ?? null,
+            previewThumbs: thumbs?.[0] ?? null,
+            coverThumbs: thumbs?.[1] ?? null,
           };
         },
       ),

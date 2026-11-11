@@ -1,4 +1,8 @@
-import { objectKeyFrom, type StorageService } from './storage.service';
+import {
+  objectKeyFrom,
+  type StorageService,
+  type Thumbs,
+} from './storage.service';
 
 /**
  * A stored profile image, made readable again (HUB-IMG-LINKS: Explore and creator suggestions share this one rule).
@@ -23,4 +27,28 @@ export async function freshOwnImage(
     return null;
   }
   return storage.freshUrlFor(stored);
+}
+
+/**
+ * HUB-THUMBS: the small copies of a list of profile images, in order, each only when it is a key of its OWN
+ * owner in `folder` (the same rule as `freshOwnImage`). Null for the rest, and for every request that is not the
+ * app's (`StorageService.thumbsFor`).
+ */
+export function ownThumbs(
+  storage: Pick<StorageService, 'thumbsFor'>,
+  items: ReadonlyArray<{
+    stored: string | null;
+    folder: string;
+    ownerId: string;
+  }>,
+): Promise<Array<Thumbs | null>> {
+  return storage.thumbsFor(
+    items.map(({ stored, folder, ownerId }) => {
+      if (!stored) return null;
+      const key = objectKeyFrom(stored);
+      return key !== stored && key.startsWith(`${folder}/${ownerId}/`)
+        ? stored
+        : null;
+    }),
+  );
 }

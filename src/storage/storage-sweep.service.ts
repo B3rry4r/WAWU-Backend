@@ -54,6 +54,12 @@ export class StorageSweepService {
         .catch((err) =>
           this.logger.warn(`Video privacy sweep failed: ${String(err)}`),
         );
+      // HUB-THUMBS: public pictures confirmed lately that have no small copies yet.
+      await this.storage
+        .sweepThumbs()
+        .catch((err) =>
+          this.logger.warn(`Thumbnail sweep failed: ${String(err)}`),
+        );
       // FIX-104 round 2: chat files that landed and no message carries, a day on.
       if (Date.now() - this.lastUnsentChatSweep >= UNSENT_CHAT_SWEEP_EVERY_MS) {
         this.lastUnsentChatSweep = Date.now();

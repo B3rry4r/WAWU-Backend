@@ -29,6 +29,7 @@ import { ProfileExperienceService } from './profile-experience.service';
 import type { ProfileStatsView } from './profile-stats.type';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
 import { cleanPhotoLink, keepPhotoPosition } from '../storage/photo-position';
+import { isAppRequest } from '../price-list/app-client';
 import { WalletService } from '../wallet/wallet.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 
@@ -150,9 +151,7 @@ export class UserProfileService {
     const [avatarUrl, coverUrl, experience] = await Promise.all([
       this.resignImage(base.avatarUrl),
       this.resignImage(base.coverUrl),
-      profile
-        ? this.profileExperience.list(user.sub)
-        : Promise.resolve([]),
+      profile ? this.profileExperience.list(user.sub) : Promise.resolve([]),
     ]);
 
     // The four stored dates are pulled OFF the spread and republished as one
@@ -176,11 +175,21 @@ export class UserProfileService {
     void _pAt;
     void _pUntil;
 
+    // HUB-THUMBS: small copies of the avatar and cover, for the app's requests only (the keys are left off otherwise).
+    const [avatarThumbs, coverThumbs] = isAppRequest()
+      ? await this.storage.thumbsFor([base.avatarUrl, base.coverUrl])
+      : [];
     return {
       ...user,
       ...withoutTickDates,
       avatarUrl,
       coverUrl,
+      ...(isAppRequest()
+        ? {
+            avatarThumbs: avatarThumbs ?? null,
+            coverThumbs: coverThumbs ?? null,
+          }
+        : {}),
       wawuUserId: user.sub,
       experience,
       verification: profile ? deriveVerificationState(profile) : unverified(),
@@ -234,13 +243,21 @@ export class UserProfileService {
           // column is NOT nullable, so an explicit `null` must be ignored
           // rather than written, which previously 500'd.
           ...(dto.accountType != null && {
-            accountType: dto.accountType as AccountType,
+            accountType: dto.accountType,
           }),
           ...(dto.interests !== undefined && { interests: dto.interests }),
           ...(dto.bio !== undefined && { bio: dto.bio }),
           ...(dto.handle !== undefined && { handle: dto.handle }),
           ...Object.fromEntries(
-            (['websiteUrl', 'avatarUrl', 'coverUrl', 'company', 'headline'] as const)
+            (
+              [
+                'websiteUrl',
+                'avatarUrl',
+                'coverUrl',
+                'company',
+                'headline',
+              ] as const
+            )
               .filter((k) => dto[k] !== undefined)
               .map((k) => [k, dto[k]]),
           ),
@@ -333,6 +350,11 @@ export class UserProfileService {
       await this.wallet.provisionOnRegistration(claims);
     }
 
+    // HUB-THUMBS: a new avatar or cover gets its small copies now (bounded wait; never fails the save).
+    for (const link of [dto.avatarUrl, dto.coverUrl])
+      if (typeof link === 'string' && link)
+        await this.storage.ensureThumbs(objectKeyFrom(link.split('#')[0]));
+
     return saved;
   }
 
@@ -408,6 +430,10 @@ export class UserProfileService {
       this.profileExperience.list(profile.wawuUserId),
     ]);
 
+    // HUB-THUMBS: as above, for the app's requests only.
+    const [avatarThumbs, coverThumbs] = isAppRequest()
+      ? await this.storage.thumbsFor([profile.avatarUrl, profile.coverUrl])
+      : [];
     return {
       wawuUserId: profile.wawuUserId,
       verification: deriveVerificationState(profile),
@@ -415,6 +441,12 @@ export class UserProfileService {
       bio: profile.bio,
       avatarUrl,
       coverUrl,
+      ...(isAppRequest()
+        ? {
+            avatarThumbs: avatarThumbs ?? null,
+            coverThumbs: coverThumbs ?? null,
+          }
+        : {}),
       interests: profile.interests,
       instagramHandle: profile.instagramHandle,
       xHandle: profile.xHandle,

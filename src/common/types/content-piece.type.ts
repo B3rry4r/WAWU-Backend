@@ -2,6 +2,12 @@ import type { ContentPieceModel } from '../../../generated/prisma/models';
 
 export type ContentPiece = ContentPieceModel;
 
+/** HUB-THUMBS: links to a picture's two small copies (96 and 640 px on the long side). */
+export interface ThumbLinks {
+  w96: string;
+  w640: string;
+}
+
 /**
  * Wire response for GET /content, /content/:id, /content/mine etc.
  * `fullAssetLocked` (registry note: "derived") is computed per-requester at
@@ -26,4 +32,10 @@ export type ContentPieceResponse = Omit<
    * answer exactly as before, so on those it is absent. The picture is the piece's, never a frame of its preview file.
    */
   coverUrl?: string | null;
+  /**
+   * HUB-THUMBS: small copies of the preview picture and the cover; null when a picture has none. Served on the app's
+   * requests only (`X-Wawu-Client: app`); on every other request the keys are absent.
+   */
+  previewThumbs?: ThumbLinks | null;
+  coverThumbs?: ThumbLinks | null;
 };

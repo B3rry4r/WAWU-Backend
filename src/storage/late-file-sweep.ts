@@ -2,6 +2,7 @@ import { HeadObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import type { Logger } from '@nestjs/common';
 import type { PrismaService } from '../common/prisma/prisma.service';
 import { deleteFromBucket } from './bucket-delete';
+import { removeThumbs } from './thumbs/remove-thumbs';
 import { LOCKED_TX, lockStorageQuota, removalInFlight } from './storage-lock';
 import { isClaimed } from './upload-release';
 
@@ -359,6 +360,8 @@ async function settleFile(
   if (typeof claim === 'string') return claim;
 
   const outcome = await deleteFromBucket(client!, bucket, row.key);
+  if (outcome.result === 'gone')
+    await removeThumbs({ client: client!, bucket, prisma, logger }, row.key);
 
   return prisma.$transaction(async (tx): Promise<Verdict> => {
     await lockStorageQuota(tx, row.wawuUserId);
