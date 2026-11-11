@@ -18,6 +18,8 @@ import {
 /** The settings this adapter reads (LEGAL-ELEVEN, R-137). */
 export const LEGAL_AI_LLM_SETTING = 'legal.ai_llm';
 export const LEGAL_AI_AGENT_SETTING = 'legal.ai_agent_id';
+/** The legal agent's name at the provider: found by it before another is made. */
+export const LEGAL_AGENT_NAME = 'WAWU Legal assistant';
 
 /** A turn that has not answered in this long fails, as Gemini's 20 second limit does. */
 const TIMEOUT_MS = 25_000;
@@ -60,16 +62,17 @@ const AGENT_PROMPT =
   'You are the legal assistant of a Nigerian legal service. Each conversation brings its own instruction, which you follow.';
 
 /**
- * One JSON object from an agent's reply. A single markdown fence around it is tolerated (models add one); anything
- * else that is not one JSON object is a failed turn, as Gemini's unparseable answer is.
+ * The JSON object in an agent's reply, found the way the legal parsers find it in Gemini's (`parseTurn`): fences dropped,
+ * then the first `{` to the last `}`. Anything else is a failed turn, as an unparseable Gemini answer is.
  */
 export function readJsonObject(reply: string): unknown {
-  let text = reply.trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
-  if (fenced) text = fenced[1].trim();
+  const unfenced = reply.replace(/```(?:json)?/gi, '');
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    if (start < 0 || end <= start) throw new Error('none');
+    parsed = JSON.parse(unfenced.slice(start, end + 1));
   } catch {
     throw new Error('Legal chat returned unparseable JSON');
   }
@@ -114,7 +117,7 @@ export class ElevenLabsLegalAi implements GeminiClient {
 
   private spec(): AgentSpec {
     return {
-      name: 'Legal assistant',
+      name: LEGAL_AGENT_NAME,
       prompt: AGENT_PROMPT,
       // No greeting: a text conversation must wait for the person's message, not open with one.
       firstMessage: '',
@@ -139,10 +142,22 @@ export class ElevenLabsLegalAi implements GeminiClient {
         await this.voice.updateAgent(pinned, this.spec());
         return pinned;
       }
+      // Found by its exact name before one is made, so a restart never adds another. Oldest first, so agents made
+      // at the same moment by two Hubs all settle on the same one.
+      const existing = await this.voice.listAgentsNamed(LEGAL_AGENT_NAME);
+      if (existing.length > 0) {
+        await this.voice.updateAgent(existing[0].agentId, this.spec());
+        return existing[0].agentId;
+      }
       const { agentId } = await this.voice.createAgent(this.spec());
-      this.logger.warn(
-        `Made the legal agent ${agentId}: set legal.ai_agent_id to it so a restart does not make another`,
-      );
+      // Two Hubs booting together may both have made one: each reads the list again and the older stays; the other
+      // deletes only its own.
+      const after = await this.voice.listAgentsNamed(LEGAL_AGENT_NAME);
+      const winner = after[0]?.agentId ?? agentId;
+      if (winner !== agentId) {
+        await this.voice.deleteAgent(agentId);
+        return winner;
+      }
       return agentId;
     })();
     this.ready = made;
@@ -173,6 +188,7 @@ export class ElevenLabsLegalAi implements GeminiClient {
           message,
           earlier,
           override: { prompt: instruction, llm: this.llm() },
+          untilTurnEnd: true,
         },
         {
           signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -215,8 +231,7 @@ export class ElevenLabsLegalAi implements GeminiClient {
       last.text,
       'chat',
     );
-    if (!request.responseSchema) return reply;
-    readJsonObject(reply);
+    // The reply goes to the legal parsers as Gemini's does (`parseTurn` finds the object and keeps every check).
     return reply;
   }
 

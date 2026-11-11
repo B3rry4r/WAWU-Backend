@@ -433,6 +433,13 @@ export interface VoiceSessionLink {
   conversationId: string;
 }
 
+/** One agent as the provider's list shows it (LEGAL-ELEVEN). */
+export interface AgentListed {
+  agentId: string;
+  name: string;
+  createdUnix: number;
+}
+
 /** One conversation as the provider's list shows it (REC-DELETE). */
 export interface ConversationListed {
   conversationId: string;
@@ -857,6 +864,16 @@ export interface AiVoiceProvider {
     opts?: { signal?: AbortSignal },
   ): Promise<void>;
 
+  /**
+   * LEGAL-ELEVEN: the agents whose name is exactly `name` (`GET /v1/convai/agents?search=`, every page, oldest first, then
+   * by id). The provider's `search` is not documented as exact, so the answer is filtered here. Throws
+   * `AiVoiceProviderError`, also when the list is longer than the pages read (an incomplete list proves nothing).
+   */
+  listAgentsNamed(
+    name: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<AgentListed[]>;
+
   /** One try at deleting an agent (`DELETE /v1/convai/agents/{id}`). Never throws; same answers as `deleteTranscript`. */
   deleteAgent(agentId: string): Promise<CopyRemoval>;
 
@@ -897,6 +914,8 @@ export interface AiVoiceProvider {
       earlier: readonly ChatTurn[];
       /** LEGAL-ELEVEN: replaces the agent's prompt and/or model for this one conversation (the agent must allow it). */
       override?: { prompt?: string; llm?: string };
+      /** LEGAL-ELEVEN: join every `agent_response` of the turn, up to `agent_response_complete` (or a short quiet), not the first only. */
+      untilTurnEnd?: boolean;
     },
     opts?: {
       signal?: AbortSignal;

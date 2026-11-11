@@ -1731,7 +1731,7 @@ export function buildRegistry(
     ],
     [
       'legal.ai_agent_id',
-      "The agent platform's id of the legal agent (blank: the Hub makes one the first time it is needed and logs its id)",
+      "The agent platform's id of the legal agent (blank: the Hub finds the agent named WAWU Legal assistant at the provider, or makes it)",
       'The legal assistant chat and the lawyer brief (LEGAL-ELEVEN)',
       '',
       agentIdLine,

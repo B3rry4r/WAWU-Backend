@@ -15,7 +15,8 @@ import {
   type StandinHandle,
 } from '../../../test/ai-tools/voice-standin-for-specs';
 import { providerAtCapacity } from '../assistant/legal-assistant.service';
-import { ElevenLabsLegalAi, readJsonObject } from '../ai/elevenlabs-legal-ai';
+import { ElevenLabsLegalAi, LEGAL_AGENT_NAME } from '../ai/elevenlabs-legal-ai';
+import { parseTurn } from '../assistant/legal-assistant-prompt';
 import { LegalAiClient, modelLabelOf } from '../ai/legal-ai.client';
 
 const KEY = 'legal-eleven-spec-key';
@@ -69,7 +70,6 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
   });
 
   it('asks one text-only agent conversation per turn, with the instruction and model of that turn and nothing else', async () => {
-    const agentsBefore = state().agents.length;
     state().nextAgentReplies.push('{"reply":"Is the lease written?"}');
     const raw = await eleven.chat({
       instruction: 'INSTRUCTION-ONE',
@@ -81,8 +81,9 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
       responseSchema: SCHEMA,
     });
     expect(JSON.parse(raw)).toEqual({ reply: 'Is the lease written?' });
-    const agent = state().agents[agentsBefore];
-    expect(state().agents.length).toBe(agentsBefore + 1);
+    const legal = state().agents.filter((a) => a.name === LEGAL_AGENT_NAME);
+    expect(legal).toHaveLength(1);
+    const agent = legal[0];
     expect(agent.firstMessage).toBe('');
     expect(agent.overrides).toEqual({ prompt: true, llm: true });
     expect(agent.textOnlyOverride).toBe(true);
@@ -102,8 +103,7 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
     expect(chat.message).toContain('second words');
   });
 
-  it('makes the agent once and reuses it; the model setting is read on every turn', async () => {
-    const agentsBefore = state().agents.length;
+  it('reuses the agent; the model setting is read on every turn', async () => {
     state().nextAgentReplies.push('{"reply":"a"}', '{"reply":"b"}');
     await eleven.chat({
       instruction: 'i',
@@ -116,7 +116,9 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
       history: [{ role: 'user', text: 'two' }],
       responseSchema: SCHEMA,
     });
-    expect(state().agents.length).toBe(agentsBefore + 1);
+    expect(
+      state().agents.filter((a) => a.name === LEGAL_AGENT_NAME),
+    ).toHaveLength(1);
     expect(state().chats.map((c) => c.override?.llm)).toEqual([
       'gemini-3-flash-preview',
       'claude-sonnet-4-5',
@@ -138,6 +140,7 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
     values['legal.ai_agent_id'] = [made.agentId];
     const agentsBefore = state().agents.length;
     const patchesBefore = state().agentPatches.length;
+    const listsBefore = state().agentListReads;
     state().nextAgentReplies.push('{"reply":"x"}');
     await eleven.chat({
       instruction: 'i',
@@ -146,7 +149,10 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
     });
     expect(state().agents.length).toBe(agentsBefore);
     expect(state().agentPatches.length).toBe(patchesBefore + 1);
+    expect(state().agentListReads).toBe(listsBefore);
     expect(state().chats[0].agent).toBe(made.agentId);
+    // A pinned agent takes the legal name on its update; it is not part of the agents the other tests count.
+    await voice.deleteAgent(made.agentId);
   });
 
   it('gives a prose turn back as it came, with no schema asked for', async () => {
@@ -159,24 +165,110 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
     expect(state().chats[0].override?.prompt).toBe('PLAIN');
   });
 
-  it('fails a reply that is not one JSON object, exactly as an unparseable Gemini answer', async () => {
-    for (const bad of ['not json at all', '[1,2]', '"text"', '{"reply":']) {
-      state().nextAgentReplies.push(bad);
-      await expect(
-        eleven.chat({
+  it("hands the reply to the legal parsers as Gemini's goes: a preamble before the JSON is accepted, prose is still a failed turn", async () => {
+    const turn = {
+      reply: 'Is the lease written?',
+      quickReplies: [],
+      matter: 'property',
+      headline: 'Tenancy',
+      facts: [],
+      answers: {},
+      briefReady: false,
+    };
+    state().nextAgentReplies.push(
+      'Sure, here you go:\n```json\n' + JSON.stringify(turn) + '\n```',
+      'No JSON here, only prose.',
+    );
+    const ask = () =>
+      eleven.chat({
+        instruction: 'i',
+        history: [{ role: 'user', text: 'hi' }],
+        responseSchema: SCHEMA,
+      });
+    expect(parseTurn(await ask()).reply).toBe('Is the lease written?');
+    await expect(ask().then(parseTurn)).rejects.toThrow('held no JSON object');
+  });
+
+  it("joins a turn that arrives as several responses, up to the platform's end-of-turn event", async () => {
+    state().nextAgentReplies.push('{"reply":', '"split"}');
+    const out = await eleven.chat({
+      instruction: 'i',
+      history: [{ role: 'user', text: 'hi [[parts]]' }],
+      responseSchema: SCHEMA,
+    });
+    expect(out).toBe('{"reply":\n\n"split"}');
+  });
+
+  it('three boots with no pin make exactly one agent, found by its exact name', async () => {
+    const named = () =>
+      state().agents.filter((a) => a.name === LEGAL_AGENT_NAME).length;
+    const before = named();
+    for (let i = 0; i < 3; i += 1) {
+      const boot = new ElevenLabsLegalAi(voice, settingsOf(values));
+      boot.cleanupDelaysMs = [20];
+      state().nextAgentReplies.push('{"reply":"x"}');
+      await boot.chat({
+        instruction: 'i',
+        history: [{ role: 'user', text: 'hi' }],
+        responseSchema: SCHEMA,
+      });
+    }
+    expect(named()).toBe(Math.max(before, 1));
+    // An agent of another name, or one that only contains the name, is never taken for it.
+    await voice.createAgent({
+      name: `${LEGAL_AGENT_NAME} copy`,
+      prompt: 'p',
+      firstMessage: '',
+      language: 'en',
+      llm: 'gemini-3-flash-preview',
+      voiceId: '',
+      knowledge: [],
+      allowOverrides: { prompt: true },
+    });
+    expect(await voice.listAgentsNamed(LEGAL_AGENT_NAME)).toHaveLength(
+      Math.max(before, 1),
+    );
+  });
+
+  it('reads the agent list across pages', async () => {
+    state().agentListPageSize = 1;
+    try {
+      const found = await voice.listAgentsNamed(LEGAL_AGENT_NAME);
+      expect(found.length).toBeGreaterThanOrEqual(1);
+      expect(
+        found.every(
+          (a, i) => i === 0 || a.createdUnix >= found[i - 1].createdUnix,
+        ),
+      ).toBe(true);
+    } finally {
+      state().agentListPageSize = 0;
+    }
+  });
+
+  it('two Hubs booting at the same moment end with one agent', async () => {
+    const racing = new HttpVoiceProvider(
+      new ConfigService({
+        AI_VOICE_BASE_URL: `http://127.0.0.1:${standin.port}`,
+        AI_VOICE_API_KEY: KEY,
+      }),
+    );
+    // A fresh name-space: delete every legal agent so both boots find none and both create.
+    for (const a of await voice.listAgentsNamed(LEGAL_AGENT_NAME))
+      await voice.deleteAgent(a.agentId);
+    const one = new ElevenLabsLegalAi(voice, settingsOf(values));
+    const two = new ElevenLabsLegalAi(racing, settingsOf(values));
+    one.cleanupDelaysMs = two.cleanupDelaysMs = [20];
+    state().nextAgentReplies.push('{"reply":"a"}', '{"reply":"b"}');
+    await Promise.all(
+      [one, two].map((c) =>
+        c.chat({
           instruction: 'i',
           history: [{ role: 'user', text: 'hi' }],
           responseSchema: SCHEMA,
         }),
-      ).rejects.toThrow('Legal chat returned unparseable JSON');
-    }
-    state().nextAgentReplies.push('```json\n{"reply":"fenced"}\n```');
-    const ok = await eleven.chat({
-      instruction: 'i',
-      history: [{ role: 'user', text: 'hi' }],
-      responseSchema: SCHEMA,
-    });
-    expect(readJsonObject(ok)).toEqual({ reply: 'fenced' });
+      ),
+    );
+    expect(await voice.listAgentsNamed(LEGAL_AGENT_NAME)).toHaveLength(1);
   });
 
   it('has no turn to answer when the newest line is not the person', async () => {
@@ -211,6 +303,12 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
     expect(chat.textOnly).toBe(true);
     expect(chat.override?.prompt).toContain('BRIEF-INSTRUCTION');
     expect(chat.message).toBe('Matter: property\nRent rise: 60%');
+    state().nextAgentReplies.push(
+      'Here is the brief: {"summary":"S","keyIssues":[],"questionsToClarify":[]} Hope that helps.',
+    );
+    expect(
+      (await eleven.generateBrief({ instruction: 'i', content: 'c' })).summary,
+    ).toBe('S');
     state().nextAgentReplies.push('nope');
     await expect(
       eleven.generateBrief({ instruction: 'i', content: 'c' }),
@@ -228,11 +326,7 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
       responseSchema: SCHEMA,
     });
     await expect(
-      eleven.chat({
-        instruction: 'i',
-        history: [{ role: 'user', text: 'two' }],
-        responseSchema: SCHEMA,
-      }),
+      eleven.generateBrief({ instruction: 'i', content: 'two' }),
     ).rejects.toThrow('unparseable');
     await wait(() => state().deletedConversations.length >= 2);
     expect(state().deletedConversations).toHaveLength(2);
@@ -241,6 +335,8 @@ describe('LEGAL-ELEVEN: the legal AI client on the agent platform', () => {
   it('turns a provider capacity answer into the 429 text the assistant already reads', async () => {
     const down = {
       agentsConfigured: true,
+      listAgentsNamed: () => Promise.resolve([]),
+      deleteAgent: () => Promise.resolve('deleted'),
       updateAgent: () => Promise.resolve(),
       createAgent: () => Promise.resolve({ agentId: 'agent-x1234567' }),
       askAgent: () =>

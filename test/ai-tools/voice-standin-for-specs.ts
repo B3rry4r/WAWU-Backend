@@ -208,6 +208,9 @@ export interface StandinHandle {
     }[];
     /** LEGAL-ELEVEN: the words the next agent answers use, first in first out (empty: the stand-in's own sentence). */
     nextAgentReplies: string[];
+    /** LEGAL-ELEVEN: reads of the agent list, and the most agents one page holds (0: the request's page_size). */
+    agentListReads: number;
+    agentListPageSize: number;
     deletedConversations: string[];
     /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500. */
     conversationDeleteRefusals: number;

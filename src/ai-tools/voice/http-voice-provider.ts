@@ -26,6 +26,7 @@ import {
   type AgentSpec,
   type AiVoiceProvider,
   type AssetUpload,
+  type AgentListed,
   type ChatTurn,
   type ConversationListed,
   type ConversationRead,
@@ -80,6 +81,10 @@ export const AI_VOICE_ENV = {
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** REC-DELETE: the most pages (of 100) one read of the provider's conversation list follows. */
 const CONVERSATION_LIST_PAGES = 5;
+/** LEGAL-ELEVEN: the most pages (of 100) one read of the provider's agent list follows. */
+const AGENT_LIST_PAGES = 5;
+/** LEGAL-ELEVEN: how long after a response with no `agent_response_complete` a turn counts as over. */
+const TURN_QUIET_MS = 1500;
 /**
  * How long a Music track call may run (AITOOLS-03). NO long real run has
  * happened (only a 3 second track), so this is set from the longest track the
@@ -2049,6 +2054,55 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     );
   }
 
+  async listAgentsNamed(
+    name: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<AgentListed[]> {
+    if (!this.agentsConfigured)
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    const out: AgentListed[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < AGENT_LIST_PAGES; page += 1) {
+      const raw = (await this.jsonCall(
+        'GET',
+        `/v1/convai/agents?search=${encodeURIComponent(name)}&page_size=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        undefined,
+        opts.signal,
+      )) as { agents?: unknown; has_more?: unknown; next_cursor?: unknown };
+      if (!Array.isArray(raw.agents))
+        throw new AiVoiceProviderError('unavailable', 'not a list');
+      for (const item of raw.agents as {
+        agent_id?: unknown;
+        name?: unknown;
+        created_at_unix_secs?: unknown;
+      }[]) {
+        if (
+          typeof item?.agent_id !== 'string' ||
+          !PROVIDER_ID.test(item.agent_id) ||
+          item.name !== name
+        )
+          continue;
+        out.push({
+          agentId: item.agent_id,
+          name,
+          createdUnix:
+            typeof item.created_at_unix_secs === 'number'
+              ? item.created_at_unix_secs
+              : 0,
+        });
+      }
+      if (raw.has_more !== true)
+        return out.sort(
+          (a, b) =>
+            a.createdUnix - b.createdUnix || a.agentId.localeCompare(b.agentId),
+        );
+      cursor = typeof raw.next_cursor === 'string' ? raw.next_cursor : null;
+      if (!cursor)
+        throw new AiVoiceProviderError('unavailable', 'list has no cursor');
+    }
+    throw new AiVoiceProviderError('unavailable', 'list too long');
+  }
+
   deleteAgent(agentId: string): Promise<CopyRemoval> {
     if (!PROVIDER_ID.test(agentId)) return Promise.resolve('failed');
     return this.removeItem(`/v1/convai/agents/${encodeURIComponent(agentId)}`);
@@ -2175,6 +2229,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       message: string;
       earlier: readonly ChatTurn[];
       override?: { prompt?: string; llm?: string };
+      untilTurnEnd?: boolean;
     },
     opts: {
       signal?: AbortSignal;
@@ -2211,6 +2266,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
             .join('\n')}\n\nThe person now writes: ${req.message}`;
     return new Promise<Asked>((resolve, reject) => {
       let settled = false;
+      const parts: string[] = [];
+      let quiet: NodeJS.Timeout | undefined;
       const socket = new WebSocket(url, {
         handshakeTimeout: 15_000,
         maxPayload: 1 << 20,
@@ -2219,6 +2276,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(quiet);
         opts.signal?.removeEventListener('abort', onAbort);
         try {
           socket.terminate();
@@ -2263,6 +2321,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
           }),
         );
       });
+      const finishTurn = () =>
+        end({ reply: parts.join('\n\n'), conversationId });
       let asked = false;
       const ask = () => {
         if (asked) return;
@@ -2303,9 +2363,24 @@ export class HttpVoiceProvider implements AiVoiceProvider {
             event.agent_response_event as
               { agent_response?: unknown } | undefined
           )?.agent_response;
-          if (typeof reply === 'string' && reply.trim() !== '')
+          if (typeof reply !== 'string' || reply.trim() === '') {
+            if (!req.untilTurnEnd || parts.length === 0)
+              end(new AiVoiceProviderError('unavailable', 'empty reply'));
+          } else if (!req.untilTurnEnd) {
             end({ reply: reply.trim(), conversationId });
-          else end(new AiVoiceProviderError('unavailable', 'empty reply'));
+          } else {
+            // LEGAL-ELEVEN: the docs name `agent_response_complete` but do not say when it fires, so a turn also ends
+            // after a short quiet following a response.
+            parts.push(reply.trim());
+            clearTimeout(quiet);
+            quiet = setTimeout(finishTurn, TURN_QUIET_MS);
+          }
+        } else if (
+          event.type === 'agent_response_complete' &&
+          req.untilTurnEnd &&
+          parts.length > 0
+        ) {
+          finishTurn();
         } else if (event.type === 'error') {
           end(new AiVoiceProviderError('rejected', 'the agent refused'));
         }
