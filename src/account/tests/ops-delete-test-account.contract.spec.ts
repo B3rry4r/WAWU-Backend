@@ -398,8 +398,8 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
       expect(
         await prisma.contentPiece.count({ where: { creatorWawuId: a } }),
       ).toBe(0);
-      // R-130 (a bought piece stays with its buyer) is held by sold-content-survives.contract.spec.ts; a sale writes a
-      // Flutterwave Purchase row, which this script now refuses (B1).
+      // R-130 (a bought piece stays with its buyer) while this script runs: see the "R-130" test below. A sale writes
+      // a Flutterwave Purchase row, which this script refuses, so the piece and the buyer's purchase are left as they are.
       // Both of A's pieces went; nothing else lost a row beyond A's own.
       const after = await snapshot();
       const lost = Object.keys(before).filter((t) => after[t] < before[t]);
@@ -667,6 +667,119 @@ describe('delete-test-account (OPS-DEL-TEST)', () => {
       expect(
         await prisma.creatorWallet.findUnique({ where: { wawuUserId: id } }),
       ).not.toBeNull();
+    });
+
+    it('R-130: a creator whose piece another account bought is refused, and the buyer keeps the piece and the purchase', async () => {
+      const creator = await person(
+        'odt-r130-c@example.test',
+        'odt_r130_c',
+        100,
+      );
+      const buyer = await person('odt-r130-b@example.test', 'odt_r130_b');
+      const sold = await piece(creator, 'ODT r130 sold');
+      const purchase = await prisma.purchase.create({
+        data: {
+          contentId: sold.id,
+          type: 'content',
+          buyerWawuId: buyer,
+          creatorWawuId: creator,
+          amount: 100,
+          commissionRate: 0.15,
+          flutterwaveTxRef: `odt-${randomUUID()}`,
+          status: 'completed',
+        },
+      });
+      const before = await snapshot();
+      // The seller side.
+      const dry = await run('odt-r130-c@example.test');
+      expect(dry.code).toBe(1);
+      expect(dry.text).toContain('  Purchase ');
+      const sellerApply = await run('odt-r130-c@example.test', {
+        apply: true,
+        confirm: `DELETE ${creator.slice(0, 8)}`,
+      });
+      expect(sellerApply.code).toBe(1);
+      expect(sellerApply.text).toContain('touch a real-money provider');
+      // The buyer side: the buyer's own account is refused too, so neither side loses the sale.
+      const buyerApply = await run('odt-r130-b@example.test', {
+        apply: true,
+        confirm: `DELETE ${buyer.slice(0, 8)}`,
+      });
+      expect(buyerApply.code).toBe(1);
+      expect(buyerApply.text).toContain('  Purchase ');
+      expect(await snapshot()).toEqual(before);
+      expect(scheduleCalls()).toHaveLength(0);
+      expect(
+        await prisma.contentPiece.findUnique({ where: { id: sold.id } }),
+      ).not.toBeNull();
+      expect(
+        await prisma.purchase.findUnique({ where: { id: purchase.id } }),
+      ).toMatchObject({ buyerWawuId: buyer, status: 'completed' });
+    });
+
+    it('the Flutterwave tables the first list missed refuse (legal, waitlist, CAC fee, store, ledger of another provider)', async () => {
+      const id = await person('odt-fw2@example.test', 'odt_fw2', 100);
+      await prisma.legalRequest.create({
+        data: {
+          wawuUserId: id,
+          serviceCode: 'odt',
+          serviceName: 'Fixture',
+          category: 'odt',
+          path: 'consultation',
+          consultationFee: 5000,
+          consultationTxRef: `odt-${randomUUID()}`,
+        } as never,
+      });
+      await prisma.serviceApplication.create({
+        data: {
+          applicantWawuId: id,
+          kind: 'cac',
+          title: 'Fixture',
+          reference: `odt-${randomUUID()}`,
+          status: 'paid',
+          statusLabel: 'Paid',
+          amountPaid: 25000,
+          timeline: [],
+        } as never,
+      });
+      const ref = randomUUID();
+      await prisma.waitlistRegistration.create({
+        data: {
+          offerId: 'odt',
+          fullName: 'Fixture',
+          phone: '0',
+          email: 'odt-fw2@example.test',
+          consentAt: new Date(),
+          reference: `wawu-join-${ref}`,
+          status: 'paid',
+          amountKobo: 100,
+          flutterwaveTxId: `odt-${ref}`,
+          paidKobo: 100,
+          paidAt: new Date(),
+          claimedByWawuId: id,
+          claimedAt: new Date(),
+        } as never,
+      });
+      const before = await snapshot();
+      const r = await run('odt-fw2@example.test', {
+        apply: true,
+        confirm: `DELETE ${id.slice(0, 8)}`,
+      });
+      expect(r.code).toBe(1);
+      for (const t of [
+        'LegalRequest',
+        'ServiceApplication',
+        'WaitlistRegistration',
+      ])
+        expect(r.text).toContain(`  ${t} `);
+      expect(await snapshot()).toEqual(before);
+      await prisma.legalRequest.deleteMany({ where: { wawuUserId: id } });
+      await prisma.serviceApplication.deleteMany({
+        where: { applicantWawuId: id },
+      });
+      await prisma.waitlistRegistration.deleteMany({
+        where: { claimedByWawuId: id },
+      });
     });
 
     it('a clean sandbox-only account still deletes, with a row of the running provider', async () => {
