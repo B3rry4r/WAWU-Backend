@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { MoneyCheckMailer, type MoneyCheckMail } from '../../check/money-check-mailer';
+import {
+  MoneyCheckMailer,
+  type MoneyCheckMail,
+} from '../../check/money-check-mailer';
 import { recipientsSetting } from '../../check/money-check-config';
 import { feeOf, percentToPpm, ppmToPercent } from './percent-fee';
 import { PROVIDER_RATE_KINDS, RATE_PROVIDER } from './fee-kinds';
@@ -109,7 +112,9 @@ export class ProviderRateService implements OnModuleInit, OnModuleDestroy {
         orderBy: [{ startsAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       });
     } catch {
-      this.logger.warn('The provider rates could not be read; using the last ones.');
+      this.logger.warn(
+        'The provider rates could not be read; using the last ones.',
+      );
     }
   }
 
@@ -196,7 +201,7 @@ export class ProviderRateService implements OnModuleInit, OnModuleDestroy {
       typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
     if (!whole(input.minMinor) || !whole(input.fixedMinor)) {
       throw new BadRequestException([
-        'minMinor and fixedMinor must be whole numbers of the currency\'s smallest unit.',
+        "minMinor and fixedMinor must be whole numbers of the currency's smallest unit.",
       ]);
     }
     const max = input.maxMinor ?? null;
@@ -294,9 +299,10 @@ export class ProviderRateService implements OnModuleInit, OnModuleDestroy {
             severity: 'look',
             kind: 'merchant_charge_differs',
             ref: ref.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 80),
-            detail: `${what === 'rate_changed' ? 'Provider rate change' : 'Provider charge differs'}: ${sentence}`
-              .replace(/[^A-Za-z0-9 .,:;'"()_-]/g, ' ')
-              .slice(0, 400),
+            detail:
+              `${what === 'rate_changed' ? 'Provider rate change' : 'Provider charge differs'}: ${sentence}`
+                .replace(/[^A-Za-z0-9 .,:;'"()_-]/g, ' ')
+                .slice(0, 400),
           },
         ],
         itemsOmitted: 0,
@@ -306,7 +312,9 @@ export class ProviderRateService implements OnModuleInit, OnModuleDestroy {
         try {
           await this.mailer.send(id, mail);
         } catch {
-          this.logger.warn('A provider rate alert was not taken for one recipient.');
+          this.logger.warn(
+            'A provider rate alert was not taken for one recipient.',
+          );
         }
       }
     } catch {

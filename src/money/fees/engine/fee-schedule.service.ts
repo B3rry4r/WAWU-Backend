@@ -125,7 +125,9 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
       this.rows = rows;
       this.loaded = true;
     } catch {
-      this.logger.warn('The fee schedule could not be read; using the last one.');
+      this.logger.warn(
+        'The fee schedule could not be read; using the last one.',
+      );
     }
   }
 
@@ -178,7 +180,8 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
   /** Whether VAT is on, and its rate in millionths. */
   vat(): { on: boolean; ppm: number } {
     const on = this.plan.value('tax.vat_on') === 1;
-    const text = String(this.plan.value('tax.vat_percent'));
+    const raw = this.plan.value('tax.vat_percent');
+    const text = typeof raw === 'string' ? raw : '0';
     return { on, ppm: percentToPpm(text) ?? 0 };
   }
 
@@ -204,7 +207,11 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
     const feeMinor = row.passThrough
       ? 0n
       : feeOf(
-          { ppm: row.percentPpm, minMinor: row.minMinor, maxMinor: row.maxMinor },
+          {
+            ppm: row.percentPpm,
+            minMinor: row.minMinor,
+            maxMinor: row.maxMinor,
+          },
           amountMinor,
         );
     return { feeMinor, vatMinor: this.vatOf(feeMinor), row };
@@ -304,7 +311,7 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
       const whole = (n: number) => Number.isSafeInteger(n) && n >= 0;
       if (!whole(min) || (max !== null && !whole(max))) {
         throw new BadRequestException([
-          'minMinor and maxMinor must be whole numbers of the currency\'s smallest unit.',
+          "minMinor and maxMinor must be whole numbers of the currency's smallest unit.",
         ]);
       }
       if (max !== null && max < min) {

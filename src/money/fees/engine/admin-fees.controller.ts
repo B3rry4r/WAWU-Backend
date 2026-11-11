@@ -95,7 +95,12 @@ export class AdminFeesController {
   async preview(@Query() q: FeePreviewQueryDto): Promise<FeePreviewDto> {
     await this.schedule.refresh();
     const amount = BigInt(q.amountMinor);
-    const r = this.schedule.feeFor(q.kind as FeeKind, amount, new Date(), q.currency);
+    const r = this.schedule.feeFor(
+      q.kind as FeeKind,
+      amount,
+      new Date(),
+      q.currency,
+    );
     // Lead ruling (FEE-01): money going out adds the fee and VAT on top of
     // the amount; money coming in (a wire, local dollars, adding money) and a
     // swap take them off what arrives.

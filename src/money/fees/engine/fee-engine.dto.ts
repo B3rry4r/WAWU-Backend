@@ -37,7 +37,9 @@ export class FeeRowDto {
 export class FeeKindViewDto {
   @ApiProperty({ enum: FEE_KINDS }) kind!: string;
   @ApiProperty({ enum: FEE_CURRENCIES }) currency!: string;
-  @ApiProperty({ description: 'False while the product this fee prices is switched off.' })
+  @ApiProperty({
+    description: 'False while the product this fee prices is switched off.',
+  })
   on!: boolean;
   @ApiProperty({ type: FeeRowDto, nullable: true }) current!: FeeRowDto | null;
   @ApiProperty({ type: [FeeRowDto], description: 'Newest first.' })
@@ -64,7 +66,9 @@ export class AddFeeDto {
   })
   @ValidateIf((o: AddFeeDto) => o.passThrough !== true)
   @IsString()
-  @Matches(PERCENT, { message: 'percent must be a decimal string such as "0.4".' })
+  @Matches(PERCENT, {
+    message: 'percent must be a decimal string such as "0.4".',
+  })
   percent?: string;
 
   @ApiPropertyOptional({ type: 'integer', minimum: 0 })
@@ -82,7 +86,7 @@ export class AddFeeDto {
   maxMinor?: number | null;
 
   @ApiPropertyOptional({
-    description: 'true for ngn_add_money (the provider\'s charge is passed on).',
+    description: "true for ngn_add_money (the provider's charge is passed on).",
   })
   @IsOptional()
   @IsBoolean()
@@ -124,9 +128,15 @@ export class FeePreviewQueryDto {
 export class FeePreviewDto {
   @ApiProperty({ type: 'integer' }) feeMinor!: number;
   @ApiProperty({ type: 'integer' }) vatMinor!: number;
-  @ApiProperty({ type: 'integer', description: 'What the person pays: the amount, the fee and VAT.' })
+  @ApiProperty({
+    type: 'integer',
+    description: 'What the person pays: the amount, the fee and VAT.',
+  })
   totalMinor!: number;
-  @ApiProperty({ type: 'integer', description: 'Exactly what the receiver gets.' })
+  @ApiProperty({
+    type: 'integer',
+    description: 'Exactly what the receiver gets.',
+  })
   receiveMinor!: number;
   @ApiProperty() currency!: string;
 }
@@ -169,7 +179,9 @@ export class AddProviderRateDto {
 
   @ApiProperty()
   @IsString()
-  @Matches(PERCENT, { message: 'percent must be a decimal string such as "0.2".' })
+  @Matches(PERCENT, {
+    message: 'percent must be a decimal string such as "0.2".',
+  })
   percent!: string;
 
   @ApiProperty({ type: 'integer' })

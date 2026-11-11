@@ -1932,7 +1932,9 @@ export function buildRegistry(
     'fx.product.local_usd_in.on',
     'Receiving dollars from local banks: 1 is on, 0 is off',
     'count',
-    ['GET /money/fx/products, the dollar receiving routes (FEE-01, R-139 point 3)'],
+    [
+      'GET /money/fx/products, the dollar receiving routes (FEE-01, R-139 point 3)',
+    ],
     onOff,
   );
   other(

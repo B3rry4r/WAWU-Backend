@@ -40,7 +40,12 @@ export class FeeRecordService {
     try {
       const at = input.at ?? new Date();
       const currency = input.currency ?? FEE_KIND_CURRENCY[input.kind];
-      const fee = this.schedule.feeFor(input.kind, input.amountMinor, at, currency);
+      const fee = this.schedule.feeFor(
+        input.kind,
+        input.amountMinor,
+        at,
+        currency,
+      );
       const expected = this.rates.expected(
         input.kind,
         currency,

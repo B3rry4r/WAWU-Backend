@@ -1,9 +1,7 @@
 import type { WalletProviderName } from '../../wallet-provider/wallet-provider.interface';
 import type { BillCategory } from '../dto/money-enums';
 import type { FeeSettings } from './fee-config';
-import {
-  FeeScheduleService,
-} from './engine/fee-schedule.service';
+import { FeeScheduleService } from './engine/fee-schedule.service';
 import type { ProviderRateService } from './engine/provider-rate.service';
 import {
   feeOf,
@@ -143,8 +141,7 @@ export function engineFeeSchedule(
     bills: false,
     merchantMaxPerTxnKobo: null,
     walletToWalletKobo: (amountKobo) => charge('wallet_to_wallet', amountKobo),
-    bankTransferKobo: (amountKobo) =>
-      charge('ngn_bank_withdrawal', amountKobo),
+    bankTransferKobo: (amountKobo) => charge('ngn_bank_withdrawal', amountKobo),
     billChargeKobo: () => {
       throw new Error('Nuvion has no bill payments.');
     },
