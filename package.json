@@ -72,6 +72,7 @@
     "prisma": "^7.9.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sharp": "0.34.5",
     "ws": "^8.22.0"
   },
   "devDependencies": {

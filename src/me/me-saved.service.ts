@@ -205,6 +205,7 @@ export class MeSavedService {
         priceKobo: p.accessType === 'free' ? null : p.price * 100,
         thumbnailUrl: await this.storage.freshUrlFor(p.previewAssetUrl),
         coverUrl: await this.storage.coverUrlFor(p.coverKey),
+        ...(await this.storage.pieceThumbs(p.previewAssetUrl, p.coverKey)),
         bought: boughtIds.has(p.id),
         creator: people.get(p.creatorWawuId)!,
       });

@@ -6,6 +6,7 @@ import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
 import { eraseAskerRequests } from '../money-request/money-request-erase';
 import { objectKeyFrom } from '../storage/storage.service';
+import { thumbKeysOf } from '../storage/thumbs/thumb-keys';
 import { scrubContactDetails } from './scrub-contact-details';
 import {
   eraseFiles,
@@ -506,7 +507,11 @@ export class AccountPurgeService {
         r.coverKey,
         ...r.frames.map((f) => f.url),
       ]) {
-        if (stored) keys.add(objectKeyFrom(stored));
+        if (!stored) continue;
+        const key = objectKeyFrom(stored);
+        keys.add(key);
+        // HUB-THUMBS: the small copies of a kept cover or preview stay with it (a no-op for any other key).
+        for (const copy of thumbKeysOf(key)) keys.add(copy);
       }
     }
     return { ids, keys: [...keys], words, stripIds, priors };

@@ -148,6 +148,10 @@ export class MePurchasesService {
             r.content.previewAssetUrl,
           ),
           coverUrl: await this.storage.coverUrlFor(r.content.coverKey),
+          ...(await this.storage.pieceThumbs(
+            r.content.previewAssetUrl,
+            r.content.coverKey,
+          )),
           creator: people.get(r.content.creatorWawuId)!,
         },
         lessons:
