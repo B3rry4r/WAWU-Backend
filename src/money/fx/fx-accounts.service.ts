@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import type { FxAccount } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { DollarFeeService } from '../fees/engine/dollar-fees';
 import { NotificationService } from '../../notification/notification.service';
 import type { OpenWallet } from '../gate/wallet-gate';
 import { MoneyError } from '../money-error';
@@ -105,6 +106,8 @@ export class FxAccountsService {
     private readonly settings: FxSettings,
     /** WALK4-FIX M-2: tells the person once when an account's details become ready on their own read. Absent in a spec that does not care. */
     @Optional() private readonly notifications?: NotificationService,
+    /** FEE-01: WAWU's fee on a dollar wire received, shown on the inflow's line. */
+    @Optional() private readonly dollar?: DollarFeeService,
   ) {}
 
   currencies(): FxCurrenciesView {
@@ -442,6 +445,7 @@ export class FxAccountsService {
         const take = lines.slice(at.o, at.o + (limit - items.length));
         items.push(...take);
         if (at.o + take.length < lines.length) {
+          await this.showInflowFees(items);
           return {
             items,
             nextCursor: encodeCursor({ ...at, o: at.o + take.length }),
@@ -450,13 +454,16 @@ export class FxAccountsService {
         const prev =
           at.m === 1 ? { y: at.y - 1, m: 12 } : { y: at.y, m: at.m - 1 };
         months += 1;
-        if (prev.y * 12 + (prev.m - 1) < earliest)
+        if (prev.y * 12 + (prev.m - 1) < earliest) {
+          await this.showInflowFees(items);
           return { items, nextCursor: null };
+        }
         at = { ...prev, o: 0 };
       }
     } catch (e) {
       throw providerFailure(e);
     }
+    await this.showInflowFees(items);
     return {
       items,
       nextCursor:
@@ -464,6 +471,28 @@ export class FxAccountsService {
           ? null
           : encodeCursor(at),
     };
+  }
+
+  /**
+   * FEE-01 (R-139 point 2): a dollar wire received shows the amount, WAWU's fee with its VAT and what landed, from the fee
+   * record. Additive fields on the line; the provider's own charge is not one of them.
+   */
+  private async showInflowFees(items: FxTransactionView[]): Promise<void> {
+    if (!this.dollar) return;
+    const ins = items.filter((i) => i.direction === 'in');
+    if (ins.length === 0) return;
+    try {
+      const fees = await this.dollar.inflowFeesFor(ins.map((i) => i.id));
+      for (const i of ins) {
+        const f = fees.get(i.id);
+        if (!f) continue;
+        i.wawuFeeMinor = num(f.feeMinor);
+        i.vatMinor = num(f.vatMinor);
+        i.receiveMinor = num(f.amountMinor - f.feeMinor - f.vatMinor);
+      }
+    } catch {
+      // The line is shown without the fee words; the provider's statement is the truth.
+    }
   }
 
   /**

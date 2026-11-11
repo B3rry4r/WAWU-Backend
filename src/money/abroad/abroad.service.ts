@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -14,6 +14,7 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { worldWalletOf, type OpenWallet } from '../gate/wallet-gate';
+import { DollarFeeService } from '../fees/engine/dollar-fees';
 import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
 import {
@@ -230,7 +231,19 @@ export class AbroadService {
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) readonly walletProvider: WalletProvider,
     readonly settings: AbroadSettings,
+    /** FEE-01 fix round 1: the dollar payout is priced from the fee schedule (Nuvion running). */
+    @Optional() readonly dollar?: DollarFeeService,
   ) {}
+
+  /** True when the fee schedule prices this send: a dollar payout to a bank, under Nuvion (R-139, `usd_bank_payout`). */
+  pricedFromSchedule(fromCurrency: string, method: string): boolean {
+    return (
+      this.dollar !== undefined &&
+      this.walletProvider.name === 'nuvion' &&
+      fromCurrency === 'USD' &&
+      method === 'bank'
+    );
+  }
 
   // -- gates -----------------------------------------------------------------
 
@@ -651,13 +664,31 @@ export class AbroadService {
     // WAWU's fee follows the account the money leaves, for everyone (WALLET-42, lead ruling): from the naira wallet it is the naira
     // fee (NUV-11); from a foreign account it is that currency's fee, from config per currency and way (R-10), taken from that account.
     const foreignSource = dto.fromCurrency !== 'NGN';
+    const priced = this.pricedFromSchedule(dto.fromCurrency, recipient.method);
+    // R-139: a dollar payout to a bank takes WAWU's fee (and VAT) from the schedule, on top of the amount. The provider's charge sits
+    // inside it: the book transfer to WAWU moves the fee and VAT less that charge, never below 0. The app sees the one fee.
+    const payout = priced
+      ? (() => {
+          this.dollar!.assertPayoutSafe(amountFrom);
+          return this.dollar!.payoutFee(
+            amountFrom,
+            this.settings.providerFeeMinor(
+              dto.fromCurrency,
+              recipient.currency,
+              recipient.method as AbroadMethod,
+            ),
+          );
+        })()
+      : null;
     const feeKobo = foreignSource ? 0 : this.settings.wawuFeeKobo;
-    const feeMinor = foreignSource
-      ? this.settings.wawuFeeMinor(
-          dto.fromCurrency,
-          recipient.method as AbroadMethod,
-        )
-      : 0;
+    const feeMinor = payout
+      ? Number(payout.legMinor)
+      : foreignSource
+        ? this.settings.wawuFeeMinor(
+            dto.fromCurrency,
+            recipient.method as AbroadMethod,
+          )
+        : 0;
     if (
       feeMinor > 0 &&
       (!this.settings.feeCollectorBan(dto.fromCurrency) || !abroad.feeLeg)
@@ -669,11 +700,13 @@ export class AbroadService {
       );
     }
     // R-10: the person pays the partner's fee on top, from config (the provider's quote has none), shown before the PIN.
-    const partnerFee = this.settings.providerFeeMinor(
-      dto.fromCurrency,
-      recipient.currency,
-      recipient.method as AbroadMethod,
-    );
+    const partnerFee = payout
+      ? Number(payout.expectedMinor)
+      : this.settings.providerFeeMinor(
+          dto.fromCurrency,
+          recipient.currency,
+          recipient.method as AbroadMethod,
+        );
     this.assertFunds(
       sources,
       dto.fromCurrency,
@@ -719,17 +752,22 @@ export class AbroadService {
       amountToMinor: quote.amountToMinor,
       converted: quote.quoteRef !== null,
       rate: quote.rate,
-      providerFeeMinor: partnerFee,
+      // Under the schedule the app sees one fee: the provider's charge is inside it and never shown.
+      providerFeeMinor: payout ? 0 : partnerFee,
       wawuFeeKobo: feeKobo,
-      wawuFeeMinor: feeMinor,
+      wawuFeeMinor: payout ? Number(payout.feeMinor) : feeMinor,
       speed: speedOf(recipient),
       expiresAt: row.expiresAt.toISOString(),
       validForSeconds: validFor,
       // FEE-01, additive: the same figures in the words every fee quote uses.
       currency: row.fromCurrency,
-      feeMinor: row.fromCurrency === 'NGN' ? feeKobo : feeMinor,
-      vatMinor: 0,
-      vatOn: false,
+      feeMinor: payout
+        ? Number(payout.feeMinor)
+        : row.fromCurrency === 'NGN'
+          ? feeKobo
+          : feeMinor,
+      vatMinor: payout ? Number(payout.vatMinor) : 0,
+      vatOn: payout ? this.dollar!.vatOn() : false,
       totalMinor:
         quote.amountFromMinor +
         (partnerFee ?? 0) +

@@ -60177,6 +60177,10 @@
           "wawuFeeMinor": {
             "type": "integer"
           },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
           "narration": {
             "type": "string",
             "nullable": true
@@ -61119,6 +61123,18 @@
                 "$ref": "#/components/schemas/FxConversionView"
               }
             ],
+            "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "vatMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "receiveMinor": {
+            "type": "integer",
             "nullable": true
           }
         },

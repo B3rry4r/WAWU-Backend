@@ -46,6 +46,7 @@ import {
   NuvionWalletProvider,
   nuvionAreas,
 } from '../../../nuvion/nuvion-wallet-provider';
+import { ProviderRateService } from '../../fees/engine/provider-rate.service';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import { MoneyModule } from '../../money.module';
 import {
@@ -68,9 +69,11 @@ import type { AddMoneyView, AdminAddMoneyView } from '../add-money-view.type';
 const BASE = '/api/hub/money/add-money';
 const ADMIN = '/api/hub/admin/money/add-money';
 const CARD_FEE = 75;
-const WAWU_FEE = 50;
+// R-139 point 11: adding naira passes on the provider's receiving charge and WAWU adds nothing (was 50).
+const WAWU_FEE = 0;
 const AMOUNT = 1_000_000;
-const CHARGE = AMOUNT + CARD_FEE + WAWU_FEE;
+// Money coming in: the person pays the amount and the fee comes off what arrives (was AMOUNT + CARD_FEE + WAWU_FEE).
+const CHARGE = AMOUNT;
 const START = 5_000_000;
 const { publicKey } = generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -370,6 +373,20 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    // R-139 point 11: the provider's receiving charge comes from the rate table; this world's stand-in charges CARD_FEE.
+    await app.get(PrismaService).providerRate.create({
+      data: {
+        provider: 'nuvion',
+        kind: 'ngn_add_money',
+        currency: 'NGN',
+        percentPpm: 0,
+        minMinor: 0n,
+        fixedMinor: BigInt(CARD_FEE),
+        startsAt: new Date(Date.now() - 1000),
+        changedBy: 'add-money spec',
+      },
+    });
+    await app.get(ProviderRateService).refresh();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     // NUVION-FIX 1.1: the two switches read 0 by default (naira cannot be added by card or USSD at Nuvion), so this suite, which
@@ -520,7 +537,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     expect(JSON.stringify(o)).not.toMatch(/—/);
   });
 
-  it("quotes the amount plus Nuvion's charge plus WAWU's (R-10), both from config", async () => {
+  it("quotes the amount, with Nuvion's receiving charge as the one fee taken off what arrives (R-139 point 11)", async () => {
     const me = await person();
     const q = await get(me, `/quote?rail=card&amountKobo=${AMOUNT}`).expect(
       200,
@@ -532,6 +549,8 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       wawuFeeKobo: WAWU_FEE,
       feeKobo: CARD_FEE + WAWU_FEE,
       chargeKobo: CHARGE,
+      totalMinor: AMOUNT,
+      receiveMinor: AMOUNT - CARD_FEE,
     });
     const off = await get(
       me,
@@ -605,12 +624,10 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     const done = await row(v.id);
     expect(done.status).toBe('settled');
     expect(done.ledgerEntryId).toBe(rows[0].id);
-    // WAWU's fee moved from the wallet to WAWU, once, under its own reference.
-    if (!done.feeCollectedAt) {
-      await service.collectWawuFee(v.id);
-    }
-    expect((await row(v.id)).feeCollectedAt).not.toBeNull();
-    expect(book.byReference(`${s.reference}-wawufee`)).toHaveLength(1);
+    // R-139 point 11: WAWU adds no fee on adding money, so nothing is moved to WAWU (was: moved once under `-wawufee`).
+    await service.collectWawuFee(v.id);
+    expect((await row(v.id)).feeCollectedAt).toBeNull();
+    expect(book.byReference(`${s.reference}-wawufee`)).toHaveLength(0);
     expect(available(me)).toBe(before + CHARGE - CARD_FEE - WAWU_FEE);
     const after = await get(me, `/${v.id}`).expect(200);
     expect(view(after)).toMatchObject({

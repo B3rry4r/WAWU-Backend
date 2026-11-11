@@ -91,6 +91,9 @@ export class NuvionInflowRecorder {
     private readonly ledger: LedgerService,
     private readonly settings: { operationalAccountId: string },
     private readonly addMoney: AddMoneyInflowClaim | null = null,
+    /** FEE-01: told once a bank-transfer inflow is on the ledger, to keep its fee record (the provider's receiving charge). */
+    private readonly afterCredit:
+      ((t: NuvionTransferReading) => Promise<void>) | null = null,
   ) {}
 
   async onInflow(d: NuvionDelivery): Promise<NuvionHandlerResult> {
@@ -249,7 +252,20 @@ export class NuvionInflowRecorder {
   }
 
   /** One `in` row on the person's wallet for this settled inflow; the same row every time. */
-  recordInflow(
+  async recordInflow(
+    t: NuvionTransferReading,
+    wallet: NuvionInflowWallet,
+    source: LedgerSource,
+    sourceEventId: string | null,
+  ): Promise<LedgerRecordResult> {
+    const result = await this.ledgerRow(t, wallet, source, sourceEventId);
+    if (this.afterCredit) {
+      await this.afterCredit(t).catch(() => undefined);
+    }
+    return result;
+  }
+
+  private ledgerRow(
     t: NuvionTransferReading,
     wallet: NuvionInflowWallet,
     source: LedgerSource,

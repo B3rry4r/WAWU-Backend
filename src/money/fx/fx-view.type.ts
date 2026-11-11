@@ -134,6 +134,10 @@ export interface FxTransactionView {
   occurredAt: string;
   /** Set when the line was a conversion. */
   conversion: FxConversionView | null;
+  /** FEE-01, additive: on a dollar wire received, WAWU's fee, the VAT on it and what landed (amount less both). Absent otherwise. */
+  wawuFeeMinor?: number;
+  vatMinor?: number;
+  receiveMinor?: number;
 }
 
 export interface FxConversionView {

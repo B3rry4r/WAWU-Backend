@@ -193,6 +193,8 @@ export interface AbroadSendView {
   wawuFeeKobo: number;
   /** WAWU's fee taken from the foreign account the money left, in its currency's smallest unit (WALLET-42); 0 otherwise. */
   wawuFeeMinor: number;
+  /** FEE-01, additive: VAT on that fee for a dollar payout priced from the schedule; absent otherwise. */
+  vatMinor?: number;
   narration: string | null;
   /** In plain words when the send failed, was reversed or was cancelled; else null. */
   failureReason: string | null;

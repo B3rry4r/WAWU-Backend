@@ -207,6 +207,12 @@ export class AbroadSendService {
           q.fromCurrency,
           q.amountFromMinor,
         );
+        // R-139: a dollar payout re-checks the smallest withdrawal and the fee against the amount before anything is sent.
+        if (
+          this.abroad.pricedFromSchedule(q.fromCurrency, q.recipient.method)
+        ) {
+          this.abroad.dollar!.assertPayoutSafe(q.amountFromMinor, q.createdAt);
+        }
         const id = randomUUID();
         await this.keys.attach(tx, scope, id);
         await tx.abroadQuote.update({
@@ -240,6 +246,23 @@ export class AbroadSendService {
       });
       claimed = result.row;
       quote = result.q;
+      if (
+        this.abroad.pricedFromSchedule(
+          claimed.fromCurrency,
+          claimed.recipient.method,
+        )
+      ) {
+        // The fee record of this payout, as the quote priced it. Never throws.
+        await this.abroad.dollar!.recordPayout({
+          reference: claimed.reference,
+          amountMinor: claimed.amountFromMinor,
+          estimateMinor:
+            quote.providerFeeEstimateMinor === null
+              ? null
+              : Number(quote.providerFeeEstimateMinor),
+          at: quote.createdAt,
+        });
+      }
     } catch (e) {
       await this.keys.release(scope);
       throw e;
@@ -323,7 +346,7 @@ export class AbroadSendService {
     scope: IdempotencyScope,
     row: SendRow,
   ): Promise<AbroadSendView> {
-    const view = this.view(row);
+    const view = await this.appView(row);
     await this.keys.finish(scope, 201, successBody(view));
     return view;
   }
@@ -392,6 +415,9 @@ export class AbroadSendService {
       data.feeDiffers =
         Number(row.providerFeeEstimateMinor ?? 0n) !== t.feeMinor;
     }
+    const feeRecorded =
+      t.feeMinor !== null &&
+      this.abroad.pricedFromSchedule(row.fromCurrency, row.recipient.method);
     if (row.status !== next) {
       data.status = next;
       data.completedAt = terminal ? now : null;
@@ -412,6 +438,10 @@ export class AbroadSendService {
       // Two lookups of one send at once: the second finds the transfer id already stored.
       if (!(e instanceof Error) || !/Unique constraint/i.test(e.message))
         throw e;
+    }
+    if (feeRecorded && t.feeMinor !== null) {
+      // What the provider really charged goes into the fee record (a difference from the expected charge mails the owner).
+      await this.abroad.dollar!.settlePayout(row.reference, BigInt(t.feeMinor));
     }
     // A send that did not stand gives WAWU's fee back, once; the sweep asks again until it has landed.
     if (
@@ -991,7 +1021,7 @@ export class AbroadSendService {
       include: { recipient: true },
     });
     if (!row) throw new MoneyError('not_found', SEND_NOT_FOUND_MESSAGE);
-    return this.view(row);
+    return this.appView(row);
   }
 
   async list(
@@ -1019,9 +1049,39 @@ export class AbroadSendService {
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
     return {
-      items: page.map((r) => this.view(r)),
+      items: await this.appViews(page),
       nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
     };
+  }
+
+  /**
+   * The send as the person sees it. A dollar payout priced from the schedule shows the one fee (WAWU's, with its VAT) and no
+   * provider charge (R-139 point 9); the leg and the provider's charge stay in the Hub.
+   */
+  private async appView(r: SendRow): Promise<AbroadSendView> {
+    return (await this.appViews([r]))[0];
+  }
+
+  private async appViews(rows: SendRow[]): Promise<AbroadSendView[]> {
+    const dollar = this.abroad.dollar;
+    const priced = rows.filter((r) =>
+      this.abroad.pricedFromSchedule(r.fromCurrency, r.recipient.method),
+    );
+    const fees =
+      dollar && priced.length > 0
+        ? await dollar.payoutFeesFor(priced.map((r) => r.reference))
+        : new Map<string, { feeMinor: bigint; vatMinor: bigint }>();
+    return rows.map((r) => {
+      const v = this.view(r);
+      const f = fees.get(r.reference);
+      if (!f) return v;
+      return {
+        ...v,
+        providerFeeMinor: 0,
+        wawuFeeMinor: Number(f.feeMinor),
+        vatMinor: Number(f.vatMinor),
+      };
+    });
   }
 
   view(r: SendRow): AbroadSendView {
