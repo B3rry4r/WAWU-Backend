@@ -403,7 +403,6 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
       for (const q of [
         'kind=wawu_transfer&amountKobo=2000000',
         'kind=bank_transfer&amountKobo=500000',
-        'kind=purchase&amountKobo=500000',
       ]) {
         const res = await get(appSet, a.auth, `fees/quote?${q}`).expect(200);
         const v = body<FeeQuoteView>(res).data!;
@@ -421,6 +420,15 @@ describe('NUV-07: fees as settings over HTTP, Nuvion stood in at WALLET_PROVIDER
         // The spec's Nuvion charges are 1234 and 4200 kobo: neither appears.
         expect(JSON.stringify(res.body)).not.toMatch(/\b(1234|4200)\b/);
       }
+
+      // A purchase is quoted only when its whole fee is collected (F4): here the spec's fee is above
+      // Nuvion's charge, and a wallet payment has no fee leg, so it is refused plainly.
+      const bought = await get(
+        appSet,
+        a.auth,
+        'fees/quote?kind=purchase&amountKobo=500000',
+      ).expect(503);
+      expect(body(bought).reason?.code).toBe('fees_not_set');
     });
 
     it('a bill is 409 target_not_payable under Nuvion (no bill payments); the gate still answers a person with no wallet', async () => {

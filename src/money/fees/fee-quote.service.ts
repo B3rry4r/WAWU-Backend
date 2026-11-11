@@ -358,22 +358,38 @@ export class FeeQuoteService {
     const fee = sched.feeFor(kind, BigInt(amount));
     const feeKobo = Number(fee.feeMinor);
     const vatKobo = Number(fee.vatMinor);
+    // What the Hub moves inside, fixed here with the figures the person is quoted (F9): Nuvion's
+    // expected charge P comes from the same read as F and VAT, and the leg uses these exact numbers.
+    const expected = Number(
+      this.rates!.expected(kind, 'NGN', BigInt(amount)).minor,
+    );
+    const p = Math.min(expected, feeKobo);
+    if (input.kind === 'purchase' && feeKobo - p + vatKobo > 0) {
+      // A wallet payment has no fee leg: a fee above Nuvion's own charge, or any VAT, would be quoted
+      // and never collected (F4). Refused plainly until payments collect it; never quote what is not taken.
+      throw feesNotSet();
+    }
     const parts: FeeQuotePartView[] = [
       { code: 'wawu_fee', source: 'wawu', amountKobo: feeKobo },
     ];
     if (vatKobo > 0) {
       parts.push({ code: 'vat', source: 'wawu', amountKobo: vatKobo });
     }
-    return {
-      fee: {
-        providerFeeKobo: 0,
-        wawuFeeKobo: feeKobo + vatKobo,
-        totalFeeKobo: feeKobo + vatKobo,
-      },
-      parts,
-      totalKobo: amount + feeKobo + vatKobo,
+    const shown: FeeBreakdown = {
+      providerFeeKobo: 0,
+      wawuFeeKobo: feeKobo + vatKobo,
+      totalFeeKobo: feeKobo + vatKobo,
     };
+    this.splits.set(shown, {
+      providerFeeKobo: p,
+      wawuFeeKobo: feeKobo - p + vatKobo,
+      totalFeeKobo: feeKobo + vatKobo,
+    });
+    return { fee: shown, parts, totalKobo: amount + feeKobo + vatKobo };
   }
+
+  /** The inside split fixed when each engine quote was worked out, keyed by the quote's `fee` object. */
+  private readonly splits = new WeakMap<FeeBreakdown, FeeBreakdown>();
 
   /** True when the fee schedule decides the fee (Nuvion running with the engine). */
   get engineOn(): boolean {
@@ -397,6 +413,9 @@ export class FeeQuoteService {
     ) {
       return shown;
     }
+    const fixed = this.splits.get(shown);
+    if (fixed) return fixed;
+    // A breakdown this server did not work out just now (a spec's own): work it out again.
     const kind: FeeKind =
       input.kind === 'bank_transfer'
         ? 'ngn_bank_withdrawal'

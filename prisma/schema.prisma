@@ -9481,6 +9481,8 @@ model MoneyFeeRecord {
   providerExpectedMinor BigInt   @default(0)
   providerActualMinor   BigInt?
   keptMinor             BigInt
+  /// open: the transaction is in flight or settled; reversed: it failed or was given back (kept 0, VAT 0).
+  status                String   @default("open")
   feeScheduleId         String?
   providerRateId        String?
   createdAt             DateTime @default(now())

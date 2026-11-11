@@ -202,4 +202,34 @@ describe('a dollar payout to a bank', () => {
     const { service } = await build({ provider: 'fintava' });
     expect(service.pricedFromSchedule('USD', 'bank')).toBe(false);
   });
+
+  it('F8: a payout still on a configured partner fee (mobile money) folds it into the one fee: providerFeeMinor 0, feeMinor holds it, the screen adds up', async () => {
+    process.env.ABROAD_PROVIDER_FEE_GBP_MOBILE_MONEY = '150';
+    try {
+      const { service } = await build({ method: 'mobile_money' });
+      const q = await service.quote(wallet, dto(10_000));
+      expect(q.providerFeeMinor).toBe(0);
+      expect(q.feeMinor).toBe(150);
+      expect(q.vatMinor).toBe(0);
+      expect(q.wawuFeeMinor).toBe(150);
+      expect(q.totalMinor).toBe(10_000 + q.feeMinor + q.vatMinor);
+      expect(q.receiveMinor).toBe(q.amountToMinor);
+    } finally {
+      delete process.env.ABROAD_PROVIDER_FEE_GBP_MOBILE_MONEY;
+    }
+  });
+
+  it('F8: under Fintava the partner fee is shown as it was: its own line, nothing folded', async () => {
+    process.env.ABROAD_PROVIDER_FEE_GBP_MOBILE_MONEY = '150';
+    try {
+      const { service } = await build({
+        method: 'mobile_money',
+        provider: 'fintava',
+      });
+      const q = await service.quote(wallet, dto(10_000));
+      expect(q.providerFeeMinor).toBe(150);
+    } finally {
+      delete process.env.ABROAD_PROVIDER_FEE_GBP_MOBILE_MONEY;
+    }
+  });
 });

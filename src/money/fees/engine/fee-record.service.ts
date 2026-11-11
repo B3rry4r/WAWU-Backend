@@ -87,6 +87,28 @@ export class FeeRecordService {
   }
 
   /**
+   * A send that failed, or was given back: its record says WAWU kept nothing (status reversed, kept 0, VAT 0).
+   * The fee leg, if it had moved, is given back by the send's own fee-back. If the send later turns out to have
+   * completed, `settle` opens the record again.
+   */
+  async reverse(
+    provider: string,
+    reference: string,
+    kind: FeeKind,
+  ): Promise<void> {
+    try {
+      await this.prisma.moneyFeeRecord.updateMany({
+        where: { provider, reference, kind },
+        data: { status: 'reversed', keptMinor: 0n, vatMinor: 0n },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `A fee record was not reversed (${e instanceof Error ? e.name : 'error'}).`,
+      );
+    }
+  }
+
+  /**
    * Fills in the provider's own charge once its record is read. When it is
    * not the expected one, the owner is told (once a day per kind).
    */
@@ -108,6 +130,7 @@ export class FeeRecordService {
         data: {
           providerActualMinor: actualMinor,
           keptMinor: row.wawuFeeMinor - actualMinor,
+          status: 'open',
         },
       });
       if (actualMinor !== row.providerExpectedMinor) {

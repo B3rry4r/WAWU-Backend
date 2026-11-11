@@ -21,6 +21,9 @@ BEGIN
   END IF;
 END $$;
 
+DROP TRIGGER "FeeSchedule_no_truncate" ON "FeeSchedule";
+DROP TRIGGER "ProviderRate_no_truncate" ON "ProviderRate";
+DROP FUNCTION "fee_history_no_truncate"();
 DROP TRIGGER "FeeSchedule_append_only" ON "FeeSchedule";
 DROP TRIGGER "ProviderRate_append_only" ON "ProviderRate";
 DROP FUNCTION "fee_history_append_only"();

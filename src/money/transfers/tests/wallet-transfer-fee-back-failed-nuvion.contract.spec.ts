@@ -617,6 +617,22 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
     await ledgerEqualsNuvion();
   });
 
+  it('FEE-01 (F1): a send that failed after its fee leg moved keeps no fee: the fee is given back and the record says WAWU kept nothing', async () => {
+    const { me, view } = await sendNuvionFails();
+    failBudget = 1;
+    modeAfter = 'successful';
+    await giveFeeBack(view);
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    await transfers.sweep(later(40 * 60_000));
+    expect(available(me)).toBe(PERSON_START);
+    const rec = await prisma.moneyFeeRecord.findFirst({
+      where: { reference: view.reference },
+    });
+    expect(rec).toMatchObject({ status: 'reversed', vatMinor: 0n });
+    expect(Number(rec!.keptMinor)).toBe(0);
+  });
+
   it('the second try is never sent in the pass that saw the first fail, and waits at least the sweep interval for a later one (FIX-70 round 2)', async () => {
     const { me, view } = await sendNuvionFails();
     failBudget = 1;

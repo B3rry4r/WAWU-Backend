@@ -363,7 +363,11 @@ export class DollarFeeService {
     }
     if (!rec)
       return { outcome: 'wait', note: 'the fee record is not readable' };
-    const owed = rec.wawuFeeMinor + rec.vatMinor;
+    // R-139 (lead ruling F2): the person loses exactly F + VAT in all. Nuvion has already taken its own
+    // charge off what arrived, so WAWU's leg collects the rest, and never less than 0.
+    const providerTook = rec.providerActualMinor ?? i.providerFeeMinor;
+    const total = rec.wawuFeeMinor + rec.vatMinor;
+    const owed = total > providerTook ? total - providerTook : 0n;
     if (owed === 0n) return { outcome: 'recorded', note: 'no fee to collect' };
     if (!i.abroad?.feeLeg || !i.abroad.findFeeLeg || !this.collectorBan) {
       return {
@@ -460,14 +464,26 @@ export class DollarFeeService {
   }
 
   /** The fee records of dollar inflows, by transfer id, for the person's own view of them. */
-  async inflowFeesFor(
-    references: readonly string[],
-  ): Promise<
-    Map<string, { feeMinor: bigint; vatMinor: bigint; amountMinor: bigint }>
+  async inflowFeesFor(references: readonly string[]): Promise<
+    Map<
+      string,
+      {
+        feeMinor: bigint;
+        vatMinor: bigint;
+        amountMinor: bigint;
+        /** Everything taken off what arrived: the provider's charge, WAWU's fee and VAT, as one figure. */
+        takenMinor: bigint;
+      }
+    >
   > {
     const out = new Map<
       string,
-      { feeMinor: bigint; vatMinor: bigint; amountMinor: bigint }
+      {
+        feeMinor: bigint;
+        vatMinor: bigint;
+        amountMinor: bigint;
+        takenMinor: bigint;
+      }
     >();
     if (references.length === 0) return out;
     const rows = await this.prisma.moneyFeeRecord.findMany({
@@ -481,13 +497,18 @@ export class DollarFeeService {
         wawuFeeMinor: true,
         vatMinor: true,
         amountMinor: true,
+        providerExpectedMinor: true,
+        providerActualMinor: true,
       },
     });
     for (const r of rows) {
+      const p = r.providerActualMinor ?? r.providerExpectedMinor;
+      const total = r.wawuFeeMinor + r.vatMinor;
       out.set(r.reference, {
         feeMinor: r.wawuFeeMinor,
         vatMinor: r.vatMinor,
         amountMinor: r.amountMinor,
+        takenMinor: total > p ? total : p,
       });
     }
     return out;

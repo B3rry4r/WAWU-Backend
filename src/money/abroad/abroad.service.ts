@@ -236,6 +236,11 @@ export class AbroadService {
   ) {}
 
   /** True when the fee schedule prices this send: a dollar payout to a bank, under Nuvion (R-139, `usd_bank_payout`). */
+  /** True when the fee engine runs (Nuvion): the app then sees one fee in every answer. */
+  get engineOn(): boolean {
+    return this.dollar !== undefined && this.walletProvider.name === 'nuvion';
+  }
+
   pricedFromSchedule(fromCurrency: string, method: string): boolean {
     return (
       this.dollar !== undefined &&
@@ -743,7 +748,7 @@ export class AbroadService {
     );
     // Under the fee engine the app sees one fee: a partner fee still configured for this corridor
     // is folded into WAWU's line (the total the person pays is unchanged) and never shown apart.
-    const foldedPartner = payout || !this.dollar ? 0 : (partnerFee ?? 0);
+    const foldedPartner = payout || !this.engineOn ? 0 : (partnerFee ?? 0);
     return {
       id: row.id,
       recipientId: recipient.id,
@@ -756,7 +761,7 @@ export class AbroadService {
       converted: quote.quoteRef !== null,
       rate: quote.rate,
       // Under the schedule the app sees one fee: the provider's charge is inside it and never shown.
-      providerFeeMinor: payout || this.dollar ? 0 : partnerFee,
+      providerFeeMinor: payout || this.engineOn ? 0 : partnerFee,
       wawuFeeKobo: feeKobo + (row.fromCurrency === 'NGN' ? foldedPartner : 0),
       wawuFeeMinor: payout
         ? Number(payout.feeMinor)

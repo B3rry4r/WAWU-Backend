@@ -1043,6 +1043,16 @@ export class WalletTransferService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   /** Whether this send's WAWU fee is a transfer of its own on this provider. */
+  /** FEE-01 (F1): a failed or given-back send keeps no fee: its record says so. */
+  private async reverseFeeRecord(t: TransferRow): Promise<void> {
+    if (this.provider.name !== 'nuvion' || !this.feeRecords) return;
+    await this.feeRecords.reverse(
+      'nuvion',
+      t.customerReference,
+      t.kind === 'bank_account' ? 'ngn_bank_withdrawal' : 'wallet_to_wallet',
+    );
+  }
+
   /**
    * FEE-01: the fee record of a claimed Nuvion send (the amount, WAWU's fee,
    * VAT, the provider's expected charge). Never fails the send.
@@ -1815,7 +1825,10 @@ export class WalletTransferService implements OnModuleInit {
       data: { status: 'reversed', reversedAt: row.reversedAt ?? new Date() },
     });
     const fresh = await this.reload(t);
-    if (moved.count > 0) await this.owe(fresh);
+    if (moved.count > 0) {
+      await this.owe(fresh);
+      await this.reverseFeeRecord(fresh);
+    }
     return fresh;
   }
 
@@ -2689,7 +2702,10 @@ export class WalletTransferService implements OnModuleInit {
     });
     const fresh = await this.reload(t);
     // The fee it owed is looked at again as a reversed send's (FIX-85).
-    if (moved.count > 0) await this.owe(fresh);
+    if (moved.count > 0) {
+      await this.owe(fresh);
+      await this.reverseFeeRecord(fresh);
+    }
     return fresh;
   }
 
@@ -2799,6 +2815,7 @@ export class WalletTransferService implements OnModuleInit {
       tell,
     );
     if (row.status === 'failed' && !t.reviewSince) await this.owe(row);
+    if (row.status === 'failed') await this.reverseFeeRecord(row);
     if (writeLedger && row.status === 'failed') {
       try {
         await this.ledger.record(

@@ -1075,7 +1075,7 @@ export class AbroadSendService {
       const v = this.view(r);
       const f = fees.get(r.reference);
       if (!f) {
-        if (!dollar) return v;
+        if (!dollar || !this.abroad.engineOn) return v;
         // One fee in the app: the partner's charge (what it did charge, else the estimate) is
         // folded into WAWU's line and never shown apart.
         const partner = Number(

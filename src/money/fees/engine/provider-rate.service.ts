@@ -12,6 +12,7 @@ import {
   type MoneyCheckMail,
 } from '../../check/money-check-mailer';
 import { recipientsSetting } from '../../check/money-check-config';
+import { START_SLACK_MS } from './fee-schedule.service';
 import { feeOf, percentToPpm, ppmToPercent } from './percent-fee';
 import { PROVIDER_RATE_KINDS, RATE_PROVIDER } from './fee-kinds';
 
@@ -213,6 +214,9 @@ export class ProviderRateService implements OnModuleInit, OnModuleDestroy {
     const startsAt = new Date(input.startsAt);
     if (Number.isNaN(startsAt.getTime())) {
       throw new BadRequestException(['startsAt must be a date and time.']);
+    }
+    if (startsAt.getTime() < Date.now() - START_SLACK_MS) {
+      throw new BadRequestException(['startsAt cannot be in the past.']);
     }
     const row = await this.prisma.providerRate.create({
       data: {

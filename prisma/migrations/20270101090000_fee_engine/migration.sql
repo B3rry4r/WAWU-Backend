@@ -5,7 +5,7 @@
 -- `fx.product.swap.on` is set to 0 (R-139 point 3: swaps stay off until the owner confirms). Nothing is written to a
 -- table the web or the dashboard reads except that one PlanSetting row.
 --
--- "FeeSchedule" and "ProviderRate" are histories: a trigger refuses UPDATE and DELETE on both, so a change is a new
+-- "FeeSchedule" and "ProviderRate" are histories: triggers refuse UPDATE, DELETE and TRUNCATE on both, so a change is a new
 -- row and the old one stays. Starting fees are the first rows (changed by 'R-139 seed'), start at the moment this
 -- runs. Safe to run again: the seed rows are inserted only while the table is empty.
 
@@ -58,6 +58,7 @@ CREATE TABLE "MoneyFeeRecord" (
   "providerExpectedMinor" BIGINT NOT NULL DEFAULT 0,
   "providerActualMinor" BIGINT,
   "keptMinor" BIGINT NOT NULL,
+  "status" TEXT NOT NULL DEFAULT 'open',
   "feeScheduleId" TEXT,
   "providerRateId" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -83,6 +84,16 @@ CREATE TRIGGER "FeeSchedule_append_only" BEFORE UPDATE OR DELETE ON "FeeSchedule
   FOR EACH ROW EXECUTE FUNCTION "fee_history_append_only"();
 CREATE TRIGGER "ProviderRate_append_only" BEFORE UPDATE OR DELETE ON "ProviderRate"
   FOR EACH ROW EXECUTE FUNCTION "fee_history_append_only"();
+-- TRUNCATE is a statement, not a row: it needs its own trigger.
+CREATE FUNCTION "fee_history_no_truncate"() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION '% is a history: it cannot be emptied', TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER "FeeSchedule_no_truncate" BEFORE TRUNCATE ON "FeeSchedule"
+  FOR EACH STATEMENT EXECUTE FUNCTION "fee_history_no_truncate"();
+CREATE TRIGGER "ProviderRate_no_truncate" BEFORE TRUNCATE ON "ProviderRate"
+  FOR EACH STATEMENT EXECUTE FUNCTION "fee_history_no_truncate"();
 
 -- R-139 point 2: the starting fees, as the first rows of the history.
 INSERT INTO "FeeSchedule" ("id", "kind", "currency", "percentPpm", "minMinor", "maxMinor", "passThrough", "startsAt", "changedBy", "note")

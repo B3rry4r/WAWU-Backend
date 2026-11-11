@@ -390,6 +390,34 @@ describe('dollars received', () => {
     expect(p.made[0].amountMinor).toBe(3000n + 225n);
   });
 
+  it("F2: the person loses exactly F + VAT in all: WAWU's leg is F + VAT minus Nuvion's own charge on the inflow, and the line shows that total as the one fee", async () => {
+    const { dollar } = await build({ env: WIRE, plan: { 'tax.vat_on': 1 } });
+    const p = provider();
+    const r = await dollar.onForeignInflow({
+      ...inflow({ providerFeeMinor: 1000n }),
+      abroad: p.abroad,
+    });
+    expect(r.outcome).toBe('collected');
+    // F 3000 + VAT 225 = 3225 off what arrived; Nuvion took 1000 of it, so the leg moves 2225.
+    expect(p.made[0].amountMinor).toBe(2225n);
+    const v = (await dollar.inflowFeesFor(['in-1'])).get('in-1')!;
+    expect(v.takenMinor).toBe(3225n);
+    expect(v.amountMinor - v.takenMinor).toBe(100_000n - 3225n);
+  });
+
+  it("F2: Nuvion's charge above F + VAT: the leg moves nothing (never below 0) and the one fee is Nuvion's figure", async () => {
+    const { dollar } = await build({ env: WIRE });
+    const p = provider();
+    const r = await dollar.onForeignInflow({
+      ...inflow({ providerFeeMinor: 4000n }),
+      abroad: p.abroad,
+    });
+    expect(r.outcome).toBe('recorded');
+    expect(p.made).toHaveLength(0);
+    const v = (await dollar.inflowFeesFor(['in-1'])).get('in-1')!;
+    expect(v.takenMinor).toBe(4000n);
+  });
+
   it('a fee bigger than the amount is cut to the amount: money arriving is never refused', async () => {
     const { dollar } = await build({ env: WIRE });
     const p = provider();

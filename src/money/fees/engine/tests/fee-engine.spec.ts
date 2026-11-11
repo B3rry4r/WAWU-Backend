@@ -594,3 +594,132 @@ describe('a fee set under the provider charge', () => {
     expect(mismatch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('F4, F5, F9 (verifier round 1)', () => {
+  const settings = () =>
+    new FeeSettings(
+      new ConfigService({ [FEE_CONFIG_KEYS.quoteKey]: 'k'.repeat(40) }),
+    );
+  const rateRow = (kind: string, fixed: bigint) => ({
+    id: `rate-${kind}`,
+    provider: 'nuvion',
+    kind,
+    currency: 'NGN',
+    percentPpm: 0,
+    minMinor: 0n,
+    maxMinor: null,
+    fixedMinor: fixed,
+    startsAt: T0,
+    changedBy: 'R-139 seed',
+    note: null,
+    createdAt: T0,
+  });
+  async function service(
+    w2w: { fee: bigint; provider: bigint },
+    planValues: Record<string, unknown> = {},
+  ) {
+    const rows = [
+      ...SEED.filter(
+        (r) => (r as unknown as { kind: string }).kind !== 'wallet_to_wallet',
+      ),
+      row({
+        kind: 'wallet_to_wallet',
+        currency: 'NGN',
+        minMinor: w2w.fee,
+        maxMinor: w2w.fee,
+        startsAt: T0,
+      }),
+    ];
+    const s = await schedule(rows, planValues);
+    const r = new ProviderRateService(
+      {
+        providerRate: {
+          findMany: () =>
+            Promise.resolve([rateRow('wallet_to_wallet', w2w.provider)]),
+        },
+      } as never,
+      { send: jest.fn() } as never,
+      new ConfigService({}),
+    );
+    await r.refresh();
+    return new FeeQuoteService(
+      settings(),
+      { name: 'nuvion' } as never,
+      new ConfigService({}),
+      s,
+      r,
+    );
+  }
+  const reasonCode = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (e) {
+      return ((e as MoneyError).getResponse() as { reason: MoneyErrorReason })
+        .reason.code;
+    }
+    return null;
+  };
+
+  it('F4: a purchase is quoted only when the whole fee is collected: fee equal to the provider charge is, a fee above it or any VAT is refused', async () => {
+    const input = { kind: 'purchase' as const, amountKobo: 500_000 };
+    const same = await service({ fee: 2325n, provider: 2325n });
+    expect(reasonCode(() => same.quote('u', input))).toBeNull();
+    const above = await service({ fee: 3000n, provider: 2325n });
+    expect(reasonCode(() => above.quote('u', input))).toBe('fees_not_set');
+    const vat = await service(
+      { fee: 2325n, provider: 2325n },
+      { 'tax.vat_on': 1 },
+    );
+    expect(reasonCode(() => vat.quote('u', input))).toBe('fees_not_set');
+    // A send between people is not a purchase: its fee leg collects F - P and VAT.
+    expect(
+      reasonCode(() =>
+        vat.quote('u', { kind: 'wawu_transfer', amountKobo: 500_000 }),
+      ),
+    ).toBeNull();
+  });
+
+  it('F9: the leg uses the split worked out with the quote that was checked, not a re-read of the schedule', async () => {
+    const s = await schedule();
+    const r = await rates();
+    const svc = new FeeQuoteService(
+      settings(),
+      { name: 'nuvion' } as never,
+      new ConfigService({}),
+      s,
+      r,
+    );
+    const input = { kind: 'bank_transfer' as const, amountKobo: 10_000_000 };
+    const q = svc.quote('u', input);
+    // The schedule is read again with a different fee after the quote was worked out.
+    const later = row({
+      kind: 'ngn_bank_withdrawal',
+      currency: 'NGN',
+      minMinor: 90000n,
+      maxMinor: 90000n,
+      startsAt: new Date('2026-11-11T00:00:01Z'),
+    });
+    s['rows' as never] = [...(s['rows' as never] as never[]), later] as never;
+    expect(svc.legSplit(input, q.fee)).toEqual({
+      providerFeeKobo: 20_000,
+      wawuFeeKobo: 20_000,
+      totalFeeKobo: 40_000,
+    });
+  });
+
+  it('F5: a provider rate with a start in the past is refused, as a fee is', async () => {
+    const r = await rates();
+    await expect(
+      r.add('a@b', {
+        provider: 'nuvion',
+        kind: 'ngn_bank_withdrawal',
+        currency: 'NGN',
+        percent: '0.2',
+        minMinor: 5000,
+        maxMinor: 50000,
+        fixedMinor: 0,
+        startsAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      }),
+    ).rejects.toThrow();
+  });
+});

@@ -20,8 +20,8 @@ import { feeOf, percentToPpm, ppmToPercent, shareOf } from './percent-fee';
 /** How often each server reads the schedule again, in seconds. An admin's change also refreshes the server that took it at once. */
 export const FEE_SCHEDULE_REFRESH_SECONDS = 15;
 
-/** The longest a start time may lie in the past, so a "now" typed a moment ago is taken. */
-const START_SLACK_MS = 5 * 60 * 1000;
+/** The longest a start time may lie in the past, so a "now" typed a moment ago is taken (a start further back is refused, F5). */
+export const START_SLACK_MS = 60 * 1000;
 
 /** One row of the history, as the admin routes show it. */
 export interface FeeRow {

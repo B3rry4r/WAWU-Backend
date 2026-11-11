@@ -488,7 +488,10 @@ export class FxAccountsService {
         if (!f) continue;
         i.wawuFeeMinor = num(f.feeMinor);
         i.vatMinor = num(f.vatMinor);
-        i.receiveMinor = num(f.amountMinor - f.feeMinor - f.vatMinor);
+        // One fee for the person (R-139): everything taken off what arrived, Nuvion's charge included, as one
+        // figure; the provider's charge is never a line of its own.
+        i.feeMinor = num(f.takenMinor);
+        i.receiveMinor = num(f.amountMinor - f.takenMinor);
       }
     } catch {
       // The line is shown without the fee words; the provider's statement is the truth.

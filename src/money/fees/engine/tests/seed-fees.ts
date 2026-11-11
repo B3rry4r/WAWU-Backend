@@ -84,9 +84,14 @@ export function seedFlatFees(
  */
 export async function removeSpecFees(ref: Getter): Promise<void> {
   const prisma = ref.get(PrismaService) as PrismaService;
+  // Table ownership is enough (no superuser role): the append-only triggers are switched off for this
+  // one transaction.
   await prisma.$transaction([
-    prisma.$executeRaw`SET LOCAL session_replication_role = replica`,
+    prisma.$executeRawUnsafe('ALTER TABLE "FeeSchedule" DISABLE TRIGGER USER'),
+    prisma.$executeRawUnsafe('ALTER TABLE "ProviderRate" DISABLE TRIGGER USER'),
     prisma.$executeRaw`DELETE FROM "FeeSchedule" WHERE "changedBy" = 'spec'`,
     prisma.$executeRaw`DELETE FROM "ProviderRate" WHERE "changedBy" = 'spec'`,
+    prisma.$executeRawUnsafe('ALTER TABLE "FeeSchedule" ENABLE TRIGGER USER'),
+    prisma.$executeRawUnsafe('ALTER TABLE "ProviderRate" ENABLE TRIGGER USER'),
   ]);
 }
