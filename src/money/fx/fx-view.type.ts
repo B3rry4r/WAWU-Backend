@@ -29,6 +29,8 @@ export interface FxProductsView {
   swap: boolean;
   /** Sending USDT, USDC or RLUSD to an outside address. */
   cryptoSend: boolean;
+  /** FEE-01 (R-139 point 3), additive: dollars received from local banks. Off until the owner confirms. */
+  localUsdIn: boolean;
 }
 
 export interface FxCurrencyView {

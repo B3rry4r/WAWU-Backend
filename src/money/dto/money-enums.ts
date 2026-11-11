@@ -48,6 +48,8 @@ export const FEE_PART_CODES = [
   'bank_transfer',
   'bill_charge',
   'wawu_fee',
+  /** FEE-01: VAT on WAWU's fee, shown apart from it. */
+  'vat',
 ] as const;
 export type FeePartCode = (typeof FEE_PART_CODES)[number];
 
@@ -225,6 +227,11 @@ export const MONEY_ERROR_CODES = [
   // not set, so nothing is quoted or moved (R-42); a movement passes a limit.
   'fees_not_set',
   'limit_reached',
+  // The fee engine (FEE-01, R-139): a withdrawal below the smallest one; a fee
+  // bigger than the amount; a product an admin has switched off.
+  'below_minimum_withdrawal',
+  'fee_exceeds_amount',
+  'product_off',
   // Opening a wallet on Nuvion (NUV-02): the person's details are with the
   // provider's compliance review; they wait, and nothing is sent again.
   'identity_under_review',

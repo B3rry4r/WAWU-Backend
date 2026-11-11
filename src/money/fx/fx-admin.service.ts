@@ -118,6 +118,7 @@ export class FxAdminService {
       products: {
         openAccount: s.productOn('open_account'),
         swap: s.productOn('swap'),
+        localUsdIn: s.productOn('local_usd_in'),
         cryptoSend: s.productOn('crypto_send'),
       },
       naira: {

@@ -9421,3 +9421,78 @@ model PriceListMove {
   @@index([kind, subjectId])
   @@index([ownerWawuId])
 }
+
+/// FEE-01 (R-139). WAWU's own fee for one kind of money move, one row per
+/// change. The fee in force for a (kind, currency) is the latest row whose
+/// `startsAt` has passed. Rows are never edited or deleted (a trigger refuses
+/// both): the table is the history. `percentPpm` is the percentage in
+/// millionths of the amount (0.4% is 4000). `passThrough` marks a kind where
+/// the provider's own charge is passed on with nothing extra (adding money).
+model FeeSchedule {
+  id          String   @id @default(uuid())
+  kind        String
+  currency    String
+  percentPpm  Int      @default(0)
+  minMinor    BigInt   @default(0)
+  maxMinor    BigInt?
+  passThrough Boolean  @default(false)
+  startsAt    DateTime
+  changedBy   String
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@index([kind, currency, startsAt])
+}
+
+/// FEE-01 (R-139 point 9). The provider's own rates (Nuvion's commercials),
+/// admin-only: never in an app route, answer, log line or error. One row per
+/// change; never edited or deleted. `fixedMinor` is a flat part on top of the
+/// percentage (the card's dollar fee, in minor units).
+model ProviderRate {
+  id         String   @id @default(uuid())
+  provider   String
+  kind       String
+  currency   String
+  percentPpm Int      @default(0)
+  minMinor   BigInt   @default(0)
+  maxMinor   BigInt?
+  fixedMinor BigInt   @default(0)
+  startsAt   DateTime
+  changedBy  String
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@index([provider, kind, currency, startsAt])
+}
+
+/// FEE-01 (R-139 point 6). One row per provider transaction that carried a
+/// fee: the amount, WAWU's fee, tax, what the provider was expected to
+/// charge, what it did charge (filled when known) and what WAWU kept (fee
+/// minus the provider's actual charge, or the expected one until known).
+model MoneyFeeRecord {
+  id                    String   @id @default(uuid())
+  provider              String   @default("nuvion")
+  reference             String
+  kind                  String
+  currency              String
+  amountMinor           BigInt
+  wawuFeeMinor          BigInt
+  vatMinor              BigInt   @default(0)
+  providerExpectedMinor BigInt   @default(0)
+  providerActualMinor   BigInt?
+  keptMinor             BigInt
+  feeScheduleId         String?
+  providerRateId        String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([provider, reference, kind])
+  @@index([createdAt])
+}
+
+/// FEE-01. The last time the owner was emailed about a provider rate for a
+/// kind, so a change or a mismatch mails at most once a day per kind.
+model FeeAlertSent {
+  kind   String   @id
+  sentAt DateTime
+}

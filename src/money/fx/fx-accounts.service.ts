@@ -122,6 +122,7 @@ export class FxAccountsService {
         openAccount: this.settings.productOn('open_account'),
         swap: this.settings.productOn('swap'),
         cryptoSend: this.settings.productOn('crypto_send'),
+        localUsdIn: this.settings.productOn('local_usd_in'),
       },
       naira: { code: 'NGN', decimals: 2 },
     };
