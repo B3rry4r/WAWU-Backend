@@ -193,8 +193,14 @@ export interface AbroadSendView {
   wawuFeeKobo: number;
   /** WAWU's fee taken from the foreign account the money left, in its currency's smallest unit (WALLET-42); 0 otherwise. */
   wawuFeeMinor: number;
-  /** FEE-01, additive: VAT on that fee for a dollar payout priced from the schedule; absent otherwise. */
+  /** FEE-01, additive: VAT on that fee for a dollar payout priced from the schedule; under Nuvion always present (0 when none). */
   vatMinor?: number;
+  /** FEE-01, additive, under Nuvion only: the sending currency. */
+  currency?: string;
+  /** FEE-01, additive, under Nuvion only: WAWU's one fee with any partner fee folded, excluding VAT; equal to the quote the person confirmed. */
+  feeMinor?: number;
+  /** FEE-01, additive, under Nuvion only: what left the account, `amountFromMinor` + `feeMinor` + `vatMinor`. */
+  totalMinor?: number;
   narration: string | null;
   /** In plain words when the send failed, was reversed or was cancelled; else null. */
   failureReason: string | null;

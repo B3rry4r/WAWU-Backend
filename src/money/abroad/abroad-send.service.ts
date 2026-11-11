@@ -1074,26 +1074,43 @@ export class AbroadSendService {
     return rows.map((r) => {
       const v = this.view(r);
       const f = fees.get(r.reference);
-      if (!f) {
-        if (!dollar || !this.abroad.engineOn) return v;
-        // One fee in the app: the partner's charge (what it did charge, else the estimate) is
-        // folded into WAWU's line and never shown apart.
-        const partner = Number(
-          r.providerFeeMinor ?? r.providerFeeEstimateMinor ?? 0n,
-        );
-        return {
-          ...v,
-          providerFeeMinor: 0,
-          wawuFeeKobo: v.wawuFeeKobo + (r.fromCurrency === 'NGN' ? partner : 0),
-          wawuFeeMinor:
-            v.wawuFeeMinor + (r.fromCurrency === 'NGN' ? 0 : partner),
-        };
+      if (!dollar || !this.abroad.engineOn) {
+        return f
+          ? {
+              ...v,
+              providerFeeMinor: 0,
+              wawuFeeMinor: Number(f.feeMinor),
+              vatMinor: Number(f.vatMinor),
+            }
+          : v;
       }
+      const fromNgn = r.fromCurrency === 'NGN';
+      let wawuFeeKobo = v.wawuFeeKobo;
+      let wawuFeeMinor = v.wawuFeeMinor;
+      let vatMinor = 0;
+      if (f) {
+        wawuFeeMinor = Number(f.feeMinor);
+        vatMinor = Number(f.vatMinor);
+      } else {
+        // One fee in the app: the partner's charge as the person was quoted it (the estimate, else what it
+        // did charge) is folded into WAWU's line and never shown apart, so the receipt equals the review.
+        const partner = Number(
+          r.providerFeeEstimateMinor ?? r.providerFeeMinor ?? 0n,
+        );
+        if (fromNgn) wawuFeeKobo += partner;
+        else wawuFeeMinor += partner;
+      }
+      const feeMinor = fromNgn ? wawuFeeKobo : wawuFeeMinor;
       return {
         ...v,
         providerFeeMinor: 0,
-        wawuFeeMinor: Number(f.feeMinor),
-        vatMinor: Number(f.vatMinor),
+        wawuFeeKobo,
+        wawuFeeMinor,
+        vatMinor,
+        // The same words as the quote the person confirmed (FEE-01).
+        currency: r.fromCurrency,
+        feeMinor,
+        totalMinor: v.amountFromMinor + feeMinor + vatMinor,
       };
     });
   }

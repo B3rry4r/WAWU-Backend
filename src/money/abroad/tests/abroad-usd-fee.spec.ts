@@ -4,6 +4,7 @@ import { FeeRecordService } from '../../fees/engine/fee-record.service';
 import { FeeScheduleService } from '../../fees/engine/fee-schedule.service';
 import { ProviderRateService } from '../../fees/engine/provider-rate.service';
 import type { MoneyError } from '../../money-error';
+import { AbroadSendService } from '../abroad-send.service';
 import { AbroadService } from '../abroad.service';
 import { AbroadSettings } from '../abroad-settings';
 
@@ -62,7 +63,12 @@ async function build(
   const prisma = {
     feeSchedule: { findMany: () => Promise.resolve(SCHEDULE) },
     providerRate: { findMany: () => Promise.resolve([]) },
-    moneyFeeRecord: {},
+    moneyFeeRecord: {
+      findMany: () =>
+        Promise.resolve([
+          { reference: 'ref1', wawuFeeMinor: 800n, vatMinor: 60n },
+        ]),
+    },
     abroadFreeze: { findUnique: () => Promise.resolve(null) },
     abroadRecipient: {
       findFirst: () =>
@@ -124,7 +130,7 @@ async function build(
     new AbroadSettings(plan as never),
     dollar,
   );
-  return { service, created };
+  return { service, created, prisma, walletProvider };
 }
 
 const wallet = {
@@ -231,5 +237,63 @@ describe('a dollar payout to a bank', () => {
     } finally {
       delete process.env.ABROAD_PROVIDER_FEE_GBP_MOBILE_MONEY;
     }
+  });
+
+  it('FEE-01: the send the app reads after sending shows the fee and total of the quote the person confirmed (a priced USD bank payout, VAT on)', async () => {
+    const { service, created, prisma, walletProvider } = await build({
+      vat: true,
+    });
+    const q = await service.quote(wallet, dto(10_000));
+    expect(q.feeMinor).toBe(800);
+    expect(q.vatMinor).toBe(60);
+    expect(q.totalMinor).toBe(10_000 + 800 + 60);
+    const sends = new AbroadSendService(
+      prisma as never,
+      walletProvider as never,
+      service,
+      {} as never,
+    );
+    void created;
+    const row = {
+      id: 's1',
+      reference: 'ref1',
+      status: 'pending',
+      fromCurrency: 'USD',
+      toCurrency: 'GBP',
+      amountFromMinor: 10_000n,
+      amountToMinor: 8_000n,
+      rate: '0.8',
+      providerFeeMinor: null,
+      providerFeeEstimateMinor: null,
+      wawuFeeKobo: 0n,
+      wawuFeeMinor: 800n,
+      narration: null,
+      failureReason: null,
+      createdAt: new Date(),
+      completedAt: null,
+      recipient: {
+        id: 'r1',
+        method: 'bank',
+        country: 'GB',
+        currency: 'GBP',
+        holderName: 'A B',
+        scheme: null,
+        bankName: null,
+        last4: null,
+        createdAt: new Date(),
+      },
+    };
+    const [v] = await (
+      sends as unknown as {
+        appViews(r: unknown[]): Promise<Record<string, unknown>[]>;
+      }
+    ).appViews([row]);
+    expect(v).toMatchObject({
+      providerFeeMinor: 0,
+      currency: 'USD',
+      feeMinor: q.feeMinor,
+      vatMinor: q.vatMinor,
+      totalMinor: q.totalMinor,
+    });
   });
 });
