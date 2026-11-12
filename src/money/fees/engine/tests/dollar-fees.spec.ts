@@ -353,6 +353,33 @@ describe('dollars received (R-140: one fee, usd_local_in)', () => {
     expect(table.size).toBe(0);
   });
 
+  it('FEE-07 fix: a refunded or reversed outflow (direction out) is charged nothing and writes no fee record; a real bank inflow of USD 100 pays USD 7', async () => {
+    const { dollar, table } = await build({ env: COLLECTOR });
+    const p = provider();
+    const refunded = await dollar.onForeignInflow({
+      ...inflow({
+        transferId: 'out-1',
+        amountMinor: 10_000n,
+        direction: 'out',
+      }),
+      abroad: p.abroad,
+    });
+    expect(refunded.outcome).toBe('none');
+    expect(p.made).toHaveLength(0);
+    expect(table.size).toBe(0);
+    const real = await dollar.onForeignInflow({
+      ...inflow({ transferId: 'in-7', amountMinor: 10_000n, direction: 'in' }),
+      abroad: p.abroad,
+    });
+    expect(real.outcome).toBe('collected');
+    expect(p.made).toHaveLength(1);
+    expect(p.made[0]).toMatchObject({
+      reference: 'in-7-fee',
+      amountMinor: 700n,
+    });
+    expect(table.size).toBe(1);
+  });
+
   it('a bank transfer of USD 1,000 pays USD 15, taken once by a book transfer under <inflow>-fee, the person sees what landed', async () => {
     const { dollar, table } = await build({ env: COLLECTOR });
     const p = provider();

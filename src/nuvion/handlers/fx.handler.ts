@@ -164,6 +164,9 @@ export class NuvionFxHandler implements NuvionEventHandler {
         ? 'in'
         : 'out';
     const fee0 = fee;
+    // FEE-07 fix: only money that really came in is priced. A refunded or reversed outflow
+    // (our own payout coming back) shows as "in" in the ledger but is never an inflow to charge.
+    const pricedInflow = direction === 'in' && !d.event.startsWith('outflows.');
     await this.prisma.fxMovement.upsert({
       where: {
         provider_providerTransferId: {
@@ -190,7 +193,7 @@ export class NuvionFxHandler implements NuvionEventHandler {
     });
     // R-139: WAWU's fee on dollars received is taken once (the record and the book transfer are keyed on this transfer's id).
     let feeNote = '';
-    if (direction === 'in') {
+    if (pricedInflow) {
       const dollar = this.find<DollarFeeService>(DollarFeeService);
       if (dollar) {
         const wallet = await this.prisma.fintavaWallet.findUnique({
@@ -212,6 +215,7 @@ export class NuvionFxHandler implements NuvionEventHandler {
             providerFeeMinor: fee0,
             status: ledgerStatus,
             occurredAt: t.createdAt ?? d.receivedAt,
+            direction: 'in',
           })
           .catch(() => null);
         if (fee?.outcome === 'wait') return { outcome: 'wait', note: fee.note };

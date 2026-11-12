@@ -58,6 +58,8 @@ export interface InflowFeeInput {
   providerFeeMinor: bigint;
   status: 'completed' | 'pending' | 'failed' | 'reversed';
   occurredAt: Date;
+  /** 'out' (a refunded or reversed payout of ours) is never priced; left out means a real inflow. */
+  direction?: 'in' | 'out';
 }
 
 /** The names of the payment types (lower case) a config list holds. */
@@ -326,7 +328,11 @@ export class DollarFeeService {
    * is never refused: a fee larger than the amount is cut to the amount.
    */
   async onForeignInflow(i: InflowFeeInput): Promise<InflowFeeResult> {
-    if (i.status !== 'completed' || i.account.currency !== 'USD') {
+    if (
+      i.status !== 'completed' ||
+      i.account.currency !== 'USD' ||
+      i.direction === 'out'
+    ) {
       return { outcome: 'none', note: 'not a completed dollar inflow' };
     }
     if (this.classify(i.paymentType) === null) {
