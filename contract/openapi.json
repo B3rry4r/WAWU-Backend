@@ -22327,7 +22327,8 @@
                 "usd_local_in",
                 "fx_swap",
                 "wallet_to_wallet",
-                "ngn_add_money"
+                "ngn_add_money",
+                "card_issue"
               ]
             }
           },
@@ -51050,7 +51051,8 @@
               "usd_local_in",
               "fx_swap",
               "wallet_to_wallet",
-              "ngn_add_money"
+              "ngn_add_money",
+              "card_issue"
             ]
           },
           "currency": {
@@ -51211,6 +51213,7 @@
               "fx_swap",
               "wallet_to_wallet",
               "ngn_add_money",
+              "card_issue",
               "card_issuance",
               "card_maintenance",
               "card_decline"

@@ -14,6 +14,9 @@ import {
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
 import { FEE_LEG_SUFFIX } from '../../nuvion/fee-legs';
+import { RATE_PROVIDER } from '../fees/engine/fee-kinds';
+import { FeeRecordService } from '../fees/engine/fee-record.service';
+import { FeeScheduleService } from '../fees/engine/fee-schedule.service';
 import { FeeQuoteService } from '../fees/fee-quote.service';
 import { LedgerService } from '../ledger/ledger.service';
 import { lagosDayStart } from '../limits/lagos-window';
@@ -171,6 +174,8 @@ export class WalletCardService implements OnModuleInit {
     private readonly keys: IdempotencyService,
     private readonly fees: FeeQuoteService,
     private readonly ledger: LedgerService,
+    private readonly schedule: FeeScheduleService,
+    private readonly feeRecords: FeeRecordService,
   ) {}
 
   /**
@@ -205,6 +210,35 @@ export class WalletCardService implements OnModuleInit {
     return cards;
   }
 
+  /**
+   * WAWU's own fee for making a card, now (R-140 point 2). Under Nuvion it is
+   * the dashboard's `card_issue` fee in force plus VAT when VAT is on; the
+   * fee is one fixed amount, so the amount worked from is 0. With no fee in
+   * force the refusal is `503 fees_not_set` and nothing is sent. Under any
+   * other provider it is the old setting, unchanged (`WAWU_FEE_CARD_KOBO`).
+   * `totalKobo` is what the person pays WAWU and what the card row keeps.
+   */
+  wawuFee(): {
+    feeKobo: number;
+    vatKobo: number;
+    totalKobo: number;
+    scheduleId: string | null;
+  } {
+    if (this.provider.name !== 'nuvion') {
+      const kobo = this.settings.wawuFeeKobo;
+      return { feeKobo: kobo, vatKobo: 0, totalKobo: kobo, scheduleId: null };
+    }
+    const f = this.schedule.feeFor('card_issue', 0n);
+    const feeKobo = Number(f.feeMinor);
+    const vatKobo = Number(f.vatMinor);
+    return {
+      feeKobo,
+      vatKobo,
+      totalKobo: feeKobo + vatKobo,
+      scheduleId: f.row.id,
+    };
+  }
+
   /** Off, not built for the running provider, or its fee not set: the refusal, before a PIN is looked at. */
   assertCreatable(): void {
     if (!this.enabled()) {
@@ -216,7 +250,7 @@ export class WalletCardService implements OnModuleInit {
     }
     // WAWU's own fee moves as a send's fee does: from the person's account to
     // WAWU's, which only a provider with a fee transfer of its own can do.
-    if (this.settings.wawuFeeKobo > 0 && this.provider.wawuFeeLeg !== true) {
+    if (this.wawuFee().totalKobo > 0 && this.provider.wawuFeeLeg !== true) {
       throw new MoneyError('fees_not_set', FEE_MESSAGE);
     }
   }
@@ -268,10 +302,17 @@ export class WalletCardService implements OnModuleInit {
       throw new MoneyError('fees_not_set', FEE_MESSAGE);
     }
     const c = await this.counts(wallet.wawuUserId);
+    let wawu = 0;
+    try {
+      wawu = this.wawuFee().totalKobo;
+    } catch (e) {
+      // A product that is off can still be read; one that is on and has no fee in force is refused.
+      if (enabled) throw e;
+    }
     const fee = {
       providerFeeKobo: provider ?? 0,
-      wawuFeeKobo: this.settings.wawuFeeKobo,
-      totalFeeKobo: (provider ?? 0) + this.settings.wawuFeeKobo,
+      wawuFeeKobo: wawu,
+      totalFeeKobo: (provider ?? 0) + wawu,
     };
     const underLimits =
       c.active < this.settings.maxActive && c.today < this.settings.maxPerDay;
@@ -289,8 +330,7 @@ export class WalletCardService implements OnModuleInit {
       canCreate:
         enabled &&
         !!this.provider.cards &&
-        (this.settings.wawuFeeKobo === 0 ||
-          this.provider.wawuFeeLeg === true) &&
+        (wawu === 0 || this.provider.wawuFeeLeg === true) &&
         underLimits,
     };
   }
@@ -305,9 +345,11 @@ export class WalletCardService implements OnModuleInit {
    * balance is the provider's, read now; a read that fails is the provider's
    * refusal, nothing is taken. The key is given back (nothing was attached).
    */
-  private async assertCanAfford(wallet: OpenWallet): Promise<void> {
-    const need =
-      (this.settings.providerFeeKobo ?? 0) + this.settings.wawuFeeKobo;
+  private async assertCanAfford(
+    wallet: OpenWallet,
+    wawuKobo: number,
+  ): Promise<void> {
+    const need = (this.settings.providerFeeKobo ?? 0) + wawuKobo;
     if (need <= 0) return;
     let available: bigint;
     try {
@@ -626,7 +668,8 @@ export class WalletCardService implements OnModuleInit {
   ): Promise<CardView> {
     this.assertCreatable();
     const cards = this.cards();
-    await this.assertCanAfford(wallet);
+    const wawu = this.wawuFee();
+    await this.assertCanAfford(wallet, wawu.totalKobo);
     const kind: CardKind = dto.kind;
     const name = cleanCardName(dto.name) ?? DEFAULT_NAMES[kind];
     const reference = `wawu-card-${randomBytes(6).toString('hex')}`;
@@ -645,12 +688,13 @@ export class WalletCardService implements OnModuleInit {
           name,
           state: 'creating',
           providerFeeKobo: BigInt(this.settings.providerFeeKobo ?? 0),
-          wawuFeeKobo: BigInt(this.settings.wawuFeeKobo),
+          wawuFeeKobo: BigInt(wawu.totalKobo),
         },
       });
       await this.keys.attach(tx, scope, made.id);
       return made;
     });
+    await this.recordCardFee(row, wawu);
 
     // 2. Ask the provider, holding nothing.
     let card: ProviderCard;
@@ -667,6 +711,54 @@ export class WalletCardService implements OnModuleInit {
 
     // 3. Record it.
     return this.record(wallet, row, card, scope);
+  }
+
+  /**
+   * The fee record of a card (R-140 point 2, kind `card_issue`): WAWU's fee,
+   * the VAT, and what Nuvion is expected to charge for making it (the person
+   * pays that on top, so WAWU keeps the whole fee). Written when the card is
+   * claimed, once per card reference; never throws (the card goes on). Only
+   * under Nuvion, whose fees the engine records.
+   */
+  private async recordCardFee(
+    row: WalletCard,
+    wawu: { feeKobo: number; vatKobo: number; scheduleId: string | null },
+  ): Promise<void> {
+    if (this.provider.name !== 'nuvion') return;
+    try {
+      await this.prisma.moneyFeeRecord.upsert({
+        where: {
+          provider_reference_kind: {
+            provider: RATE_PROVIDER,
+            reference: row.reference,
+            kind: 'card_issue',
+          },
+        },
+        create: {
+          provider: RATE_PROVIDER,
+          reference: row.reference,
+          kind: 'card_issue',
+          currency: 'NGN',
+          amountMinor: 0n,
+          wawuFeeMinor: BigInt(wawu.feeKobo),
+          vatMinor: BigInt(wawu.vatKobo),
+          providerExpectedMinor: BigInt(this.settings.providerFeeKobo ?? 0),
+          keptMinor: BigInt(wawu.feeKobo),
+          feeScheduleId: wawu.scheduleId,
+        },
+        update: {},
+      });
+    } catch (e) {
+      this.logger.warn(
+        `card ${row.id}: its fee record was not written (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+  }
+
+  /** A card that failed: its record says WAWU kept nothing (status reversed, kept 0, VAT 0). */
+  private async reverseCardFee(row: Pick<WalletCard, 'reference'>) {
+    if (this.provider.name !== 'nuvion') return;
+    await this.feeRecords.reverse(RATE_PROVIDER, row.reference, 'card_issue');
   }
 
   /**
@@ -740,6 +832,7 @@ export class WalletCardService implements OnModuleInit {
       where: { id: row.id },
       data: { state: 'failed', failure: failureOf(e) },
     });
+    await this.reverseCardFee(row);
     await this.keys.release(scope);
     throw await this.fail(e, row);
   }
@@ -811,13 +904,15 @@ export class WalletCardService implements OnModuleInit {
       );
       if (found) return await this.adopt(row, found, wallet);
       if (age >= GIVE_UP_AFTER_MS) {
-        return await this.prisma.walletCard.update({
+        const failed = await this.prisma.walletCard.update({
           where: { id: row.id },
           data: {
             state: 'failed',
             failure: GIVE_UP_FAILURE,
           },
         });
+        await this.reverseCardFee(row);
+        return failed;
       }
     } catch (e) {
       this.logger.warn(

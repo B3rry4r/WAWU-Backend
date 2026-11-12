@@ -23,8 +23,18 @@ export interface PayoutFee {
   legMinor: bigint;
 }
 
-/** How a USD inflow is told apart, from Nuvion's own `payment_type`, by names the owner has put in config. */
-export type InflowClass = 'wire' | 'local' | null;
+/**
+ * Whether a USD inflow carries WAWU's dollar-received fee (R-140 point 1). There is one fee for every bank transfer
+ * into a dollar account: Nuvion's inflow says "bank-transfer" for an international wire and for a local transfer
+ * alike, and nothing tells them apart, so nothing tries.
+ */
+export type InflowClass = 'bank' | null;
+
+/** The `payment_type` of a bank transfer into an account, as Nuvion's inflow record says it. */
+export const DOLLAR_BANK_TRANSFER_TYPE = 'bank-transfer';
+
+/** The one kind that prices every dollar received by bank transfer. */
+export const DOLLAR_RECEIVED_KIND: FeeKind = 'usd_local_in';
 
 /** What happened to one foreign inflow. */
 export interface InflowFeeResult {
@@ -48,6 +58,8 @@ export interface InflowFeeInput {
   providerFeeMinor: bigint;
   status: 'completed' | 'pending' | 'failed' | 'reversed';
   occurredAt: Date;
+  /** 'out' (a refunded or reversed payout of ours) is never priced; left out means a real inflow. */
+  direction?: 'in' | 'out';
 }
 
 /** The names of the payment types (lower case) a config list holds. */
@@ -64,26 +76,25 @@ export function namesOf(raw: string | undefined): ReadonlySet<string> {
  * The dollar payout and the money-in side of the fee engine (FEE-01 fix
  * round 1). Prices a dollar payout to a bank from the schedule (money going
  * out: fee and VAT on top), keeps the fee record of each kind, and collects
- * WAWU's fee on an international wire received into a dollar account (money
+ * WAWU's fee on dollars received by bank transfer into a dollar account (money
  * coming in: fee and VAT come off what arrives). The provider's charge is
  * worked out here and kept in the record; it is never returned to an app
  * route.
  *
- * What Nuvion's inflow record carries (id, entity_id, account_id, amount,
- * applicable_fee, currency, status, type, payment_type, unique_reference,
- * counterparty_id, narration, created) does not say whether a dollar inflow
- * is an international wire or a local transfer, and no `payment_type` value
- * for either is documented or measured (dev never funded a dollar account by
- * bank). So the types that count are NAMED BY CONFIG
- * (`FX_WIRE_PAYMENT_TYPES`, `FX_LOCAL_USD_PAYMENT_TYPES`, both empty until
- * the owner names them from a real record), and an inflow whose type is on
- * neither list is charged nothing and recorded nowhere.
+ * R-140 (12 Nov 2026): every dollar bank transfer into a person's dollar
+ * account is priced by ONE kind, `usd_local_in` (1.5%, minimum USD 7, no
+ * maximum at the start; the dashboard changes it), always charged. Nuvion's
+ * inflow `payment_type` is "bank-transfer" for a wire and a local transfer
+ * alike, so there is no wire versus local split and nobody asks Nuvion which is
+ * which. `FX_LOCAL_USD_PAYMENT_TYPES` may still add names that count as a bank
+ * transfer; `FX_WIRE_PAYMENT_TYPES` is no longer read. A card inflow
+ * (`card-acq`) and an inflow from another Nuvion account are on no list and are
+ * charged nothing. `intl_wire_in` prices nothing now; its rows stay.
  */
 @Injectable()
 export class DollarFeeService {
   private readonly logger = new Logger(DollarFeeService.name);
-  private readonly wireTypes: ReadonlySet<string>;
-  private readonly localTypes: ReadonlySet<string>;
+  private readonly bankTypes: ReadonlySet<string>;
   private readonly collectorBan: string | null;
 
   constructor(
@@ -94,10 +105,10 @@ export class DollarFeeService {
     private readonly plan: PlanSettingsService,
     @Optional() config?: ConfigService,
   ) {
-    this.wireTypes = namesOf(config?.get<string>('FX_WIRE_PAYMENT_TYPES'));
-    this.localTypes = namesOf(
-      config?.get<string>('FX_LOCAL_USD_PAYMENT_TYPES'),
-    );
+    this.bankTypes = new Set([
+      DOLLAR_BANK_TRANSFER_TYPE,
+      ...namesOf(config?.get<string>('FX_LOCAL_USD_PAYMENT_TYPES')),
+    ]);
     const ban = config?.get<string>('FX_FEE_COLLECTOR_USD_BAN')?.trim();
     this.collectorBan = ban && /^[A-Za-z0-9_-]{1,64}$/.test(ban) ? ban : null;
   }
@@ -301,24 +312,12 @@ export class DollarFeeService {
     }
   }
 
-  // -- dollars received (intl_wire_in, usd_local_in) -----------------------------
+  // -- dollars received (usd_local_in, the one fee) ------------------------------
 
-  /** Which kind of USD inflow a payment type is, by the names in config; null when it is on neither list. */
+  /** 'bank' when the payment type is a bank transfer into the account; null for anything else (a card, another Nuvion account). */
   classify(paymentType: string | null): InflowClass {
     const t = paymentType?.trim().toLowerCase() ?? '';
-    if (t === '') return null;
-    if (this.wireTypes.has(t)) return 'wire';
-    if (this.localTypes.has(t)) return 'local';
-    return null;
-  }
-
-  /** The switch of dollars received from local banks (default off). */
-  private localOn(): boolean {
-    try {
-      return this.plan.number('fx.product.local_usd_in.on') === 1;
-    } catch {
-      return false;
-    }
+    return t !== '' && this.bankTypes.has(t) ? 'bank' : null;
   }
 
   /**
@@ -329,25 +328,17 @@ export class DollarFeeService {
    * is never refused: a fee larger than the amount is cut to the amount.
    */
   async onForeignInflow(i: InflowFeeInput): Promise<InflowFeeResult> {
-    if (i.status !== 'completed' || i.account.currency !== 'USD') {
+    if (
+      i.status !== 'completed' ||
+      i.account.currency !== 'USD' ||
+      i.direction === 'out'
+    ) {
       return { outcome: 'none', note: 'not a completed dollar inflow' };
     }
-    const cls = this.classify(i.paymentType);
-    if (cls === null) {
-      return { outcome: 'none', note: 'no fee: the inflow is on no fee list' };
+    if (this.classify(i.paymentType) === null) {
+      return { outcome: 'none', note: 'no fee: not a bank transfer' };
     }
-    const kind: FeeKind = cls === 'wire' ? 'intl_wire_in' : 'usd_local_in';
-    const charge = cls === 'wire' || this.localOn();
-    if (!charge) {
-      await this.writeInflowRecord(kind, i, 0n, 0n, null);
-      this.logger.log(
-        `A local dollar inflow ${i.transferId} arrived while that product is off: recorded with fee 0.`,
-      );
-      return {
-        outcome: 'recorded',
-        note: 'local dollars received: recorded with fee 0 (product off)',
-      };
-    }
+    const kind = DOLLAR_RECEIVED_KIND;
     let rec = await this.findRecord(kind, i.transferId);
     if (!rec) {
       const at = i.occurredAt;
@@ -489,7 +480,7 @@ export class DollarFeeService {
     const rows = await this.prisma.moneyFeeRecord.findMany({
       where: {
         provider: RATE_PROVIDER,
-        kind: { in: ['intl_wire_in', 'usd_local_in'] },
+        kind: { in: ['intl_wire_in', DOLLAR_RECEIVED_KIND] },
         reference: { in: [...references] },
       },
       select: {

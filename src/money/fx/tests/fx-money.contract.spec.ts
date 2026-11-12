@@ -29,6 +29,7 @@ import type {
 } from '../../payments/idempotency';
 import type { FxAccount } from '../../../../generated/prisma/client';
 import { NotificationService } from '../../../notification/notification.service';
+import { DollarFeeService } from '../../fees/engine/dollar-fees';
 import { FxAccountsService } from '../fx-accounts.service';
 import { FxAdminService } from '../fx-admin.service';
 import { FxOperationsService, lagosDay } from '../fx-operations.service';
@@ -1402,6 +1403,100 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     });
     expect(other.outcome).toBe('done');
     expect(other.note).toMatch(/not a foreign account of ours/);
+    await prisma.fxMovement.deleteMany({ where: { wawuUserId: USER } });
+  });
+
+  it('FEE-07 fix: a refunded USD bank-transfer payout of ours is never priced as an inflow; a real completed USD bank inflow still is (USD 7 on USD 100)', async () => {
+    await prisma.fintavaWallet.deleteMany({ where: { wawuUserId: USER } });
+    await prisma.fintavaWallet.create({
+      data: {
+        wawuUserId: USER,
+        customerId: FX_ENTITY,
+        walletId: WALLET.walletId,
+        accountNumber: WALLET.accountNumber,
+        provider: 'nuvion',
+      },
+    });
+    const usd = await openUsd();
+    const accountId = await provId(usd.id);
+    const priced: Array<Record<string, unknown>> = [];
+    const dollar = Object.create(
+      DollarFeeService.prototype,
+    ) as DollarFeeService;
+    // The stand-in for the fee service records what it is asked to price, as the real one would write a record for it.
+    (dollar as unknown as { onForeignInflow: unknown }).onForeignInflow = (
+      i: Record<string, unknown>,
+    ) => {
+      priced.push(i);
+      return Promise.resolve({ outcome: 'none', note: 'seen' });
+    };
+    const provider = new NuvionWalletProvider(
+      new NuvionClient(
+        standin.settings(),
+        'nv_test_sk_FEE07fixKEY00000000000000',
+      ),
+    );
+    const moduleRef = {
+      get: (token: unknown) => {
+        if (token === WALLET_PROVIDER) return provider;
+        if (token === DollarFeeService) return dollar;
+        throw new Error('not here');
+      },
+    };
+    const handler = new NuvionFxHandler(prisma, moduleRef as never);
+    const base = {
+      amount: 10_000,
+      currency: 'USD',
+      account_id: accountId,
+      entity_id: FX_ENTITY,
+      status: 'successful',
+      status_reason: 'processing_complete',
+      narration: 'x',
+      payment_type: 'bank-transfer',
+      applicable_fee: 0,
+      meta: {},
+      counterparty_id: accountId,
+      created: Date.now(),
+      updated: Date.now(),
+    };
+    const refund = {
+      ...base,
+      id: '01FEE07REFUND00000000000',
+      unique_reference: 'fee07-refund',
+      type: 'inflow',
+    };
+    const real = {
+      ...base,
+      id: '01FEE07INFLOW00000000000',
+      unique_reference: 'fee07-real',
+      type: 'inflow',
+    };
+    fx.transfers.push(refund, real);
+    const mk = (event: string, t: Record<string, unknown>) => ({
+      id: `d-${event}`,
+      eventId: `ev-${String(t.id)}`,
+      event,
+      resourceId: String(t.id),
+      entityId: FX_ENTITY,
+      data: t,
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+    expect(
+      (await handler.handle(mk('outflows.refunded', refund))).outcome,
+    ).toBe('done');
+    expect(priced).toHaveLength(0);
+    expect((await handler.handle(mk('inflows.completed', real))).outcome).toBe(
+      'done',
+    );
+    expect(priced).toHaveLength(1);
+    expect(priced[0]).toMatchObject({
+      transferId: real.id,
+      amountMinor: 10_000n,
+      paymentType: 'bank-transfer',
+      status: 'completed',
+      direction: 'in',
+    });
     await prisma.fxMovement.deleteMany({ where: { wawuUserId: USER } });
   });
 

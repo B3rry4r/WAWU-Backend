@@ -75,10 +75,17 @@ export class AdminCardsService {
     } catch {
       // A switch that cannot be read is shown off, as the card routes treat it.
     }
+    // R-140: under Nuvion WAWU's fee is the dashboard's `card_issue` fee; with none in force, the setting is shown.
+    let wawuFeeKobo = this.settings.wawuFeeKobo;
+    try {
+      wawuFeeKobo = this.cards.wawuFee().totalKobo;
+    } catch {
+      // No fee in force: the card routes refuse with fees_not_set; show the setting.
+    }
     return {
       enabled,
       providerFeeKobo: this.settings.providerFeeKobo,
-      wawuFeeKobo: this.settings.wawuFeeKobo,
+      wawuFeeKobo,
       maxActive: this.settings.maxActive,
       maxPerDay: this.settings.maxPerDay,
     };
