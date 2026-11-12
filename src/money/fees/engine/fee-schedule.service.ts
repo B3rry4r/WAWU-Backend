@@ -12,7 +12,9 @@ import {
   FEE_CURRENCIES,
   FEE_KIND_CURRENCY,
   FEE_KINDS,
+  FIXED_FEE_KINDS,
   PASS_THROUGH_KINDS,
+  RETIRED_FEE_KINDS,
   type FeeKind,
 } from './fee-kinds';
 import { feeOf, percentToPpm, ppmToPercent, shareOf } from './percent-fee';
@@ -255,12 +257,9 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** Whether the product a kind prices is switched on. Swaps and local dollars have switches; the rest are on. */
+  /** Whether the product a kind prices is switched on. Only swaps have a switch (R-140 point 1 took away the local-dollars one); the rest are on. */
   productOn(kind: FeeKind): boolean {
     if (kind === 'fx_swap') return this.plan.value('fx.product.swap.on') === 1;
-    if (kind === 'usd_local_in') {
-      return this.plan.value('fx.product.local_usd_in.on') === 1;
-    }
     return true;
   }
 
@@ -269,6 +268,11 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
     const kind = input.kind as FeeKind;
     if (!FEE_KINDS.includes(kind)) {
       throw new BadRequestException(['kind is not a fee kind.']);
+    }
+    if (RETIRED_FEE_KINDS.includes(kind)) {
+      throw new BadRequestException([
+        `${kind} is retired: dollars received by bank transfer carry one fee, usd_local_in.`,
+      ]);
     }
     if (!(FEE_CURRENCIES as readonly string[]).includes(input.currency)) {
       throw new BadRequestException(['currency is not one fees are set in.']);
@@ -316,6 +320,11 @@ export class FeeScheduleService implements OnModuleInit, OnModuleDestroy {
       }
       if (max !== null && max < min) {
         throw new BadRequestException(['maxMinor cannot be below minMinor.']);
+      }
+      if (FIXED_FEE_KINDS.includes(kind) && (p !== 0 || max !== min)) {
+        throw new BadRequestException([
+          `${kind} is one fixed amount: percent 0, and minMinor and maxMinor the same figure.`,
+        ]);
       }
     }
     const row = await this.prisma.feeSchedule.create({

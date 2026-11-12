@@ -13,11 +13,12 @@ import { FeeConfigError, koboSetting } from '../fees/fee-config';
  *                            making a card answers `503 fees_not_set` and
  *                            nothing is sent. Dev measured 65,772 (NGN 657.72,
  *                            the same for a virtual and a single-use card).
- *   WAWU_FEE_CARD_KOBO       kobo. WAWU's own fee on top. Default 0 (R-10).
- *                            Collecting a fee above 0 is not built (the money
- *                            framework has no fee-only charge yet, gap
- *                            G-WALLET-31-1), so while it is above 0 making a
- *                            card answers `503 fees_not_set`.
+ *   WAWU_FEE_CARD_KOBO       kobo. WAWU's own fee on top, for a provider that
+ *                            is not Nuvion (Fintava). Default 0 (R-10). Under
+ *                            Nuvion this is not read: WAWU's fee for making a
+ *                            card is the dashboard's `card_issue` fee in force
+ *                            (default NGN 5,000, plus VAT when it is on), so an
+ *                            admin changes it with history (R-140 point 2).
  *   WALLET_CARD_MAX_ACTIVE   cards a person may hold at once (not blocked, not
  *                            failed). Default 5. Default (lead), owner may
  *                            override.

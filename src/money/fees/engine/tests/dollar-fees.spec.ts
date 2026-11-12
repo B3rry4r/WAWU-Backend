@@ -203,17 +203,14 @@ const inflow = (o: Record<string, unknown> = {}) => ({
   account,
   walletId: 'w1',
   transferId: 'in-1',
-  paymentType: 'wire-in',
+  paymentType: 'bank-transfer',
   amountMinor: 100_000n,
   providerFeeMinor: 0n,
   status: 'completed' as const,
   occurredAt: NOW,
   ...o,
 });
-const WIRE = {
-  FX_WIRE_PAYMENT_TYPES: 'wire-in',
-  FX_FEE_COLLECTOR_USD_BAN: 'COLL1',
-};
+const COLLECTOR = { FX_FEE_COLLECTOR_USD_BAN: 'COLL1' };
 
 describe('usd_bank_payout', () => {
   it('USD 100 costs USD 8; the provider charge sits inside it; the leg is the rest', async () => {
@@ -341,38 +338,93 @@ describe('ngn_add_money', () => {
   });
 });
 
-describe('dollars received', () => {
-  it('no payment type is named in config: nothing is charged, nothing recorded', async () => {
-    const { dollar, table } = await build({
-      env: { FX_FEE_COLLECTOR_USD_BAN: 'COLL1' },
-    });
+describe('dollars received (R-140: one fee, usd_local_in)', () => {
+  it('a payment type that is not a bank transfer (a card, another Nuvion account) is charged nothing and recorded nowhere', async () => {
+    const { dollar, table } = await build({ env: COLLECTOR });
     const p = provider();
-    const r = await dollar.onForeignInflow({ ...inflow(), abroad: p.abroad });
-    expect(r.outcome).toBe('none');
+    for (const paymentType of ['card-acq', 'book-transfer', 'wire-in', null]) {
+      const r = await dollar.onForeignInflow({
+        ...inflow({ paymentType }),
+        abroad: p.abroad,
+      });
+      expect(r.outcome).toBe('none');
+    }
     expect(p.made).toHaveLength(0);
     expect(table.size).toBe(0);
   });
 
-  it('a wire: USD 1,000 pays USD 30, taken once by a book transfer under <inflow>-fee, the person sees what landed', async () => {
-    const { dollar, table } = await build({ env: WIRE });
+  it('a bank transfer of USD 1,000 pays USD 15, taken once by a book transfer under <inflow>-fee, the person sees what landed', async () => {
+    const { dollar, table } = await build({ env: COLLECTOR });
     const p = provider();
     const r = await dollar.onForeignInflow({ ...inflow(), abroad: p.abroad });
     expect(r.outcome).toBe('collected');
     expect(p.made).toHaveLength(1);
     expect(p.made[0]).toMatchObject({
       reference: 'in-1-fee',
-      amountMinor: 3000n,
+      amountMinor: 1500n,
     });
     const rec = [...table.values()][0];
-    expect(rec.kind).toBe('intl_wire_in');
+    expect(rec.kind).toBe('usd_local_in');
     expect(rec.amountMinor).toBe(100_000n);
-    expect(rec.wawuFeeMinor).toBe(3000n);
+    expect(rec.wawuFeeMinor).toBe(1500n);
     const view = (await dollar.inflowFeesFor(['in-1'])).get('in-1')!;
-    expect(view.amountMinor - view.feeMinor - view.vatMinor).toBe(97_000n);
+    expect(view.amountMinor - view.feeMinor - view.vatMinor).toBe(98_500n);
+  });
+
+  it('a bank transfer of USD 100 pays the minimum, USD 7, and the person receives USD 93', async () => {
+    const { dollar, table } = await build({ env: COLLECTOR });
+    const p = provider();
+    const r = await dollar.onForeignInflow({
+      ...inflow({ amountMinor: 10_000n }),
+      abroad: p.abroad,
+    });
+    expect(r.outcome).toBe('collected');
+    expect(p.made[0].amountMinor).toBe(700n);
+    expect([...table.values()][0].wawuFeeMinor).toBe(700n);
+    const view = (await dollar.inflowFeesFor(['in-1'])).get('in-1')!;
+    expect(view.amountMinor - view.takenMinor).toBe(9_300n);
+  });
+
+  it('the old switch no longer gates the fee: with fx.product.local_usd_in.on at 0 the fee is still charged', async () => {
+    const { dollar } = await build({
+      env: COLLECTOR,
+      plan: { 'fx.product.local_usd_in.on': 0 },
+    });
+    const p = provider();
+    const r = await dollar.onForeignInflow({ ...inflow(), abroad: p.abroad });
+    expect(r.outcome).toBe('collected');
+    expect(p.made).toHaveLength(1);
+  });
+
+  it('FX_LOCAL_USD_PAYMENT_TYPES may add a name that counts as a bank transfer; FX_WIRE_PAYMENT_TYPES is no longer read', async () => {
+    const { dollar } = await build({
+      env: {
+        ...COLLECTOR,
+        FX_LOCAL_USD_PAYMENT_TYPES: 'ach-in',
+        FX_WIRE_PAYMENT_TYPES: 'wire-in',
+      },
+    });
+    const p = provider();
+    expect(
+      (
+        await dollar.onForeignInflow({
+          ...inflow({ paymentType: 'ach-in', transferId: 'a1' }),
+          abroad: p.abroad,
+        })
+      ).outcome,
+    ).toBe('collected');
+    expect(
+      (
+        await dollar.onForeignInflow({
+          ...inflow({ paymentType: 'wire-in', transferId: 'w1' }),
+          abroad: p.abroad,
+        })
+      ).outcome,
+    ).toBe('none');
   });
 
   it('a replayed delivery takes the fee once, even if the schedule changed since', async () => {
-    const { dollar } = await build({ env: WIRE });
+    const { dollar } = await build({ env: COLLECTOR });
     const p = provider();
     await dollar.onForeignInflow({ ...inflow(), abroad: p.abroad });
     const again = await dollar.onForeignInflow({
@@ -384,72 +436,59 @@ describe('dollars received', () => {
   });
 
   it('VAT on: the fee and the VAT come off together', async () => {
-    const { dollar } = await build({ env: WIRE, plan: { 'tax.vat_on': 1 } });
+    const { dollar } = await build({
+      env: COLLECTOR,
+      plan: { 'tax.vat_on': 1 },
+    });
     const p = provider();
     await dollar.onForeignInflow({ ...inflow(), abroad: p.abroad });
-    expect(p.made[0].amountMinor).toBe(3000n + 225n);
+    expect(p.made[0].amountMinor).toBe(1500n + 113n);
   });
 
   it("F2: the person loses exactly F + VAT in all: WAWU's leg is F + VAT minus Nuvion's own charge on the inflow, and the line shows that total as the one fee", async () => {
-    const { dollar } = await build({ env: WIRE, plan: { 'tax.vat_on': 1 } });
+    const { dollar } = await build({
+      env: COLLECTOR,
+      plan: { 'tax.vat_on': 1 },
+    });
     const p = provider();
     const r = await dollar.onForeignInflow({
       ...inflow({ providerFeeMinor: 1000n }),
       abroad: p.abroad,
     });
     expect(r.outcome).toBe('collected');
-    // F 3000 + VAT 225 = 3225 off what arrived; Nuvion took 1000 of it, so the leg moves 2225.
-    expect(p.made[0].amountMinor).toBe(2225n);
+    // F 1500 + VAT 113 = 1613 off what arrived; Nuvion took 1000 of it, so the leg moves 613.
+    expect(p.made[0].amountMinor).toBe(613n);
     const v = (await dollar.inflowFeesFor(['in-1'])).get('in-1')!;
-    expect(v.takenMinor).toBe(3225n);
-    expect(v.amountMinor - v.takenMinor).toBe(100_000n - 3225n);
+    expect(v.takenMinor).toBe(1613n);
+    expect(v.amountMinor - v.takenMinor).toBe(100_000n - 1613n);
   });
 
   it("F2: Nuvion's charge above F + VAT: the leg moves nothing (never below 0) and the one fee is Nuvion's figure", async () => {
-    const { dollar } = await build({ env: WIRE });
+    const { dollar } = await build({ env: COLLECTOR });
     const p = provider();
     const r = await dollar.onForeignInflow({
-      ...inflow({ providerFeeMinor: 4000n }),
+      ...inflow({ providerFeeMinor: 2000n }),
       abroad: p.abroad,
     });
     expect(r.outcome).toBe('recorded');
     expect(p.made).toHaveLength(0);
     const v = (await dollar.inflowFeesFor(['in-1'])).get('in-1')!;
-    expect(v.takenMinor).toBe(4000n);
+    expect(v.takenMinor).toBe(2000n);
   });
 
   it('a fee bigger than the amount is cut to the amount: money arriving is never refused', async () => {
-    const { dollar } = await build({ env: WIRE });
+    const { dollar } = await build({ env: COLLECTOR });
     const p = provider();
     const r = await dollar.onForeignInflow({
-      ...inflow({ amountMinor: 2000n }),
+      ...inflow({ amountMinor: 500n }),
       abroad: p.abroad,
     });
     expect(r.outcome).toBe('collected');
-    expect(p.made[0].amountMinor).toBe(2000n);
-  });
-
-  it('local dollars while the product is off: recorded with fee 0, nothing taken', async () => {
-    const { dollar, table } = await build({
-      env: {
-        FX_LOCAL_USD_PAYMENT_TYPES: 'ach-in',
-        FX_FEE_COLLECTOR_USD_BAN: 'COLL1',
-      },
-    });
-    const p = provider();
-    const r = await dollar.onForeignInflow({
-      ...inflow({ paymentType: 'ach-in' }),
-      abroad: p.abroad,
-    });
-    expect(r.outcome).toBe('recorded');
-    expect(p.made).toHaveLength(0);
-    const rec = [...table.values()][0];
-    expect(rec.kind).toBe('usd_local_in');
-    expect(rec.wawuFeeMinor).toBe(0n);
+    expect(p.made[0].amountMinor).toBe(500n);
   });
 
   it('a pending, failed or non-dollar inflow is never charged', async () => {
-    const { dollar } = await build({ env: WIRE });
+    const { dollar } = await build({ env: COLLECTOR });
     const p = provider();
     expect(
       (
@@ -471,9 +510,7 @@ describe('dollars received', () => {
   });
 
   it('no collecting account configured: the fee is not taken and the inflow is flagged for review', async () => {
-    const { dollar } = await build({
-      env: { FX_WIRE_PAYMENT_TYPES: 'wire-in' },
-    });
+    const { dollar } = await build();
     const p = provider();
     const r = await dollar.onForeignInflow({ ...inflow(), abroad: p.abroad });
     expect(r.outcome).toBe('failed');

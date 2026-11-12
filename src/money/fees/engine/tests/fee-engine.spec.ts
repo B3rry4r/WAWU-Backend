@@ -64,6 +64,12 @@ const SEED = [
   row({ kind: 'fx_swap', currency: 'USD', percentPpm: 20000, minMinor: 100n }),
   row({ kind: 'wallet_to_wallet', currency: 'NGN' }),
   row({ kind: 'ngn_add_money', currency: 'NGN', passThrough: true }),
+  row({
+    kind: 'card_issue',
+    currency: 'NGN',
+    minMinor: 500_000n,
+    maxMinor: 500_000n,
+  }),
 ];
 const RATES = [
   {
@@ -294,6 +300,67 @@ describe('history', () => {
         startsAt: new Date().toISOString(),
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe('R-140: the card fee and the retired wire kind', () => {
+  const later = () => new Date(Date.now() + 60_000).toISOString();
+
+  it('card_issue is a fixed NGN 5,000 whatever the amount, and is a fee kind in NGN', async () => {
+    const s = await schedule();
+    expect(s.feeFor('card_issue', 0n).feeMinor).toBe(500_000n);
+    const views = await s.kinds();
+    expect(views.find((k) => k.kind === 'card_issue')?.currency).toBe('NGN');
+  });
+
+  it('an admin changes the card fee: a new row, the old one stays in the history', async () => {
+    const s = await schedule();
+    const added = await s.add('a@b', {
+      kind: 'card_issue',
+      currency: 'NGN',
+      percent: '0',
+      minMinor: 300_000,
+      maxMinor: 300_000,
+      startsAt: later(),
+    });
+    expect(added.minMinor).toBe(300_000);
+    const view = (await s.kinds()).find((k) => k.kind === 'card_issue')!;
+    expect(view.history.length).toBeGreaterThanOrEqual(2);
+    expect(view.history.some((h) => h.minMinor === 500_000)).toBe(true);
+  });
+
+  it('the card fee is one fixed amount: a percentage, or a minimum that differs from the maximum, is refused', async () => {
+    const s = await schedule();
+    const base = { kind: 'card_issue', currency: 'NGN', startsAt: later() };
+    await expect(
+      s.add('a@b', { ...base, percent: '1', minMinor: 5, maxMinor: 5 }),
+    ).rejects.toThrow();
+    await expect(
+      s.add('a@b', { ...base, percent: '0', minMinor: 5, maxMinor: 9 }),
+    ).rejects.toThrow();
+    await expect(
+      s.add('a@b', { ...base, percent: '0', minMinor: 5 }),
+    ).rejects.toThrow();
+  });
+
+  it('intl_wire_in is retired: no new row, its history stays readable', async () => {
+    const s = await schedule();
+    await expect(
+      s.add('a@b', {
+        kind: 'intl_wire_in',
+        currency: 'USD',
+        percent: '1',
+        minMinor: 1,
+        startsAt: later(),
+      }),
+    ).rejects.toThrow();
+    const view = (await s.kinds()).find((k) => k.kind === 'intl_wire_in')!;
+    expect(view.history).toHaveLength(1);
+  });
+
+  it('dollars received has no product switch any more: usd_local_in is on while its old setting is 0', async () => {
+    const s = await schedule(SEED, { 'fx.product.local_usd_in.on': 0 });
+    expect(s.productOn('usd_local_in')).toBe(true);
   });
 });
 

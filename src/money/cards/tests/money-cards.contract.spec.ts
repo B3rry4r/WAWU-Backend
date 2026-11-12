@@ -48,7 +48,7 @@ import { WalletProviderError } from '../../../wallet-provider/wallet-provider-er
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import { MoneyModule } from '../../money.module';
 import { AdminCardsController } from '../admin-cards.controller';
-import { CardSettings } from '../card-config';
+import { FeeScheduleService } from '../../fees/engine/fee-schedule.service';
 import { WalletCardPurge } from '../card-purge.service';
 import { AdminCardsService } from '../admin-cards.service';
 import { WalletCardService } from '../wallet-card.service';
@@ -119,7 +119,29 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
   let prisma: PrismaService;
   let admin: AdminCardsService;
   let plan: PlanSettingsService;
-  let settings: CardSettings;
+  let schedule: FeeScheduleService;
+  /** WAWU's card fee under Nuvion is the dashboard's `card_issue` fee: a new row of the history, in force at once. */
+  async function setWawuFee(kobo: number): Promise<void> {
+    const cur = schedule.inForce('card_issue', 'NGN');
+    const startsAt = new Date(
+      Math.max(Date.now() - 1_000, (cur?.startsAt.getTime() ?? 0) + 1),
+    );
+    while (startsAt.getTime() > Date.now()) {
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    await prisma.feeSchedule.create({
+      data: {
+        kind: 'card_issue',
+        currency: 'NGN',
+        percentPpm: 0,
+        minMinor: BigInt(kobo),
+        maxMinor: BigInt(kobo),
+        startsAt,
+        changedBy: 'money-cards spec',
+      },
+    });
+    await schedule.refresh();
+  }
   let purge: WalletCardPurge;
   let handler: NuvionCardsHandler;
   const users: string[] = [];
@@ -524,7 +546,10 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     prisma = moduleRef.get(PrismaService);
     admin = moduleRef.get(AdminCardsService);
     plan = moduleRef.get(PlanSettingsService);
-    settings = moduleRef.get(CardSettings);
+    schedule = moduleRef.get(FeeScheduleService);
+    // R-140: the migration seeds WAWU's card fee at NGN 5,000. The suite's older tests count the fee Nuvion takes
+    // alone, so they start from a fee of 0 (a new row of the history); the test of the seed reads its row.
+    await setWawuFee(0);
     purge = moduleRef.get(WalletCardPurge);
     handler = new NuvionCardsHandler(prisma, {
       get: () => moduleRef.get<NuvionWalletProvider>(WALLET_PROVIDER),
@@ -1026,13 +1051,165 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
   // Fix round 1
   // -------------------------------------------------------------------------
 
+  describe("R-140: WAWU's card fee is the dashboard's fee, NGN 5,000 at the start", () => {
+    afterEach(async () => {
+      failCreate = false;
+      await setWawuFee(0);
+      await prisma.planSetting.deleteMany({ where: { key: 'tax.vat_on' } });
+      await plan.refresh();
+    });
+    const NGN_5000 = 500_000;
+
+    it('the migration seeds the card fee at NGN 5,000 fixed', async () => {
+      const seed = await prisma.feeSchedule.findFirstOrThrow({
+        where: { kind: 'card_issue', changedBy: 'R-140 seed' },
+      });
+      expect(seed).toMatchObject({
+        currency: 'NGN',
+        percentPpm: 0,
+        minMinor: BigInt(NGN_5000),
+        maxMinor: BigInt(NGN_5000),
+      });
+    });
+
+    it("the quote shows WAWU's NGN 5,000 plus Nuvion's charge as one total, the card collects it once, and the fee is recorded", async () => {
+      await setWawuFee(NGN_5000);
+      const p = await person();
+      const q = asEnvelope<CardQuoteView>(
+        await http().get(`${BASE}/quote`).set('Authorization', p.auth),
+      ).data!;
+      expect(q.fee).toEqual({
+        providerFeeKobo: FEE,
+        wawuFeeKobo: NGN_5000,
+        totalFeeKobo: FEE + NGN_5000,
+      });
+      const card = asEnvelope<CardView>(await makeCard(p)).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      expect(row.wawuFeeKobo).toBe(BigInt(NGN_5000));
+      expect(row.feeCollectedAt).not.toBeNull();
+      expect(book.availableOf(p.account)).toBe(5_000_000 - NGN_5000);
+      expect(
+        await prisma.fintavaLedgerEntry.count({
+          where: { customerReference: `${row.reference}-fee` },
+        }),
+      ).toBe(1);
+      const rec = await prisma.moneyFeeRecord.findUniqueOrThrow({
+        where: {
+          provider_reference_kind: {
+            provider: 'nuvion',
+            reference: row.reference,
+            kind: 'card_issue',
+          },
+        },
+      });
+      expect(rec).toMatchObject({
+        currency: 'NGN',
+        wawuFeeMinor: BigInt(NGN_5000),
+        vatMinor: 0n,
+        providerExpectedMinor: BigInt(FEE),
+        status: 'open',
+      });
+      expect(rec.feeScheduleId).not.toBeNull();
+    });
+
+    it('an admin changes the fee: the next quote and the next card use it, and the old row stays in the history', async () => {
+      await setWawuFee(NGN_5000);
+      await setWawuFee(300_000);
+      const p = await person();
+      const q = asEnvelope<CardQuoteView>(
+        await http().get(`${BASE}/quote`).set('Authorization', p.auth),
+      ).data!;
+      expect(q.fee.wawuFeeKobo).toBe(300_000);
+      const card = asEnvelope<CardView>(await makeCard(p)).data!;
+      expect(book.availableOf(p.account)).toBe(5_000_000 - 300_000);
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .wawuFeeKobo,
+      ).toBe(300_000n);
+      expect(
+        await prisma.feeSchedule.count({
+          where: { kind: 'card_issue', minMinor: BigInt(NGN_5000) },
+        }),
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    it('VAT on: the fee and the VAT are one amount to the person, and the record keeps them apart', async () => {
+      await setWawuFee(NGN_5000);
+      await prisma.planSetting.upsert({
+        where: { key: 'tax.vat_on' },
+        create: { key: 'tax.vat_on', value: 1 },
+        update: { value: 1 },
+      });
+      await plan.refresh();
+      const p = await person();
+      const q = asEnvelope<CardQuoteView>(
+        await http().get(`${BASE}/quote`).set('Authorization', p.auth),
+      ).data!;
+      expect(q.fee.wawuFeeKobo).toBe(NGN_5000 + 37_500);
+      const card = asEnvelope<CardView>(await makeCard(p)).data!;
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      expect(row.wawuFeeKobo).toBe(BigInt(NGN_5000 + 37_500));
+      const rec = await prisma.moneyFeeRecord.findUniqueOrThrow({
+        where: {
+          provider_reference_kind: {
+            provider: 'nuvion',
+            reference: row.reference,
+            kind: 'card_issue',
+          },
+        },
+      });
+      expect(rec.wawuFeeMinor).toBe(BigInt(NGN_5000));
+      expect(rec.vatMinor).toBe(37_500n);
+    });
+
+    it("a wallet that cannot cover Nuvion's charge and WAWU's NGN 5,000 is refused before anything is sent", async () => {
+      await setWawuFee(NGN_5000);
+      const p = await person(FEE + NGN_5000 - 1);
+      const before = seen(/^\/virtual-cards$/, 'POST').length;
+      const res = await makeCard(p);
+      expect(res.status).toBe(402);
+      expect(seen(/^\/virtual-cards$/, 'POST').length).toBe(before);
+    });
+
+    it('a card that fails: its fee record is reversed (kept 0, VAT 0) and nothing is collected', async () => {
+      await setWawuFee(NGN_5000);
+      const p = await person();
+      failCreate = true;
+      const res = await makeCard(p);
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      const row = await prisma.walletCard.findFirstOrThrow({
+        where: { wawuUserId: p.id },
+      });
+      expect(row.state).toBe('failed');
+      const rec = await prisma.moneyFeeRecord.findUniqueOrThrow({
+        where: {
+          provider_reference_kind: {
+            provider: 'nuvion',
+            reference: row.reference,
+            kind: 'card_issue',
+          },
+        },
+      });
+      expect(rec).toMatchObject({
+        status: 'reversed',
+        keptMinor: 0n,
+        vatMinor: 0n,
+      });
+      expect(book.availableOf(p.account)).toBe(5_000_000);
+    });
+  });
+
   describe('WAWU fee on a card (M1)', () => {
     const FEE_WAWU = 1_000;
-    beforeEach(() => {
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+    beforeEach(async () => {
+      await setWawuFee(FEE_WAWU);
     });
-    afterEach(() => {
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = 0;
+    afterEach(async () => {
+      await setWawuFee(0);
     });
 
     it("collects WAWU's fee once the card exists, as a send's fee is: one transfer under <card>-fee into WAWU's account, its ledger side written, never twice", async () => {
@@ -2192,11 +2369,11 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     beforeEach(() => {
       takeIssuerFee = true;
     });
-    afterEach(() => {
+    afterEach(async () => {
       takeIssuerFee = false;
       failCreate = false;
       refuseFee = false;
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = 0;
+      await setWawuFee(0);
     });
 
     const history = async (p: Person) =>
@@ -2255,7 +2432,7 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     it("the history adds up to the stand-in balance after two cards, one with WAWU's fee on top", async () => {
       const p = await person();
       expect((await makeCard(p)).status).toBe(201);
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+      await setWawuFee(FEE_WAWU);
       expect((await makeCard(p, 'single_use')).status).toBe(201);
       const page = await history(p);
       expect(page.items).toHaveLength(3);
@@ -2333,7 +2510,7 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
 
     it("WAWU's fee is its own row, the amount that left the wallet for it, written once even when the transfer is asked again", async () => {
       const p = await person();
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+      await setWawuFee(FEE_WAWU);
       const card = asEnvelope<CardView>(await makeCard(p)).data!;
       const row = await prisma.walletCard.findUniqueOrThrow({
         where: { id: card.id },
@@ -2421,7 +2598,7 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
 
     it('M1: the issuer row reads "Bank charge" and WAWU\'s reads "WAWU\'s fee", each at its own amount', async () => {
       const p = await person();
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+      await setWawuFee(FEE_WAWU);
       expect((await makeCard(p)).status).toBe(201);
       const page = await history(p);
       const byName: Record<string, number> = {};
@@ -2514,7 +2691,7 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
 
     it("L3: a ledger failure on WAWU's row never debits twice, and the asking is bounded (5 tries, 30 seconds apart)", async () => {
       const p = await person();
-      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+      await setWawuFee(FEE_WAWU);
       const ledger = app.get(LedgerService, { strict: false });
       const real = ledger.record.bind(ledger);
       const spy = jest
