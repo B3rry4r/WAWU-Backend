@@ -93,6 +93,22 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['link', 'media'],
     why: 'a showreel on the profile (photos and video up to 100 MB, and a link to the work), profile content and not a product; U2 asks the owner whether it needs a tier',
   },
+  'POST admin/notifications/email/templates': {
+    files: ['buttonUrl'],
+    why: 'Admin email composer: buttonUrl is a link in an email, not a product file; superadmin and reviewer only.',
+  },
+  'PATCH admin/notifications/email/templates/:id': {
+    files: ['buttonUrl'],
+    why: 'Admin email composer: buttonUrl is a link in an email, not a product file; superadmin and reviewer only.',
+  },
+  'POST admin/notifications/email/preview': {
+    files: ['buttonUrl'],
+    why: 'Admin email composer: buttonUrl is a link in an email, not a product file; superadmin and reviewer only.',
+  },
+  'POST admin/notifications/email/test-send': {
+    files: ['buttonUrl'],
+    why: 'Admin email composer: buttonUrl is a link in an email, not a product file; superadmin and reviewer only.',
+  },
   'POST kyc': {
     files: ['idDocumentUrl'],
     why: 'an identity document, needed to open a wallet and buy a tier',

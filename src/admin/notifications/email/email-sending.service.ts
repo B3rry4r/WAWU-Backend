@@ -1,15 +1,23 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import {
   MAX_SEND_ATTEMPTS,
   MAX_SENDS_PER_SECOND,
   RETRY_BASE_MS,
-  emailFrom,
+  brandOf,
+  emailFromFor,
+  type EmailBrand,
 } from './email-config';
 import { RequestPacer } from './email-pacer';
 import {
   EmailTransport,
+  PauseCode,
   ProviderMessage,
   ProviderResult,
   ResendClient,
@@ -22,13 +30,35 @@ export interface EmailContent {
   subject: string;
   previewText: string;
   body: string;
+  /** EMAIL-03. Missing or null means `wmt`. */
+  brand?: string | null;
+  buttonText?: string | null;
+  buttonUrl?: string | null;
+}
+
+/** The plain words kept on a paused campaign, for the dashboard. */
+export const PAUSE_WORDS: Record<PauseCode, string> = {
+  daily_cap:
+    'The daily sending limit was reached. Sending carries on by itself at 00:00 UTC.',
+  provider_daily_quota:
+    "The email provider's daily limit was reached. Sending carries on by itself at 00:00 UTC.",
+  provider_monthly_quota:
+    "The email provider's monthly limit was reached. A super admin has to resume this campaign once the limit is lifted.",
+};
+
+/** The next 00:00 UTC after `now`. */
+export function nextUtcMidnight(now: Date): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  );
 }
 
 /** How many recipients are worked on at once; the pacer still caps the rate. */
 const WORKERS = 4;
 const BATCH = 40;
 
-export type RecipientOutcome = 'sent' | 'failed' | 'skipped' | 'not_claimed';
+export type RecipientOutcome =
+  'sent' | 'failed' | 'skipped' | 'not_claimed' | 'paused';
 
 /**
  * The background job that sends a campaign (EMAIL-01). It runs inside the Hub,
@@ -45,9 +75,16 @@ export type RecipientOutcome = 'sent' | 'failed' | 'skipped' | 'not_claimed';
  * Idempotency-Key, so a retry of one request cannot create a second email.
  */
 @Injectable()
-export class EmailSendingService implements OnApplicationBootstrap {
+export class EmailSendingService
+  implements OnApplicationBootstrap, OnModuleDestroy
+{
   private readonly logger = new Logger(EmailSendingService.name);
   private readonly running = new Set<string>();
+  /** Campaigns a limit has stopped in this process (EMAIL-03). */
+  private readonly stopped = new Set<string>();
+  /** A start asked for while the previous run was still unwinding: go again when it ends. */
+  private readonly rerun = new Set<string>();
+  private readonly timers = new Map<string, NodeJS.Timeout>();
   /** Public so a spec can swap in a fake clock. */
   pacer = new RequestPacer(MAX_SENDS_PER_SECOND);
   retrySleep: (ms: number) => Promise<void> = (ms) =>
@@ -68,14 +105,106 @@ export class EmailSendingService implements OnApplicationBootstrap {
     return this.resend.apiKey() ? this.resend : this.relay;
   }
 
-  /** A campaign that was mid-send when the server stopped carries on. */
+  onModuleDestroy(): void {
+    for (const t of this.timers.values()) clearTimeout(t);
+    this.timers.clear();
+  }
+
+  /**
+   * A campaign that was mid-send when the server stopped carries on. One that
+   * a limit paused waits for its time (or runs now when the time has passed);
+   * a monthly-quota pause (a reason and no time) waits for a resume.
+   */
   async onApplicationBootstrap(): Promise<void> {
     if (!this.missingSetting()) {
       const open = await this.prisma.emailCampaign
-        .findMany({ where: { status: 'sending' }, select: { id: true } })
+        .findMany({
+          where: { status: 'sending' },
+          select: { id: true, pausedUntil: true, pauseReason: true },
+        })
         .catch(() => []);
-      for (const c of open) this.startRun(c.id);
+      for (const c of open) {
+        if (c.pausedUntil && c.pausedUntil.getTime() > Date.now()) {
+          this.scheduleResume(c.id, c.pausedUntil);
+        } else if (c.pauseReason && !c.pausedUntil) {
+          continue;
+        } else {
+          if (c.pausedUntil || c.pauseReason) await this.clearPause(c.id);
+          this.startRun(c.id);
+        }
+      }
     }
+  }
+
+  /** Clears the pause and carries on sending. False when it was not paused. */
+  async resume(campaignId: string): Promise<boolean> {
+    const cleared = await this.clearPause(campaignId);
+    if (cleared) this.startRun(campaignId);
+    return cleared;
+  }
+
+  private async clearPause(campaignId: string): Promise<boolean> {
+    const timer = this.timers.get(campaignId);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(campaignId);
+    const r = await this.prisma.emailCampaign.updateMany({
+      where: {
+        id: campaignId,
+        status: 'sending',
+        OR: [{ pauseReason: { not: null } }, { pausedUntil: { not: null } }],
+      },
+      data: { pausedUntil: null, pauseReason: null },
+    });
+    return r.count === 1;
+  }
+
+  private scheduleResume(campaignId: string, at: Date): void {
+    const old = this.timers.get(campaignId);
+    if (old) clearTimeout(old);
+    const wait = Math.min(Math.max(0, at.getTime() - Date.now()), 2 ** 31 - 1);
+    const timer = setTimeout(() => {
+      this.timers.delete(campaignId);
+      void this.resume(campaignId).catch((e: unknown) =>
+        this.logger.error(
+          `Campaign ${campaignId} could not resume: ${e instanceof Error ? e.message : 'error'}`,
+        ),
+      );
+    }, wait);
+    timer.unref();
+    this.timers.set(campaignId, timer);
+  }
+
+  /** A limit refused the send: record the pause and stop this campaign's run. */
+  private async pause(campaignId: string, code: PauseCode): Promise<void> {
+    this.stopped.add(campaignId);
+    const until =
+      code === 'provider_monthly_quota' ? null : nextUtcMidnight(new Date());
+    await this.prisma.emailCampaign.update({
+      where: { id: campaignId },
+      data: { pausedUntil: until, pauseReason: PAUSE_WORDS[code] },
+    });
+    if (until) this.scheduleResume(campaignId, until);
+  }
+
+  /** True when this address must not get this brand's email. */
+  async isSuppressed(email: string, brand: EmailBrand): Promise<boolean> {
+    if (brand === 'voices') {
+      const hard = await this.prisma.emailSuppression.findFirst({
+        where: { email, reason: { in: ['bounced', 'complained'] } },
+        select: { email: true },
+      });
+      if (hard) return true;
+      const own = await this.prisma.emailBrandSuppression.findUnique({
+        where: { email_brand: { email, brand: 'voices' } },
+        select: { email: true },
+      });
+      return own !== null;
+    }
+    const row = await this.prisma.emailSuppression.findUnique({
+      where: { email },
+      select: { email: true },
+    });
+    return row !== null;
   }
 
   /** The plain sentence for a 409 when a setting is missing, or null. */
@@ -104,10 +233,12 @@ export class EmailSendingService implements OnApplicationBootstrap {
     subjectPrefix = '',
     tag?: string,
   ): ProviderMessage {
+    const brand = brandOf(content.brand);
     const link = unsubscribeUrl(
       this.hubBase(),
       to.email,
       this.config.get<string>('ADMIN_JWT_SECRET'),
+      brand,
     );
     const mail = renderEmail({
       subject: content.subject,
@@ -115,9 +246,14 @@ export class EmailSendingService implements OnApplicationBootstrap {
       body: content.body,
       firstName: to.firstName,
       unsubscribeUrl: link,
+      brand,
+      button:
+        content.buttonText && content.buttonUrl
+          ? { text: content.buttonText, url: content.buttonUrl }
+          : null,
     });
     return {
-      from: emailFrom(this.config),
+      from: emailFromFor(this.config, brand),
       to: to.email,
       subject: `${subjectPrefix}${mail.subject}`,
       html: mail.html,
@@ -128,6 +264,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
       },
       idempotencyKey: `wawu-email-${to.id}`,
       ...(tag ? { tag } : {}),
+      ...(brand === 'voices' ? { app: 'voices' as const } : {}),
     };
   }
 
@@ -151,7 +288,13 @@ export class EmailSendingService implements OnApplicationBootstrap {
 
   /** Begin (or carry on) sending a campaign in the background. */
   startRun(campaignId: string): void {
-    if (this.running.has(campaignId)) return;
+    if (this.running.has(campaignId)) {
+      // The old run is still unwinding (a pause stopped it, or it is
+      // finishing). Dropping this start would leave nobody sending, so go
+      // again the moment it ends.
+      this.rerun.add(campaignId);
+      return;
+    }
     this.running.add(campaignId);
     void this.run(campaignId)
       .catch((e: unknown) =>
@@ -159,10 +302,21 @@ export class EmailSendingService implements OnApplicationBootstrap {
           `Campaign ${campaignId} stopped: ${e instanceof Error ? e.message : 'error'}`,
         ),
       )
-      .finally(() => this.running.delete(campaignId));
+      .finally(() => {
+        this.running.delete(campaignId);
+        if (this.rerun.delete(campaignId)) this.startRun(campaignId);
+      });
   }
 
   async run(campaignId: string): Promise<void> {
+    this.stopped.delete(campaignId);
+    // Paused again between the resume and this run (an in-flight send of the
+    // old run got a limit too): stay paused; the timer or a resume restarts it.
+    const now = await this.prisma.emailCampaign.findUnique({
+      where: { id: campaignId },
+      select: { pauseReason: true, status: true },
+    });
+    if (!now || now.status !== 'sending' || now.pauseReason) return;
     // A row claimed with no result belongs to a run that died: never resend it.
     await this.prisma.emailRecipient.updateMany({
       where: { campaignId, status: 'queued', claimedAt: { not: null } },
@@ -173,6 +327,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
       },
     });
     for (;;) {
+      if (this.stopped.has(campaignId)) return;
       const batch = await this.prisma.emailRecipient.findMany({
         where: { campaignId, status: 'queued', claimedAt: null },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -184,6 +339,7 @@ export class EmailSendingService implements OnApplicationBootstrap {
       await Promise.all(
         Array.from({ length: Math.min(WORKERS, ids.length) }, async () => {
           for (let id = ids.shift(); id !== undefined; id = ids.shift()) {
+            if (this.stopped.has(campaignId)) return;
             await this.processRecipient(campaignId, id);
           }
         }),
@@ -216,9 +372,10 @@ export class EmailSendingService implements OnApplicationBootstrap {
         data: { [field]: { increment: 1 } },
       });
 
-    const suppressed = await this.prisma.emailSuppression.findUnique({
-      where: { email: recipient.email },
-    });
+    const suppressed = await this.isSuppressed(
+      recipient.email,
+      brandOf(recipient.campaign.brand),
+    );
     if (suppressed) {
       await this.prisma.emailRecipient.update({
         where: { id: recipientId },
@@ -244,6 +401,16 @@ export class EmailSendingService implements OnApplicationBootstrap {
       await bump('sentCount');
       return 'sent';
     }
+    if (result.pause) {
+      // A limit refused it, not the message: nothing left, so the claim is
+      // cleared and the person goes back to waiting. Nobody is marked failed.
+      await this.prisma.emailRecipient.update({
+        where: { id: recipientId },
+        data: { claimedAt: null },
+      });
+      await this.pause(campaignId, result.pause);
+      return 'paused';
+    }
     await this.prisma.emailRecipient.update({
       where: { id: recipientId },
       data: { status: 'failed', error: result.error },
@@ -265,6 +432,8 @@ export class EmailSendingService implements OnApplicationBootstrap {
       data: {
         status: 'sent',
         finishedAt: new Date(),
+        pausedUntil: null,
+        pauseReason: null,
         totalCount: groups.reduce((a, g) => a + g._count._all, 0),
         sentCount: n('sent'),
         failedCount: n('failed'),

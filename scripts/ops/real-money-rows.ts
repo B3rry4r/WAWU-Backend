@@ -384,6 +384,8 @@ export const NOT_MONEY_TABLES: Record<string, string> = {
   ReferralReward:
     'points, never naira; paymentRef only points at a MakerPurchase, which is listed',
   EmailRecipient: "providerId is the email provider's id",
+  EmailEvent:
+    "Resend email delivery events; providerId is the email's id at Resend",
   AiToolJob: 'providerRef is an AI vendor job id',
   AiClonedVoice: 'providerVoiceId is an AI vendor id',
   ReceptionistAgent: 'providerAgentId is an AI vendor id',

@@ -358,7 +358,7 @@ describe('EMAIL-01 email campaigns', () => {
       })
       .expect(200);
     expect(pre.body.data.subject).toBe('Hi Ada');
-    expect(pre.body.data.html).toContain('https://wawuafrica.com/join');
+    expect(pre.body.data.html).toContain('https://usewmt.com');
     await http()
       .post(`${P}/templates`)
       .set(auth('superadmin'))
@@ -775,38 +775,26 @@ describe('EMAIL-01 email campaigns', () => {
       expect(rows.body.data[0].error).toContain('Invalid `to` field.');
     });
 
-    it('marks a recipient failed, with no retry, when WAWU ID has reached its daily cap or refuses the key', async () => {
+    it('marks a recipient failed, with no retry, when WAWU ID refuses the key (a 429 limit now pauses instead: email-brand-delivery.spec.ts)', async () => {
       const t = await newTemplate();
-      const c = await csvCampaign(
-        t.id,
-        `email\ncap429${DOMAIN}\nkey401${DOMAIN}`,
-      );
-      relayScript = [
-        {
-          status: 429,
-          message:
-            'The daily email limit has been reached. Try again tomorrow.',
-        },
-        { status: 401, message: 'Invalid service key' },
-      ];
+      const c = await csvCampaign(t.id, `email\nkey401${DOMAIN}`);
+      relayScript = [{ status: 401, message: 'Invalid service key' }];
       await http()
         .post(`${P}/campaigns/${c.id}/start`)
         .set(auth('superadmin'))
         .expect(200);
       expect(await untilSent(c.id as string)).toMatchObject({
         sentCount: 0,
-        failedCount: 2,
+        failedCount: 1,
       });
       expect(relayScript).toHaveLength(0);
       const rows = await http()
         .get(`${P}/campaigns/${c.id}/recipients?status=failed`)
         .set(auth('superadmin'))
         .expect(200);
-      const errors = (rows.body.data as Array<{ error: string }>)
-        .map((r) => r.error)
-        .join('|');
-      expect(errors).toContain('daily email limit');
-      expect(errors).toContain('WAWU ID refused the service key.');
+      expect(rows.body.data[0].error).toContain(
+        'WAWU ID refused the service key.',
+      );
     });
 
     it('still sends straight to Resend when the Hub has its own RESEND_API_KEY', async () => {

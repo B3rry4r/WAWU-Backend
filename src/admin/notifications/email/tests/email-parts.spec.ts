@@ -29,10 +29,10 @@ describe('EMAIL-01 rendering', () => {
     const mail = renderEmail({ ...base, firstName: 'Ada' });
     expect(mail.subject).toBe('Hi Ada, come and join');
     expect(mail.html).toContain('<strong>Ada</strong>');
-    expect(mail.html).toContain('href="https://wawuafrica.com/join"');
+    expect(mail.html).toContain('href="https://usewmt.com"');
     expect(mail.html).toContain('Your spot, Ada');
     expect(mail.text).toContain('Hello Ada,');
-    expect(mail.text).toContain('Join WAWU (https://wawuafrica.com/join)');
+    expect(mail.text).toContain('Join WAWU (https://usewmt.com)');
     expect(mail.html).not.toContain('{{');
   });
 

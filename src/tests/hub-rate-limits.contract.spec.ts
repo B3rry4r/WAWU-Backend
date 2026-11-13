@@ -308,7 +308,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), the username check (SIGNUP-NAMES), the four public event registration routes (JOIN-01), once each, and the two public email unsubscribe routes (EMAIL-01), once each', () => {
+    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) and the Resend email webhook (EMAIL-03) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), the username check (SIGNUP-NAMES), the four public event registration routes (JOIN-01), once each, and the two public email unsubscribe routes (EMAIL-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -331,6 +331,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         return counts;
       };
       expect(uses(/^\s*@SkipThrottle\(/gm)).toEqual({
+        'admin/notifications/email/email-webhook.controller.ts': 1,
         'fintava/webhook/fintava-webhook.controller.ts': 1,
         'nuvion/webhook/nuvion-webhook.controller.ts': 1,
         'payment-webhook/payment-webhook.controller.ts': 1,

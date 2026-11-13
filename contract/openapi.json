@@ -25553,7 +25553,20 @@
     "/api/hub/admin/notifications/email/templates": {
       "get": {
         "operationId": "AdminEmailController_templates",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -25788,6 +25801,19 @@
         "operationId": "AdminEmailController_registrantCount",
         "parameters": [
           {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          },
+          {
             "name": "filter",
             "required": true,
             "in": "query",
@@ -25826,6 +25852,98 @@
           }
         },
         "summary": "How many /join registrants a filter and a limit would email.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/audiences/accounts": {
+      "get": {
+        "operationId": "AdminEmailController_accountCount",
+        "parameters": [
+          {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20000,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAudienceCountView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "How many WMT accounts would be emailed. `available: false` with a reason when the list cannot be read.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/audiences/voices": {
+      "get": {
+        "operationId": "AdminEmailController_voicesCount",
+        "parameters": [
+          {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20000,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAudienceCountView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "How many Voices members would be emailed (as a Voices email). While\nVoices is not live the answer is `{ available: false, reason }`.",
         "tags": [
           "AdminEmail"
         ]
@@ -25905,6 +26023,70 @@
           }
         },
         "summary": "Build a campaign from the /join registrants. Sends nothing.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/accounts": {
+      "post": {
+        "operationId": "AdminEmailController_fromAccounts",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMemberCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Build a campaign from every WMT account with a verified email. Sends nothing.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/voices": {
+      "post": {
+        "operationId": "AdminEmailController_fromVoices",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMemberCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Build a campaign from Voices members. 409 while Voices is not live. Sends nothing.",
         "tags": [
           "AdminEmail"
         ]
@@ -26019,6 +26201,22 @@
                 "skipped"
               ]
             }
+          },
+          {
+            "name": "delivery",
+            "required": false,
+            "in": "query",
+            "description": "EMAIL-03: what the provider reported after the mail was accepted.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "delivered",
+                "delayed",
+                "bounced",
+                "complained",
+                "failed"
+              ]
+            }
           }
         ],
         "responses": {
@@ -26072,6 +26270,37 @@
         ]
       }
     },
+    "/api/hub/admin/notifications/email/campaigns/{id}/resume": {
+      "post": {
+        "operationId": "AdminEmailController_resume",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Carry on a campaign a limit paused. Superadmin only. 409 when it is not paused.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
     "/api/hub/email/unsubscribe": {
       "get": {
         "operationId": "PublicEmailUnsubscribeController_get",
@@ -26115,6 +26344,27 @@
         },
         "tags": [
           "PublicEmailUnsubscribe"
+        ]
+      }
+    },
+    "/api/hub/webhooks/resend": {
+      "post": {
+        "operationId": "ResendWebhookController_receive",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailEventAck"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "EmailWebhook"
         ]
       }
     },
@@ -51641,6 +51891,24 @@
             "type": "number",
             "description": "The version the editor loaded. A save over a newer one is refused.",
             "minimum": 1
+          },
+          "brand": {
+            "enum": [
+              "wmt",
+              "voices"
+            ],
+            "type": "string"
+          },
+          "buttonText": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "buttonUrl": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
           }
         },
         "required": [
@@ -51667,6 +51935,24 @@
           "firstName": {
             "type": "string",
             "maxLength": 80
+          },
+          "brand": {
+            "type": "string",
+            "enum": [
+              "wmt",
+              "voices"
+            ]
+          },
+          "buttonText": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "buttonUrl": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
           }
         },
         "required": [
@@ -51693,6 +51979,24 @@
             "type": "string",
             "maxLength": 80
           },
+          "brand": {
+            "enum": [
+              "wmt",
+              "voices"
+            ],
+            "type": "string"
+          },
+          "buttonText": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "buttonUrl": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "to": {
             "type": "string",
             "maxLength": 254,
@@ -51708,6 +52012,14 @@
       "CreateRegistrantCampaignDto": {
         "type": "object",
         "properties": {
+          "brand": {
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "enum": [
+              "wmt",
+              "voices"
+            ],
+            "type": "string"
+          },
           "filter": {
             "default": "all",
             "enum": [
@@ -51730,6 +52042,31 @@
         },
         "required": [
           "filter",
+          "templateId"
+        ]
+      },
+      "CreateMemberCampaignDto": {
+        "type": "object",
+        "properties": {
+          "brand": {
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "enum": [
+              "wmt",
+              "voices"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          },
+          "templateId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
           "templateId"
         ]
       },
@@ -72306,6 +72643,21 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "brand": {
+            "type": "string",
+            "enum": [
+              "wmt",
+              "voices"
+            ]
+          },
+          "buttonText": {
+            "type": "string",
+            "nullable": true
+          },
+          "buttonUrl": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -72315,7 +72667,10 @@
           "previewText",
           "body",
           "version",
-          "updatedAt"
+          "updatedAt",
+          "brand",
+          "buttonText",
+          "buttonUrl"
         ]
       },
       "EmailPreviewView": {
@@ -72329,12 +72684,30 @@
           },
           "text": {
             "type": "string"
+          },
+          "brand": {
+            "type": "string",
+            "enum": [
+              "wmt",
+              "voices"
+            ]
+          },
+          "buttonText": {
+            "type": "string",
+            "nullable": true
+          },
+          "buttonUrl": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
           "subject",
           "html",
-          "text"
+          "text",
+          "brand",
+          "buttonText",
+          "buttonUrl"
         ]
       },
       "EmailAudienceCountView": {
@@ -72348,6 +72721,14 @@
           },
           "unsubscribed": {
             "type": "number"
+          },
+          "available": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -72419,6 +72800,42 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "brand": {
+            "type": "string",
+            "enum": [
+              "wmt",
+              "voices"
+            ]
+          },
+          "buttonText": {
+            "type": "string",
+            "nullable": true
+          },
+          "buttonUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "deliveredCount": {
+            "type": "number"
+          },
+          "delayedCount": {
+            "type": "number"
+          },
+          "bouncedCount": {
+            "type": "number"
+          },
+          "complainedCount": {
+            "type": "number"
+          },
+          "pausedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "pauseReason": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -72438,7 +72855,16 @@
           "duplicateCount",
           "createdAt",
           "startedAt",
-          "finishedAt"
+          "finishedAt",
+          "brand",
+          "buttonText",
+          "buttonUrl",
+          "deliveredCount",
+          "delayedCount",
+          "bouncedCount",
+          "complainedCount",
+          "pausedUntil",
+          "pauseReason"
         ]
       },
       "EmailRecipientView": {
@@ -72471,6 +72897,26 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "delivered",
+              "delayed",
+              "bounced",
+              "complained"
+            ],
+            "nullable": true
+          },
+          "deliveryAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deliveryNote": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -72479,7 +72925,30 @@
           "firstName",
           "status",
           "error",
-          "sentAt"
+          "sentAt",
+          "delivery",
+          "deliveryAt",
+          "deliveryNote"
+        ]
+      },
+      "EmailEventAck": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "duplicate",
+              "ignored",
+              "stored"
+            ]
+          }
+        },
+        "required": [
+          "received",
+          "result"
         ]
       },
       "FeaturedCreatorAdminView": {
