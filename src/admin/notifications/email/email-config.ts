@@ -14,11 +14,37 @@ export const DEFAULT_EMAIL_CAMPAIGN_FROM =
 /** The link every email carries and {{join_link}} fills in. */
 export const JOIN_LINK = 'https://wawuafrica.com/join';
 
+/** The two brands an email can be sent as. A missing brand reads as `wmt`. */
+export const EMAIL_BRANDS = ['wmt', 'voices'] as const;
+export type EmailBrand = (typeof EMAIL_BRANDS)[number];
+
+export function brandOf(value: string | null | undefined): EmailBrand {
+  return value === 'voices' ? 'voices' : 'wmt';
+}
+
+/** What {{app_link}} and, since EMAIL-03, {{join_link}} fill in, per brand. */
+export const APP_LINKS: Record<EmailBrand, string> = {
+  wmt: 'https://usewmt.com',
+  voices: 'https://usevoices.com',
+};
+
+/** The Voices wordmark (white, for the green band), served by WAWU ID. */
+export const VOICES_LOGO_URL =
+  'https://id.wawuafrica.com/assets/voices/logo-wordmark-white.png';
+
+/** The sender when a Hub with its own RESEND_API_KEY sends a Voices email. */
+export const DEFAULT_EMAIL_CAMPAIGN_FROM_VOICES =
+  'Voices <noreply@wawuafrica.com>';
+
 /** The logo at the top of every email (a public file on wawuafrica.com). */
 export const EMAIL_LOGO_URL = 'https://wawuafrica.com/who-made-this-white.png';
 
-/** At most this many requests to the email provider in any one second. */
-export const MAX_SENDS_PER_SECOND = 8;
+/**
+ * At most this many requests to the email provider in any one second.
+ * Resend allows 10 a second for the whole team, and WAWU ID's sign-in codes
+ * share it (EMAIL-03: lowered from 8).
+ */
+export const MAX_SENDS_PER_SECOND = 5;
 
 /** One recipient is tried this many times for a transient failure, then marked failed. */
 export const MAX_SEND_ATTEMPTS = 3;
@@ -57,6 +83,45 @@ export function emailFrom(env: {
 }): string {
   const set = env.get('EMAIL_CAMPAIGN_FROM')?.trim();
   return set ? set : DEFAULT_EMAIL_CAMPAIGN_FROM;
+}
+
+export function emailFromFor(
+  env: { get(key: string): string | undefined },
+  brand: EmailBrand,
+): string {
+  if (brand === 'voices') {
+    const set = env.get('EMAIL_CAMPAIGN_FROM_VOICES')?.trim();
+    return set ? set : DEFAULT_EMAIL_CAMPAIGN_FROM_VOICES;
+  }
+  return emailFrom(env);
+}
+
+/**
+ * A Voices address and key, or null when either is unset (Voices is not live).
+ * VOICES_API_BASE_URL is the Voices API root INCLUDING its /api/v1 prefix (for
+ * example https://api.example.com/api/v1): only a trailing slash is removed and
+ * nothing is added. The audience is GET <base>/internal/mail/audience with the
+ * key in the X-Service-Key header.
+ */
+export function voicesApi(env: {
+  get(key: string): string | undefined;
+}): { base: string; key: string } | null {
+  const base = (env.get('VOICES_API_BASE_URL')?.trim() ?? '').replace(
+    /\/+$/,
+    '',
+  );
+  const key = env.get('VOICES_INTERNAL_SERVICE_KEY')?.trim() ?? '';
+  return base && key ? { base, key } : null;
+}
+
+export const VOICES_NOT_LIVE =
+  'Voices is not live yet, so its members cannot be listed.';
+
+/** The Resend webhook signing secret (`whsec_...`); empty when unset. */
+export function resendWebhookSecret(env: {
+  get(key: string): string | undefined;
+}): string {
+  return env.get('RESEND_WEBHOOK_SECRET')?.trim() ?? '';
 }
 
 /** The provider base address: Resend, or a local address (a test stand-in). */

@@ -6,6 +6,9 @@ import { AdminNotificationsService } from './admin-notifications.service';
 import { EmailCampaignService } from './email/email-campaign.service';
 import { AdminEmailController } from './email/email.controller';
 import { ResendClient, WawuIdMailRelay } from './email/email-provider';
+import { EmailEventsService } from './email/email-events.service';
+import { ResendWebhookController } from './email/email-webhook.controller';
+import { ResendWebhookGuard } from './email/email-webhook.guard';
 import { EmailSendingService } from './email/email-sending.service';
 import { PublicEmailUnsubscribeController } from './email/email-unsubscribe.controller';
 
@@ -33,6 +36,7 @@ import { PublicEmailUnsubscribeController } from './email/email-unsubscribe.cont
     AdminNotificationsController,
     AdminEmailController,
     PublicEmailUnsubscribeController,
+    ResendWebhookController,
   ],
   providers: [
     AdminNotificationsService,
@@ -40,6 +44,8 @@ import { PublicEmailUnsubscribeController } from './email/email-unsubscribe.cont
     EmailSendingService,
     ResendClient,
     WawuIdMailRelay,
+    EmailEventsService,
+    ResendWebhookGuard,
   ],
 })
 export class AdminNotificationsModule {}

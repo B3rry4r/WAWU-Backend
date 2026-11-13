@@ -5,7 +5,8 @@ import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { escapeHtml } from './email-render';
-import { verifyUnsubscribeToken } from './email-unsubscribe';
+import type { EmailBrand } from './email-config';
+import { readUnsubscribeToken } from './email-unsubscribe';
 
 const STYLE = `body{margin:0;background:#0b0b0f;color:#f4f4f6;font-family:Helvetica,Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
 main{max-width:420px;text-align:center}h1{font-size:22px;margin:0 0 12px;line-height:1.3}p{color:#9a9aa6;line-height:1.6;margin:0}
@@ -29,17 +30,27 @@ export const UNSUBSCRIBED_PAGE = page(
   'You are unsubscribed.',
   '<p>We will not email this address again.</p>',
 );
+export const UNSUBSCRIBED_PAGE_VOICES = page(
+  'You are unsubscribed from Voices.',
+  '<p>We will not send Voices emails to this address again.</p>',
+);
 export const BAD_LINK_PAGE = page(
   'This link is not valid',
   '<p>The unsubscribe link is incomplete or has been changed.</p>',
 );
 
 /** The page a GET shows: one button that POSTs back to the same signed link. */
-export function confirmPage(email: string, token: string): string {
+export function confirmPage(
+  email: string,
+  token: string,
+  brand: EmailBrand = 'wmt',
+): string {
   const action = `/api/hub/email/unsubscribe?t=${encodeURIComponent(token)}`;
   return page(
-    `Unsubscribe ${maskEmail(email)} from WAWU emails?`,
-    `<p>You will stop getting our emails at this address.</p>` +
+    brand === 'voices'
+      ? `Unsubscribe ${maskEmail(email)} from Voices emails?`
+      : `Unsubscribe ${maskEmail(email)} from WAWU emails?`,
+    `<p>${brand === 'voices' ? 'You will stop getting Voices emails at this address.' : 'You will stop getting our emails at this address.'}</p>` +
       `<form method="post" action="${escapeHtml(action)}"><button type="submit">Unsubscribe</button></form>`,
   );
 }
@@ -71,13 +82,13 @@ export class PublicEmailUnsubscribeController {
     description: 'An HTML page saying the link is not valid.',
   })
   get(@Query('t') token: string | undefined, @Res() res: Response) {
-    const email = this.emailOf(token);
+    const read = this.read(token);
     this.headers(res);
-    if (!email || !token) {
+    if (!read || !token) {
       res.status(400).send(BAD_LINK_PAGE);
       return;
     }
-    res.status(200).send(confirmPage(email, token));
+    res.status(200).send(confirmPage(read.email, token, read.brand));
   }
 
   @Post('unsubscribe')
@@ -90,10 +101,20 @@ export class PublicEmailUnsubscribeController {
     description: 'An HTML page saying the link is not valid.',
   })
   async post(@Query('t') token: string | undefined, @Res() res: Response) {
-    const email = this.emailOf(token);
+    const read = this.read(token);
     this.headers(res);
-    if (!email) {
+    if (!read) {
       res.status(400).send(BAD_LINK_PAGE);
+      return;
+    }
+    const { email, brand } = read;
+    if (brand === 'voices') {
+      await this.prisma.emailBrandSuppression.upsert({
+        where: { email_brand: { email, brand: 'voices' } },
+        create: { email, brand: 'voices', reason: 'unsubscribed' },
+        update: {},
+      });
+      res.status(200).send(UNSUBSCRIBED_PAGE_VOICES);
       return;
     }
     await this.prisma.emailSuppression.upsert({
@@ -104,12 +125,11 @@ export class PublicEmailUnsubscribeController {
     res.status(200).send(UNSUBSCRIBED_PAGE);
   }
 
-  private emailOf(token: string | undefined): string | null {
+  private read(
+    token: string | undefined,
+  ): { email: string; brand: EmailBrand } | null {
     return token
-      ? verifyUnsubscribeToken(
-          token,
-          this.config.get<string>('ADMIN_JWT_SECRET'),
-        )
+      ? readUnsubscribeToken(token, this.config.get<string>('ADMIN_JWT_SECRET'))
       : null;
   }
 

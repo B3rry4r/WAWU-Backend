@@ -27,6 +27,9 @@ import { MAX_CSV_BYTES } from './email-config';
 import { EmailCampaignService } from './email-campaign.service';
 import {
   CreateCsvCampaignDto,
+  CreateMemberCampaignDto,
+  EmailTemplateListQueryDto,
+  MemberAudienceQueryDto,
   CreateRegistrantCampaignDto,
   EmailPreviewDto,
   EmailRecipientQueryDto,
@@ -53,8 +56,8 @@ export class AdminEmailController {
 
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Get('templates')
-  templates() {
-    return this.service.listTemplates();
+  templates(@Query() query: EmailTemplateListQueryDto) {
+    return this.service.listTemplates(query.brand);
   }
 
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
@@ -113,6 +116,23 @@ export class AdminEmailController {
     return this.service.registrantCount(query.filter, query.limit);
   }
 
+  /** How many WMT accounts would be emailed. `available: false` with a reason when the list cannot be read. */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Get('audiences/accounts')
+  accountCount(@Query() query: MemberAudienceQueryDto) {
+    return this.service.memberCount('accounts', 'wmt', query.limit);
+  }
+
+  /**
+   * How many Voices members would be emailed (as a Voices email). While
+   * Voices is not live the answer is `{ available: false, reason }`.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Get('audiences/voices')
+  voicesCount(@Query() query: MemberAudienceQueryDto) {
+    return this.service.memberCount('voices', 'voices', query.limit);
+  }
+
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Get('campaigns')
   list(@Query() query: PaginationQueryDto) {
@@ -130,6 +150,38 @@ export class AdminEmailController {
     return this.service.createFromRegistrants(
       dto.templateId,
       dto.filter,
+      dto.limit,
+      admin,
+    );
+  }
+
+  /** Build a campaign from every WMT account with a verified email. Sends nothing. */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Post('campaigns/accounts')
+  @HttpCode(HttpStatus.OK)
+  fromAccounts(
+    @Body() dto: CreateMemberCampaignDto,
+    @CurrentAdmin() admin: AdminUserView,
+  ) {
+    return this.service.createFromMembers(
+      'accounts',
+      dto.templateId,
+      dto.limit,
+      admin,
+    );
+  }
+
+  /** Build a campaign from Voices members. 409 while Voices is not live. Sends nothing. */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Post('campaigns/voices')
+  @HttpCode(HttpStatus.OK)
+  fromVoices(
+    @Body() dto: CreateMemberCampaignDto,
+    @CurrentAdmin() admin: AdminUserView,
+  ) {
+    return this.service.createFromMembers(
+      'voices',
+      dto.templateId,
       dto.limit,
       admin,
     );
@@ -179,5 +231,13 @@ export class AdminEmailController {
   @HttpCode(HttpStatus.OK)
   start(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.start(id);
+  }
+
+  /** Carry on a campaign a limit paused. Superadmin only. 409 when it is not paused. */
+  @AdminRoles(AdminRole.superadmin)
+  @Post('campaigns/:id/resume')
+  @HttpCode(HttpStatus.OK)
+  resume(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.resume(id);
   }
 }

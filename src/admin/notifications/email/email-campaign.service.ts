@@ -13,7 +13,17 @@ import type {
 } from '../../../../generated/prisma/models';
 import type { Prisma } from '../../../../generated/prisma/client';
 import type { AdminUserView } from '../../auth/admin-user-view.type';
-import { MAX_CAMPAIGN_RECIPIENTS } from './email-config';
+import { ConfigService } from '@nestjs/config';
+import {
+  MAX_CAMPAIGN_RECIPIENTS,
+  VOICES_NOT_LIVE,
+  brandOf,
+  relayBaseUrl,
+  relayServiceKey,
+  voicesApi,
+  type EmailBrand,
+} from './email-config';
+import { readMemberList, type MemberPeople } from './email-audience-source';
 import {
   CsvFormatError,
   CsvPerson,
@@ -23,12 +33,13 @@ import {
 import { firstNameOf, planAudience } from './email-audience';
 import { renderEmail } from './email-render';
 import { EmailSendingService } from './email-sending.service';
-import type {
-  EmailPreviewDto,
-  EmailRecipientQueryDto,
-  EmailTemplateDto,
-  EmailTestSendDto,
-  RegistrantFilter,
+import {
+  assertButtonPair,
+  type EmailPreviewDto,
+  type EmailRecipientQueryDto,
+  type EmailTemplateDto,
+  type EmailTestSendDto,
+  type RegistrantFilter,
 } from './dto/email.dto';
 
 export interface EmailTemplateView {
@@ -39,6 +50,9 @@ export interface EmailTemplateView {
   body: string;
   version: number;
   updatedAt: Date;
+  brand: EmailBrand;
+  buttonText: string | null;
+  buttonUrl: string | null;
 }
 
 export interface EmailCampaignView {
@@ -60,6 +74,18 @@ export interface EmailCampaignView {
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
+  brand: EmailBrand;
+  buttonText: string | null;
+  buttonUrl: string | null;
+  /** Counted from the recipients' delivery results; `sentCount` stays "accepted by the provider". */
+  deliveredCount: number;
+  delayedCount: number;
+  bouncedCount: number;
+  complainedCount: number;
+  /** While a limit has paused the send: when it resumes by itself (null: only a resume restarts it). */
+  pausedUntil: Date | null;
+  /** Plain words saying why it is paused. */
+  pauseReason: string | null;
 }
 
 export interface EmailRecipientView {
@@ -69,6 +95,10 @@ export interface EmailRecipientView {
   status: 'queued' | 'sent' | 'failed' | 'skipped';
   error: string | null;
   sentAt: Date | null;
+  delivery:
+    'delivered' | 'delayed' | 'bounced' | 'complained' | 'failed' | null;
+  deliveryAt: Date | null;
+  deliveryNote: string | null;
 }
 
 export interface EmailAudienceCountView {
@@ -77,12 +107,19 @@ export interface EmailAudienceCountView {
   /** Who would be emailed (after unsubscribed people and the limit). */
   willSend: number;
   unsubscribed: number;
+  /** The Voices and accounts lists only: false when the list cannot be read yet. */
+  available?: boolean;
+  /** The Voices and accounts lists only: why `available` is false. */
+  reason?: string;
 }
 
 export interface EmailPreviewView {
   subject: string;
   html: string;
   text: string;
+  brand: EmailBrand;
+  buttonText: string | null;
+  buttonUrl: string | null;
 }
 
 const templateView = (t: EmailTemplateModel): EmailTemplateView => ({
@@ -93,6 +130,9 @@ const templateView = (t: EmailTemplateModel): EmailTemplateView => ({
   body: t.body,
   version: t.version,
   updatedAt: t.updatedAt,
+  brand: brandOf(t.brand),
+  buttonText: t.buttonText,
+  buttonUrl: t.buttonUrl,
 });
 
 const recipientView = (r: EmailRecipientModel): EmailRecipientView => ({
@@ -102,6 +142,9 @@ const recipientView = (r: EmailRecipientModel): EmailRecipientView => ({
   status: r.status,
   error: r.error,
   sentAt: r.sentAt,
+  delivery: r.delivery as EmailRecipientView['delivery'],
+  deliveryAt: r.deliveryAt,
+  deliveryNote: r.deliveryNote,
 });
 
 /** Preview and test-send use a made-up unsubscribe address that does nothing. */
@@ -112,12 +155,18 @@ export class EmailCampaignService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sending: EmailSendingService,
+    private readonly config: ConfigService,
   ) {}
 
   // ── templates ──────────────────────────────────────────────────────────────
 
-  async listTemplates(): Promise<EmailTemplateView[]> {
+  async listTemplates(brand?: EmailBrand): Promise<EmailTemplateView[]> {
     const rows = await this.prisma.emailTemplate.findMany({
+      where: !brand
+        ? {}
+        : brand === 'voices'
+          ? { brand: 'voices' }
+          : { OR: [{ brand: 'wmt' }, { brand: null }] },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(templateView);
@@ -131,8 +180,12 @@ export class EmailCampaignService {
     dto: EmailTemplateDto,
     admin: AdminUserView,
   ): Promise<EmailTemplateView> {
+    assertButtonPair(dto.buttonText, dto.buttonUrl);
     const row = await this.prisma.emailTemplate.create({
       data: {
+        ...(dto.brand ? { brand: dto.brand } : {}),
+        ...(dto.buttonText ? { buttonText: dto.buttonText.trim() } : {}),
+        ...(dto.buttonUrl ? { buttonUrl: dto.buttonUrl.trim() } : {}),
         name: dto.name.trim(),
         subject: dto.subject.trim(),
         previewText: dto.previewText?.trim() ?? '',
@@ -153,9 +206,21 @@ export class EmailCampaignService {
         'Someone saved this template since you opened it. Reload it and try again.',
       );
     }
+    // A field left out keeps what the template has; an explicit null clears it.
+    const text =
+      dto.buttonText === undefined ? current.buttonText : dto.buttonText;
+    const url = dto.buttonUrl === undefined ? current.buttonUrl : dto.buttonUrl;
+    assertButtonPair(text, url);
     const row = await this.prisma.emailTemplate.update({
       where: { id },
       data: {
+        ...(dto.brand ? { brand: dto.brand } : {}),
+        ...(dto.buttonText !== undefined
+          ? { buttonText: dto.buttonText?.trim() ?? null }
+          : {}),
+        ...(dto.buttonUrl !== undefined
+          ? { buttonUrl: dto.buttonUrl?.trim() ?? null }
+          : {}),
         name: dto.name.trim(),
         subject: dto.subject.trim(),
         previewText: dto.previewText?.trim() ?? '',
@@ -181,18 +246,32 @@ export class EmailCampaignService {
   // ── preview and test send ──────────────────────────────────────────────────
 
   preview(dto: EmailPreviewDto): EmailPreviewView {
-    return renderEmail({
+    assertButtonPair(dto.buttonText, dto.buttonUrl);
+    const brand = brandOf(dto.brand);
+    const mail = renderEmail({
       subject: dto.subject,
       previewText: dto.previewText,
       body: dto.body,
       firstName: dto.firstName,
       unsubscribeUrl: PREVIEW_UNSUBSCRIBE,
+      brand,
+      button:
+        dto.buttonText && dto.buttonUrl
+          ? { text: dto.buttonText.trim(), url: dto.buttonUrl.trim() }
+          : null,
     });
+    return {
+      ...mail,
+      brand,
+      buttonText: dto.buttonText?.trim() || null,
+      buttonUrl: dto.buttonUrl?.trim() || null,
+    };
   }
 
   async testSend(
     dto: EmailTestSendDto,
   ): Promise<{ sent: true; providerId: string }> {
+    assertButtonPair(dto.buttonText, dto.buttonUrl);
     const missing = this.sending.missingSetting();
     if (missing) throw new ConflictException(missing);
     const to = dto.to.trim().toLowerCase();
@@ -201,6 +280,9 @@ export class EmailCampaignService {
         subject: dto.subject,
         previewText: dto.previewText ?? '',
         body: dto.body,
+        brand: dto.brand ?? null,
+        buttonText: dto.buttonText?.trim() || null,
+        buttonUrl: dto.buttonUrl?.trim() || null,
       },
       {
         id: `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -261,16 +343,135 @@ export class EmailCampaignService {
     return { people, invalid, duplicates };
   }
 
-  private async suppressedAmong(people: CsvPerson[]): Promise<Set<string>> {
+  /**
+   * Who is skipped. Who Made This: every EmailSuppression row. Voices: only the
+   * rows with reason bounced or complained, plus the Voices unsubscribes.
+   */
+  private async suppressedAmong(
+    people: CsvPerson[],
+    brand: EmailBrand = 'wmt',
+  ): Promise<Set<string>> {
     const found = new Set<string>();
     for (let i = 0; i < people.length; i += 5000) {
+      const emails = people.slice(i, i + 5000).map((p) => p.email);
       const rows = await this.prisma.emailSuppression.findMany({
-        where: { email: { in: people.slice(i, i + 5000).map((p) => p.email) } },
+        where: {
+          email: { in: emails },
+          ...(brand === 'voices'
+            ? { reason: { in: ['bounced', 'complained'] as const } }
+            : {}),
+        },
         select: { email: true },
       });
       for (const r of rows) found.add(r.email);
+      if (brand === 'voices') {
+        const own = await this.prisma.emailBrandSuppression.findMany({
+          where: { email: { in: emails }, brand: 'voices' },
+          select: { email: true },
+        });
+        for (const r of own) found.add(r.email);
+      }
     }
     return found;
+  }
+
+  private async memberPeople(
+    which: 'accounts' | 'voices',
+  ): Promise<MemberPeople> {
+    if (which === 'voices') {
+      const api = voicesApi(this.config);
+      if (!api) return { available: false, reason: VOICES_NOT_LIVE };
+      return readMemberList({
+        base: api.base,
+        path: '/internal/mail/audience',
+        key: api.key,
+        down: 'Voices did not answer, so its members cannot be listed. Try again in a minute.',
+      });
+    }
+    const base = relayBaseUrl(this.config);
+    const key = relayServiceKey(this.config);
+    if (!base || !key) {
+      return {
+        available: false,
+        reason:
+          'WAWU ID is not set up on this server, so accounts cannot be listed.',
+      };
+    }
+    const found = await readMemberList({
+      base,
+      path: '/internal/mail/audience',
+      key,
+      down: 'WAWU ID did not answer, so accounts cannot be listed. Try again in a minute.',
+      missing: 'The list of accounts is not available from WAWU ID yet.',
+    });
+    if (!found.available) return found;
+    // A suspended person is not emailed (the Hub knows suspensions by account id).
+    const ids = found.people.flatMap((p) => (p.id ? [p.id] : []));
+    const suspended = new Set<string>();
+    for (let i = 0; i < ids.length; i += 5000) {
+      const rows = await this.prisma.userSuspension.findMany({
+        where: { wawuUserId: { in: ids.slice(i, i + 5000) }, liftedAt: null },
+        select: { wawuUserId: true },
+      });
+      for (const r of rows) suspended.add(r.wawuUserId);
+    }
+    return {
+      ...found,
+      people: found.people.filter((p) => !p.id || !suspended.has(p.id)),
+    };
+  }
+
+  /** The number shown before a members list (accounts or Voices) is built. */
+  async memberCount(
+    which: 'accounts' | 'voices',
+    template: EmailBrand,
+    limit?: number,
+  ): Promise<EmailAudienceCountView> {
+    const found = await this.memberPeople(which);
+    if (!found.available) {
+      return {
+        matching: 0,
+        willSend: 0,
+        unsubscribed: 0,
+        available: false,
+        reason: found.reason,
+      };
+    }
+    const plan = planAudience(
+      found.people,
+      await this.suppressedAmong(found.people, template),
+      limit,
+    );
+    return {
+      matching: found.people.length,
+      willSend: plan.eligible.length,
+      unsubscribed: plan.suppressed.length,
+      available: true,
+    };
+  }
+
+  async createFromMembers(
+    which: 'accounts' | 'voices',
+    templateId: string,
+    limit: number | undefined,
+    admin: AdminUserView,
+  ): Promise<EmailCampaignView> {
+    const template = await this.template(templateId);
+    const found = await this.memberPeople(which);
+    if (!found.available) throw new ConflictException(found.reason);
+    return this.build({
+      template,
+      kind: which,
+      note:
+        which === 'voices'
+          ? `Voices members${limit ? `, first ${limit}` : ''}`
+          : `Everyone with a WMT account${limit ? `, first ${limit}` : ''}`,
+      people: found.people,
+      invalid: found.invalid,
+      duplicates: found.duplicates,
+      limit,
+      admin,
+    });
   }
 
   /** The number shown before anything is built or sent. */
@@ -353,7 +554,7 @@ export class EmailCampaignService {
 
   private async build(args: {
     template: EmailTemplateModel;
-    kind: 'csv' | 'registrants';
+    kind: 'csv' | 'registrants' | 'accounts' | 'voices';
     note: string;
     people: CsvPerson[];
     invalid: number;
@@ -363,7 +564,7 @@ export class EmailCampaignService {
   }): Promise<EmailCampaignView> {
     const plan = planAudience(
       args.people,
-      await this.suppressedAmong(args.people),
+      await this.suppressedAmong(args.people, brandOf(args.template.brand)),
       args.limit,
     );
     const total = plan.eligible.length + plan.suppressed.length;
@@ -384,6 +585,9 @@ export class EmailCampaignService {
             subject: args.template.subject,
             previewText: args.template.previewText,
             body: args.template.body,
+            brand: brandOf(args.template.brand),
+            buttonText: args.template.buttonText,
+            buttonUrl: args.template.buttonUrl,
             audienceKind: args.kind,
             audienceNote: args.note,
             totalCount: total,
@@ -462,6 +666,17 @@ export class EmailCampaignService {
     return this.view(await this.campaign(id));
   }
 
+  /** Superadmin: carry on a campaign a limit paused (daily or monthly). */
+  async resume(id: string): Promise<EmailCampaignView> {
+    await this.campaign(id);
+    const missing = this.sending.missingSetting();
+    if (missing) throw new ConflictException(missing);
+    if (!(await this.sending.resume(id))) {
+      throw new ConflictException('This campaign is not paused.');
+    }
+    return this.detail(id);
+  }
+
   async recipients(
     id: string,
     query: EmailRecipientQueryDto,
@@ -470,6 +685,7 @@ export class EmailCampaignService {
     const where: Prisma.EmailRecipientWhereInput = {
       campaignId: id,
       ...(query.status ? { status: query.status } : {}),
+      ...(query.delivery ? { delivery: query.delivery } : {}),
     };
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.emailRecipient.findMany({
@@ -506,8 +722,24 @@ export class EmailCampaignService {
     const unsubscribed = await this.prisma.emailRecipient.count({
       where: { campaignId: c.id, status: 'skipped', error: 'unsubscribed' },
     });
+    const delivered = await this.prisma.emailRecipient.groupBy({
+      by: ['delivery'],
+      where: { campaignId: c.id, delivery: { not: null } },
+      _count: { _all: true },
+    });
+    const d = (s: string) =>
+      delivered.find((g) => g.delivery === s)?._count._all ?? 0;
     return {
       id: c.id,
+      brand: brandOf(c.brand),
+      buttonText: c.buttonText,
+      buttonUrl: c.buttonUrl,
+      deliveredCount: d('delivered'),
+      delayedCount: d('delayed'),
+      bouncedCount: d('bounced'),
+      complainedCount: d('complained'),
+      pausedUntil: c.pausedUntil,
+      pauseReason: c.pauseReason,
       templateName: c.templateName,
       subject: c.subject,
       audienceKind: c.audienceKind,

@@ -358,7 +358,7 @@ describe('EMAIL-01 email campaigns', () => {
       })
       .expect(200);
     expect(pre.body.data.subject).toBe('Hi Ada');
-    expect(pre.body.data.html).toContain('https://wawuafrica.com/join');
+    expect(pre.body.data.html).toContain('https://usewmt.com');
     await http()
       .post(`${P}/templates`)
       .set(auth('superadmin'))

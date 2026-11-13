@@ -18,6 +18,8 @@ export interface ProviderMessage {
   idempotencyKey: string;
   /** The campaign id, kept on the provider's record of the mail (relay only). */
   tag?: string;
+  /** EMAIL-03: `voices` makes the relay send from the Voices address. Absent means as before. */
+  app?: 'voices';
   /**
    * Files that travel with the mail, `content` as base64 (a statement,
    * WALLET-35). Sent by the relay and by Resend; a campaign has none.
@@ -29,8 +31,23 @@ export interface ProviderMessage {
   }>;
 }
 
+/** Why a send was refused for a limit, not for the message (EMAIL-03). */
+export const PAUSE_CODES = [
+  'daily_cap',
+  'provider_daily_quota',
+  'provider_monthly_quota',
+] as const;
+export type PauseCode = (typeof PAUSE_CODES)[number];
+
 export type ProviderResult =
-  { ok: true; id: string } | { ok: false; transient: boolean; error: string };
+  | { ok: true; id: string }
+  | {
+      ok: false;
+      transient: boolean;
+      error: string;
+      /** Set when a limit refused it: nobody is marked failed, the campaign pauses. */
+      pause?: PauseCode;
+    };
 
 /** Where one mail goes out: Resend directly, or WAWU ID's relay. */
 export interface EmailTransport {
@@ -112,6 +129,28 @@ export class ResendClient implements EmailTransport {
       typeof (body as { message?: unknown }).message === 'string'
         ? (body as { message: string }).message
         : `The email provider answered ${response.status}.`;
+    const name =
+      body &&
+      typeof body === 'object' &&
+      typeof (body as { name?: unknown }).name === 'string'
+        ? (body as { name: string }).name
+        : '';
+    if (response.status === 429 && name === 'daily_quota_exceeded') {
+      return {
+        ok: false,
+        transient: false,
+        error: message_.slice(0, 300),
+        pause: 'provider_daily_quota',
+      };
+    }
+    if (response.status === 429 && name === 'monthly_quota_exceeded') {
+      return {
+        ok: false,
+        transient: false,
+        error: message_.slice(0, 300),
+        pause: 'provider_monthly_quota',
+      };
+    }
     return {
       ok: false,
       transient:
@@ -133,8 +172,9 @@ export class ResendClient implements EmailTransport {
  * What a retry is worth: a timeout, a network error, a 503 (the provider was
  * busy or WAWU ID had no mail key at that moment) and any other 5xx (a proxy's
  * 502 or 504 while WAWU ID restarts) are transient. A 400 (a bad address), a
- * 401 (the key), a 429 (WAWU ID's daily cap, which waiting a second does not
- * lift) and every other answer are the relay refusing this message.
+ * 401 (the key), a 429 (a limit: WAWU ID's daily cap or the provider's quota, which waiting a
+ * second does not lift; it carries `pause` and the campaign stops, EMAIL-03)
+ * and every other answer are the relay refusing this message.
  */
 @Injectable()
 export class WawuIdMailRelay implements EmailTransport {
@@ -171,6 +211,7 @@ export class WawuIdMailRelay implements EmailTransport {
           text: message.text,
           headers: message.headers,
           ...(message.tag ? { tag: message.tag } : {}),
+          ...(message.app ? { app: message.app } : {}),
           ...(message.attachments ? { attachments: message.attachments } : {}),
         }),
         signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
@@ -228,6 +269,21 @@ export class WawuIdMailRelay implements EmailTransport {
       response.status === 401
         ? 'WAWU ID refused the service key.'
         : (said ?? `WAWU ID answered ${response.status}.`);
+    if (response.status === 429) {
+      // EMAIL-03: a limit, not a bad message. A relay from before the codes
+      // existed only had its own daily cap, so no code reads as that.
+      const code =
+        body && typeof body === 'object'
+          ? (body as { code?: unknown }).code
+          : undefined;
+      const pause = PAUSE_CODES.find((c) => c === code) ?? 'daily_cap';
+      return {
+        ok: false,
+        transient: false,
+        error: error.slice(0, 300),
+        pause,
+      };
+    }
     return {
       ok: false,
       transient: response.status >= 500 || (response.ok && !id),
