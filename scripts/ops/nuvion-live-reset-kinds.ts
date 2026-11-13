@@ -249,6 +249,10 @@ export const KIND_TABLE: Record<string, Kind> = {
     action: 'untouched',
     why: "providerId is the email provider's id.",
   },
+  EmailEvent: {
+    action: 'untouched',
+    why: "Resend email delivery events; providerId is the email's id at Resend.",
+  },
   AiToolJob: {
     action: 'untouched',
     why: 'providerRef is an AI vendor job id.',
