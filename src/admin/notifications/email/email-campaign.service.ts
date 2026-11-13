@@ -33,13 +33,13 @@ import {
 import { firstNameOf, planAudience } from './email-audience';
 import { renderEmail } from './email-render';
 import { EmailSendingService } from './email-sending.service';
-import {
-  assertButtonPair,
-  type EmailPreviewDto,
-  type EmailRecipientQueryDto,
-  type EmailTemplateDto,
-  type EmailTestSendDto,
-  type RegistrantFilter,
+import { assertButtonPair } from './dto/email.dto';
+import type {
+  EmailPreviewDto,
+  EmailRecipientQueryDto,
+  EmailTemplateDto,
+  EmailTestSendDto,
+  RegistrantFilter,
 } from './dto/email.dto';
 
 export interface EmailTemplateView {

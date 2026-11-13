@@ -123,7 +123,7 @@ export function parseResendEvent(body: unknown, now: Date): ParsedEvent | null {
     data.failed && typeof data.failed === 'object'
       ? (data.failed as Record<string, unknown>)
       : {};
-  const at = b.created_at ? new Date(String(b.created_at)) : now;
+  const at = typeof b.created_at === 'string' ? new Date(b.created_at) : now;
   const delivery = EVENT_DELIVERY[type] ?? null;
   const note =
     type === 'email.bounced'
@@ -144,7 +144,7 @@ export function parseResendEvent(body: unknown, now: Date): ParsedEvent | null {
     note: note ? note.slice(0, 300) : null,
     permanentBounce:
       type === 'email.bounced' &&
-      String(bounce.type ?? '').toLowerCase() === 'permanent',
+      (str(bounce.type) ?? '').toLowerCase() === 'permanent',
     complaint: type === 'email.complained',
   };
 }

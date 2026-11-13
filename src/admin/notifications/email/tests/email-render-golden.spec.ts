@@ -14,7 +14,8 @@ const FULL = {
   previewText: 'Preview for {{first_name}}',
   body: 'Hello **{{first_name}}**,\n\nA [link](https://example.com/x?a=1&b=2) and *italic*.\n\n# Big\n\n## Small\n\n- one\n- two\n\n[Press me](https://example.com/go)\n\nLine one\nLine two <b>',
   firstName: 'Ada',
-  unsubscribeUrl: 'https://api.example.test/api/hub/email/unsubscribe?t=abc.def',
+  unsubscribeUrl:
+    'https://api.example.test/api/hub/email/unsubscribe?t=abc.def',
 };
 const PLAIN = {
   subject: 'Plain',
