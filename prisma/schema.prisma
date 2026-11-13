@@ -7784,6 +7784,11 @@ model EmailTemplate {
   createdBy   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  /// EMAIL-03: `wmt` or `voices`; null reads as `wmt`.
+  brand       String?
+  /// EMAIL-03: an optional button under the body. Both set or both null.
+  buttonText  String?
+  buttonUrl   String?
 
   @@index([updatedAt])
 }
@@ -7815,6 +7820,14 @@ model EmailCampaign {
   startedAt        DateTime?
   finishedAt       DateTime?
   updatedAt        DateTime            @updatedAt
+  /// EMAIL-03: copied from the template when the campaign is built (a snapshot).
+  brand            String?
+  buttonText       String?
+  buttonUrl        String?
+  /// EMAIL-03: set while a limit (the relay's or the provider's quota) has paused
+  /// the send. `pausedUntil` null with a reason means only a resume restarts it.
+  pausedUntil      DateTime?
+  pauseReason      String?
   recipients       EmailRecipient[]
 
   @@index([createdAt])
@@ -7836,9 +7849,15 @@ model EmailRecipient {
   error      String?
   sentAt     DateTime?
   createdAt  DateTime             @default(now())
+  /// EMAIL-03, from the provider's webhook: delivered, delayed, bounced,
+  /// complained or failed. A stronger result is never overwritten by a weaker one.
+  delivery     String?
+  deliveryAt   DateTime?
+  deliveryNote String?
 
   @@unique([campaignId, email])
   @@index([campaignId, status])
+  @@index([providerId])
 }
 
 /// Addresses that must not be emailed again.
@@ -7846,6 +7865,32 @@ model EmailSuppression {
   email  String                 @id
   reason EmailSuppressionReason
   at     DateTime               @default(now())
+}
+
+/// EMAIL-03: an address that unsubscribed from one brand's email (only `voices`
+/// is written here; a Who Made This unsubscribe stays in EmailSuppression).
+model EmailBrandSuppression {
+  email  String
+  brand  String
+  reason String
+  at     DateTime @default(now())
+
+  @@id([email, brand])
+}
+
+/// EMAIL-03: one delivery event from the email provider's webhook (Svix id is
+/// the dedupe key). Stored for every event, including mail the Hub did not send.
+model EmailEvent {
+  id         String   @id @default(uuid())
+  svixId     String   @unique
+  type       String
+  providerId String?
+  email      String?
+  at         DateTime
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  @@index([providerId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
