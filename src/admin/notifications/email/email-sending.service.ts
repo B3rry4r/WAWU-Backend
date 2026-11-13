@@ -82,6 +82,8 @@ export class EmailSendingService
   private readonly running = new Set<string>();
   /** Campaigns a limit has stopped in this process (EMAIL-03). */
   private readonly stopped = new Set<string>();
+  /** A start asked for while the previous run was still unwinding: go again when it ends. */
+  private readonly rerun = new Set<string>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
   /** Public so a spec can swap in a fake clock. */
   pacer = new RequestPacer(MAX_SENDS_PER_SECOND);
@@ -286,7 +288,13 @@ export class EmailSendingService
 
   /** Begin (or carry on) sending a campaign in the background. */
   startRun(campaignId: string): void {
-    if (this.running.has(campaignId)) return;
+    if (this.running.has(campaignId)) {
+      // The old run is still unwinding (a pause stopped it, or it is
+      // finishing). Dropping this start would leave nobody sending, so go
+      // again the moment it ends.
+      this.rerun.add(campaignId);
+      return;
+    }
     this.running.add(campaignId);
     void this.run(campaignId)
       .catch((e: unknown) =>
@@ -294,11 +302,21 @@ export class EmailSendingService
           `Campaign ${campaignId} stopped: ${e instanceof Error ? e.message : 'error'}`,
         ),
       )
-      .finally(() => this.running.delete(campaignId));
+      .finally(() => {
+        this.running.delete(campaignId);
+        if (this.rerun.delete(campaignId)) this.startRun(campaignId);
+      });
   }
 
   async run(campaignId: string): Promise<void> {
     this.stopped.delete(campaignId);
+    // Paused again between the resume and this run (an in-flight send of the
+    // old run got a limit too): stay paused; the timer or a resume restarts it.
+    const now = await this.prisma.emailCampaign.findUnique({
+      where: { id: campaignId },
+      select: { pauseReason: true, status: true },
+    });
+    if (!now || now.status !== 'sending' || now.pauseReason) return;
     // A row claimed with no result belongs to a run that died: never resend it.
     await this.prisma.emailRecipient.updateMany({
       where: { campaignId, status: 'queued', claimedAt: { not: null } },

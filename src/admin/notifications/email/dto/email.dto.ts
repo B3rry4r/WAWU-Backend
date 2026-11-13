@@ -129,6 +129,11 @@ export const REGISTRANT_FILTERS = [
 export type RegistrantFilter = (typeof REGISTRANT_FILTERS)[number];
 
 export class RegistrantAudienceQueryDto {
+  /** The brand of the template the list is for, so the count uses the build's skip rules. */
+  @IsOptional()
+  @IsIn(EMAIL_BRANDS)
+  brand?: (typeof EMAIL_BRANDS)[number];
+
   @IsOptional()
   @IsIn(REGISTRANT_FILTERS)
   filter: RegistrantFilter = 'all';
@@ -167,6 +172,11 @@ export class EmailTemplateListQueryDto {
 
 /** The count for the accounts and Voices lists: just a limit. */
 export class MemberAudienceQueryDto {
+  /** The brand of the template the list is for, so the count uses the build's skip rules. */
+  @IsOptional()
+  @IsIn(EMAIL_BRANDS)
+  brand?: (typeof EMAIL_BRANDS)[number];
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

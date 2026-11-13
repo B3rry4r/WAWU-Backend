@@ -160,11 +160,11 @@ export class EmailCampaignService {
 
   // ── templates ──────────────────────────────────────────────────────────────
 
-  async listTemplates(brand?: EmailBrand): Promise<EmailTemplateView[]> {
+  /** No brand means Who Made This only (null or 'wmt'), as the web admin has always seen. */
+  async listTemplates(brand: EmailBrand = 'wmt'): Promise<EmailTemplateView[]> {
     const rows = await this.prisma.emailTemplate.findMany({
-      where: !brand
-        ? {}
-        : brand === 'voices'
+      where:
+        brand === 'voices'
           ? { brand: 'voices' }
           : { OR: [{ brand: 'wmt' }, { brand: null }] },
       orderBy: { updatedAt: 'desc' },
@@ -496,11 +496,12 @@ export class EmailCampaignService {
   async registrantCount(
     filter: RegistrantFilter,
     limit?: number,
+    brand: EmailBrand = 'wmt',
   ): Promise<EmailAudienceCountView> {
     const { people } = await this.registrantPeople(filter);
     const plan = planAudience(
       people,
-      await this.suppressedAmong(people),
+      await this.suppressedAmong(people, brand),
       limit,
     );
     return {

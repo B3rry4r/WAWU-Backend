@@ -325,8 +325,8 @@ function voicesHtml(a: {
 ${hidden}
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F5F5F5" style="background:#F5F5F5;">
 <tr><td align="center" style="padding:24px 12px 32px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;">
-<tr><td bgcolor="${V_DEEP}" style="background:${V_DEEP};padding:22px 28px;border-radius:28px 28px 0 0;"><a href="${app}"><img src="${VOICES_LOGO_URL}" width="126" alt="Voices" style="display:block;border:0;width:126px;height:auto;"></a></td></tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
+<tr><td bgcolor="${V_DEEP}" style="background:${V_DEEP};padding:22px 28px;border-radius:28px 28px 0 0;"><a href="${app}"><img src="${VOICES_LOGO_URL}" width="126" alt="Voices" style="display:block;border:0;width:126px;max-width:100%;height:auto;"></a></td></tr>
 <tr><td bgcolor="#FFFFFF" style="background:#FFFFFF;padding:32px 28px 20px;border-radius:0 0 28px 28px;">
 ${a.bodyHtml}
 </td></tr>

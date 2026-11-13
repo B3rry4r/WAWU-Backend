@@ -736,6 +736,146 @@ describe('EMAIL-03 delivery, brand, limits and audiences', () => {
     });
   });
 
+  // ── fix round 2 ────────────────────────────────────────────────────────────
+  describe('fix round 2', () => {
+    it('a resume that arrives while the paused run is still unwinding still ends with every queued person sent once', async () => {
+      const c = await campaign(Array.from({ length: 12 }, (_, i) => `rr${i}`));
+      const sentTo: string[] = [];
+      let calls = 0;
+      let resumed: Promise<unknown> | null = null;
+      jest.spyOn(relay, 'send').mockImplementation(async (m) => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            ok: false,
+            transient: false,
+            error: 'cap',
+            pause: 'daily_cap',
+          };
+        }
+        // The other in-flight workers are slow, so the old run is still unwinding
+        // when the resume arrives.
+        await new Promise((r) => setTimeout(r, 150));
+        if (calls <= 4 && !resumed) {
+          const waitPause = async () => {
+            for (let i = 0; i < 100; i++) {
+              const row = await prisma.emailCampaign.findUniqueOrThrow({
+                where: { id: c },
+              });
+              if (row.pauseReason) break;
+              await new Promise((r) => setTimeout(r, 10));
+            }
+            return svc.resume(c);
+          };
+          resumed = waitPause();
+        }
+        sentTo.push(m.to);
+        return { ok: true, id: `id-${m.to}` };
+      });
+      sending.startRun(c);
+      for (let i = 0; i < 300; i++) {
+        const row = await prisma.emailCampaign.findUniqueOrThrow({
+          where: { id: c },
+        });
+        if (row.status === 'sent') break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await (resumed as Promise<unknown> | null);
+      const row = await prisma.emailCampaign.findUniqueOrThrow({
+        where: { id: c },
+      });
+      expect(row).toMatchObject({
+        status: 'sent',
+        failedCount: 0,
+        pauseReason: null,
+        pausedUntil: null,
+      });
+      const rows = await prisma.emailRecipient.findMany({
+        where: { campaignId: c },
+      });
+      expect(rows.filter((r) => r.status === 'sent')).toHaveLength(12);
+      expect(new Set(sentTo).size).toBe(sentTo.length);
+      expect(sentTo).toHaveLength(12);
+    });
+
+    it('a repeated cursor stops the walk at once and no campaign is made', async () => {
+      process.env.VOICES_API_BASE_URL = 'https://voices.test/api/v1';
+      process.env.VOICES_INTERNAL_SERVICE_KEY = 'vk';
+      const spy = jest.spyOn(global, 'fetch').mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [{ email: `loop${D}`, firstName: null }],
+              nextCursor: 'same',
+              total: 5,
+            }),
+            { status: 200 },
+          ),
+      );
+      const t = await prisma.emailTemplate.create({
+        data: {
+          name: 'n',
+          subject: 's',
+          body: 'b',
+          createdBy: 'em03-admin',
+          brand: 'voices',
+        },
+      });
+      const before = await prisma.emailCampaign.count({
+        where: { createdBy: 'em03-admin' },
+      });
+      await expect(
+        svc.createFromMembers('voices', t.id, undefined, ADMIN),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(
+        await prisma.emailCampaign.count({
+          where: { createdBy: 'em03-admin' },
+        }),
+      ).toBe(before);
+      delete process.env.VOICES_API_BASE_URL;
+      delete process.env.VOICES_INTERNAL_SERVICE_KEY;
+    });
+
+    it('the count uses the brand it is asked for; templates with no brand are wmt only', async () => {
+      await prisma.emailSuppression.create({
+        data: { email: `ub${D}`, reason: 'unsubscribed' },
+      });
+      await prisma.waitlistRegistration.deleteMany({
+        where: { email: `ub${D}` },
+      });
+      const reg = await prisma.waitlistRegistration
+        .create({ data: { email: `ub${D}`, fullName: 'U B' } as never })
+        .catch(() => null);
+      if (reg) {
+        expect(
+          (await svc.registrantCount('all', undefined, 'wmt')).unsubscribed,
+        ).toBeGreaterThanOrEqual(1);
+        const v = await svc.registrantCount('all', undefined, 'voices');
+        const w = await svc.registrantCount('all', undefined, 'wmt');
+        expect(v.unsubscribed).toBeLessThan(w.unsubscribed);
+        await prisma.waitlistRegistration.deleteMany({
+          where: { email: `ub${D}` },
+        });
+      }
+      const vt = await prisma.emailTemplate.create({
+        data: {
+          name: 'v',
+          subject: 's',
+          body: 'b',
+          createdBy: 'em03-admin',
+          brand: 'voices',
+        },
+      });
+      const nt = await prisma.emailTemplate.create({
+        data: { name: 'n', subject: 's', body: 'b', createdBy: 'em03-admin' },
+      });
+      const none = (await svc.listTemplates()).map((x) => x.id);
+      expect(none).toContain(nt.id);
+      expect(none).not.toContain(vt.id);
+    });
+  });
+
   // ── a request without the new fields behaves as before ─────────────────────
   describe('old requests', () => {
     it('a template with no brand or button reads wmt with null button and builds a wmt campaign', async () => {

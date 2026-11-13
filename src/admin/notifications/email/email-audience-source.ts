@@ -39,6 +39,7 @@ export async function readMemberList(args: {
   let duplicates = 0;
   let total = 0;
   let cursor: string | null = null;
+  const cursors = new Set<string>();
   for (let page = 0; page < MAX_PAGES; page++) {
     const url = new URL(`${args.base}${args.path}`);
     if (cursor) url.searchParams.set('cursor', cursor);
@@ -87,6 +88,15 @@ export async function readMemberList(args: {
     cursor =
       typeof b.nextCursor === 'string' && b.nextCursor ? b.nextCursor : null;
     if (!cursor || people.length >= SOURCE_PERSON_CAP) break;
+    if (cursors.has(cursor)) {
+      // The list gave the same page marker twice: it would never end.
+      return {
+        available: false,
+        reason:
+          'The member list did not finish loading (it repeated a page). Try again later.',
+      };
+    }
+    cursors.add(cursor);
   }
   return {
     available: true,

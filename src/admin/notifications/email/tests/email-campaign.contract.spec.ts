@@ -775,7 +775,7 @@ describe('EMAIL-01 email campaigns', () => {
       expect(rows.body.data[0].error).toContain('Invalid `to` field.');
     });
 
-    it('marks a recipient failed, with no retry, when WAWU ID refuses the key (a 429 limit now pauses instead: email-limits.spec.ts)', async () => {
+    it('marks a recipient failed, with no retry, when WAWU ID refuses the key (a 429 limit now pauses instead: email-brand-delivery.spec.ts)', async () => {
       const t = await newTemplate();
       const c = await csvCampaign(t.id, `email\nkey401${DOMAIN}`);
       relayScript = [{ status: 401, message: 'Invalid service key' }];

@@ -25801,6 +25801,19 @@
         "operationId": "AdminEmailController_registrantCount",
         "parameters": [
           {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          },
+          {
             "name": "filter",
             "required": true,
             "in": "query",
@@ -25849,6 +25862,19 @@
         "operationId": "AdminEmailController_accountCount",
         "parameters": [
           {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          },
+          {
             "name": "limit",
             "required": false,
             "in": "query",
@@ -25881,6 +25907,19 @@
       "get": {
         "operationId": "AdminEmailController_voicesCount",
         "parameters": [
+          {
+            "name": "brand",
+            "required": false,
+            "in": "query",
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wmt",
+                "voices"
+              ]
+            }
+          },
           {
             "name": "limit",
             "required": false,
@@ -51973,6 +52012,14 @@
       "CreateRegistrantCampaignDto": {
         "type": "object",
         "properties": {
+          "brand": {
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "enum": [
+              "wmt",
+              "voices"
+            ],
+            "type": "string"
+          },
           "filter": {
             "default": "all",
             "enum": [
@@ -52001,6 +52048,14 @@
       "CreateMemberCampaignDto": {
         "type": "object",
         "properties": {
+          "brand": {
+            "description": "The brand of the template the list is for, so the count uses the build's skip rules.",
+            "enum": [
+              "wmt",
+              "voices"
+            ],
+            "type": "string"
+          },
           "limit": {
             "type": "number",
             "minimum": 1,

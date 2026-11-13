@@ -113,14 +113,18 @@ export class AdminEmailController {
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Get('audiences/registrants')
   registrantCount(@Query() query: RegistrantAudienceQueryDto) {
-    return this.service.registrantCount(query.filter, query.limit);
+    return this.service.registrantCount(query.filter, query.limit, query.brand);
   }
 
   /** How many WMT accounts would be emailed. `available: false` with a reason when the list cannot be read. */
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Get('audiences/accounts')
   accountCount(@Query() query: MemberAudienceQueryDto) {
-    return this.service.memberCount('accounts', 'wmt', query.limit);
+    return this.service.memberCount(
+      'accounts',
+      query.brand ?? 'wmt',
+      query.limit,
+    );
   }
 
   /**
@@ -130,7 +134,11 @@ export class AdminEmailController {
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Get('audiences/voices')
   voicesCount(@Query() query: MemberAudienceQueryDto) {
-    return this.service.memberCount('voices', 'voices', query.limit);
+    return this.service.memberCount(
+      'voices',
+      query.brand ?? 'voices',
+      query.limit,
+    );
   }
 
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
