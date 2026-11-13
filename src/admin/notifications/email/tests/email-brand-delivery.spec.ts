@@ -649,7 +649,33 @@ describe('EMAIL-03 delivery, brand, limits and audiences', () => {
       });
     });
 
-    it('accounts: reads WAWU ID, leaves out suspended people; a 404 says it is not there yet', async () => {
+    it('accounts: only WMT accounts (a Hub profile), not deleted, not suspended; a 404 says it is not there yet', async () => {
+      const ids = [
+        'em03-ok',
+        'em03-noprofile',
+        'em03-deleted',
+        'em03-cancelled',
+        'em03-sus',
+      ];
+      await prisma.userProfile.createMany({
+        data: ['em03-ok', 'em03-deleted', 'em03-cancelled', 'em03-sus'].map(
+          (wawuUserId) => ({ wawuUserId, accountType: 'user' as never }),
+        ),
+      });
+      await prisma.accountDeletion.createMany({
+        data: [
+          {
+            wawuUserId: 'em03-deleted',
+            status: 'scheduled',
+            purgeAfter: new Date(Date.now() + 86_400_000),
+          },
+          {
+            wawuUserId: 'em03-cancelled',
+            status: 'cancelled',
+            purgeAfter: new Date(Date.now() + 86_400_000),
+          },
+        ],
+      });
       await prisma.userSuspension.create({
         data: {
           wawuUserId: 'em03-sus',
@@ -659,16 +685,47 @@ describe('EMAIL-03 delivery, brand, limits and audiences', () => {
           suspendedByAdminRole: 'superadmin',
         },
       });
-      list([
-        { id: 'em03-ok', email: `acc1${D}`, firstName: 'A' },
-        { id: 'em03-sus', email: `acc2${D}`, firstName: 'B' },
-      ]);
-      expect(await svc.memberCount('accounts', 'wmt')).toEqual({
-        matching: 1,
-        willSend: 1,
-        unsubscribed: 0,
-        available: true,
-      });
+      list(ids.map((id) => ({ id, email: `${id}${D}`, firstName: 'A' })));
+      try {
+        const spy = jest.mocked(global.fetch);
+        expect(await svc.memberCount('accounts', 'wmt')).toEqual({
+          matching: 2,
+          willSend: 2,
+          unsubscribed: 0,
+          available: true,
+        });
+        const call = spy.mock.calls[0];
+        expect((call[0] as URL).toString()).toContain(
+          'http://relay.invalid/internal/mail/audience',
+        );
+        expect((call[1] as RequestInit).headers).toEqual({
+          'X-Service-Key': 'k',
+        });
+        // ok + cancelled-deletion stay; no profile, deleted and suspended are out
+        const t = await prisma.emailTemplate.create({
+          data: { name: 'n', subject: 's', body: 'b', createdBy: 'em03-admin' },
+        });
+        const c = await svc.createFromMembers(
+          'accounts',
+          t.id,
+          undefined,
+          ADMIN,
+        );
+        const rows = await prisma.emailRecipient.findMany({
+          where: { campaignId: c.id },
+        });
+        expect(rows.map((r) => r.email).sort()).toEqual([
+          `em03-cancelled${D}`,
+          `em03-ok${D}`,
+        ]);
+      } finally {
+        await prisma.accountDeletion.deleteMany({
+          where: { wawuUserId: { startsWith: 'em03-' } },
+        });
+        await prisma.userProfile.deleteMany({
+          where: { wawuUserId: { startsWith: 'em03-' } },
+        });
+      }
       jest.restoreAllMocks();
       jest
         .spyOn(global, 'fetch')

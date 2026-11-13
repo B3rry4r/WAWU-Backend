@@ -405,19 +405,37 @@ export class EmailCampaignService {
       missing: 'The list of accounts is not available from WAWU ID yet.',
     });
     if (!found.available) return found;
-    // A suspended person is not emailed (the Hub knows suspensions by account id).
+    // WAWU ID's list holds every WAWU ID account (Voices-only sign-ups too).
+    // Keep only people with a Hub profile (a WMT account), who are not
+    // deleted (an AccountDeletion row that is not cancelled: freezing,
+    // scheduled, purging or purged) and not suspended.
     const ids = found.people.flatMap((p) => (p.id ? [p.id] : []));
-    const suspended = new Set<string>();
+    const profiles = new Set<string>();
+    const out = new Set<string>();
     for (let i = 0; i < ids.length; i += 5000) {
-      const rows = await this.prisma.userSuspension.findMany({
-        where: { wawuUserId: { in: ids.slice(i, i + 5000) }, liftedAt: null },
-        select: { wawuUserId: true },
-      });
-      for (const r of rows) suspended.add(r.wawuUserId);
+      const chunk = ids.slice(i, i + 5000);
+      const [prof, del, sus] = await Promise.all([
+        this.prisma.userProfile.findMany({
+          where: { wawuUserId: { in: chunk } },
+          select: { wawuUserId: true },
+        }),
+        this.prisma.accountDeletion.findMany({
+          where: { wawuUserId: { in: chunk }, status: { not: 'cancelled' } },
+          select: { wawuUserId: true },
+        }),
+        this.prisma.userSuspension.findMany({
+          where: { wawuUserId: { in: chunk }, liftedAt: null },
+          select: { wawuUserId: true },
+        }),
+      ]);
+      for (const r of prof) profiles.add(r.wawuUserId);
+      for (const r of [...del, ...sus]) out.add(r.wawuUserId);
     }
     return {
       ...found,
-      people: found.people.filter((p) => !p.id || !suspended.has(p.id)),
+      people: found.people.filter(
+        (p) => p.id && profiles.has(p.id) && !out.has(p.id),
+      ),
     };
   }
 
