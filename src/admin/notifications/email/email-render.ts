@@ -255,9 +255,7 @@ export function renderEmail(input: EmailRenderInput): RenderedEmail {
           (safeButton ? voicesButton(safeButton.text, safeButton.url) : ''),
         unsub,
       }),
-      text: text(
-        `${VOICES_FOOTER}\nVoices by WAWU Technology Ltd, ${APP_LINKS.voices}`,
-      ),
+      text: text(`${VOICES_FOOTER}\nVoices by WAWU, ${APP_LINKS.voices}`),
     };
   }
 
@@ -332,7 +330,7 @@ ${a.bodyHtml}
 </td></tr>
 <tr><td style="padding:22px 28px 0;font-family:${FONT_BODY_VOICES};font-size:12px;line-height:19px;color:${V_MUTED};">
 ${VOICES_FOOTER}<br>
-Voices by WAWU Technology Ltd. <a href="${app}" style="color:${V_LINK};">usevoices.com</a><br>
+Voices by WAWU. <a href="${app}" style="color:${V_LINK};">usevoices.com</a><br>
 <a href="${a.unsub}" style="color:${V_MUTED};text-decoration:underline;">Unsubscribe from Voices emails</a>
 </td></tr>
 </table>

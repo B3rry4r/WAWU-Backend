@@ -40,7 +40,7 @@ describe('EMAIL-03 rendering, both looks', () => {
     expect(m.html).toContain(
       'Open https://usevoices.com or https://usevoices.com.',
     );
-    expect(m.html).toContain('Voices by WAWU Technology Ltd');
+    expect(m.html).toContain('Voices by WAWU');
     expect(m.html).toContain(`href="${UNSUB}"`);
     expect(m.html).not.toContain('who-made-this-white.png');
     expect(m.text).toContain(`Unsubscribe: ${UNSUB}`);
