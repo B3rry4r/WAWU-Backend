@@ -14981,6 +14981,97 @@
         ]
       }
     },
+    "/api/hub/admin/users": {
+      "get": {
+        "operationId": "AdminUsersController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "At least 2 characters. Matches a part of a handle (Hub), or, through WAWU\nID, a part of a name, a whole email or a whole phone in any usual form\n(`08031234567`, `+234 803 123 4567`). Never logged.",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 120,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "The list, newest first. The envelope is the usual `{ statusCode, message,\ndata: [...], pagination }` plus `contactUnavailable` beside it. Written here\n(not returned) because the shared interceptor keeps only the four paging\nfields and `src/common/**` is fenced.",
+        "tags": [
+          "AdminUsers"
+        ]
+      }
+    },
+    "/api/hub/admin/users/counts": {
+      "get": {
+        "operationId": "AdminUsersController_counts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserCountsView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminUsers"
+        ]
+      }
+    },
+    "/api/hub/admin/geo/fill-countries": {
+      "post": {
+        "operationId": "GeoFillController_fillCountries",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoFillReport"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "GeoFill"
+        ]
+      }
+    },
     "/api/hub/admin/finance/summary": {
       "get": {
         "operationId": "AdminFinanceController_summary",
@@ -70383,6 +70474,52 @@
           "creators",
           "unknown",
           "countries"
+        ]
+      },
+      "AdminUserCountsView": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "creators": {
+            "type": "number"
+          },
+          "joinedToday": {
+            "type": "number"
+          },
+          "noCountry": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "creators",
+          "joinedToday",
+          "noCountry"
+        ]
+      },
+      "GeoFillReport": {
+        "type": "object",
+        "properties": {
+          "checked": {
+            "type": "number"
+          },
+          "filled": {
+            "type": "number"
+          },
+          "alreadyChosen": {
+            "type": "number"
+          },
+          "unknown": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "checked",
+          "filled",
+          "alreadyChosen",
+          "unknown"
         ]
       },
       "AdminFinancePeriodView": {

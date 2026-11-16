@@ -116,6 +116,60 @@ export class ProfileLocationService {
   }
 
   /**
+   * The country the account's own data gives, and which it came from: the one
+   * WAWU ID holds first, else the phone's, else none. The same order `me()`
+   * applies.
+   */
+  derived(claims: IdentityGeoClaims): {
+    countryCode: string | null;
+    source: 'wawu_id' | 'phone' | null;
+  } {
+    const wawuId = this.wawuIdCountry(claims);
+    if (wawuId !== null) return { countryCode: wawuId, source: 'wawu_id' };
+    const phone = phoneCountryCode(claims.phone);
+    if (phone !== null) return { countryCode: phone, source: 'phone' };
+    return { countryCode: null, source: null };
+  }
+
+  /** People this process has already looked at once (see `noteSignedIn`). */
+  private readonly looked = new Set<string>();
+  private static readonly LOOKED_CAP = 50_000;
+
+  /**
+   * GEO-FILL (R-143): the first time this process sees a signed-in person it
+   * looks, once, at whether the Hub has a country for them, and if not
+   * records the one their token gives, exactly as `me()` does, so the
+   * dashboard counts people who never open the phone app.
+   *
+   * Never awaited by the caller and never throws: it adds nothing to the
+   * request's time, and a failure leaves the person's request untouched (the
+   * daily fill covers them). A person whose token gives no country costs no
+   * read at all.
+   */
+  noteSignedIn(wawuUserId: string, claims: IdentityGeoClaims): void {
+    if (this.looked.has(wawuUserId)) return;
+    if (this.looked.size >= ProfileLocationService.LOOKED_CAP) {
+      this.looked.clear();
+    }
+    this.looked.add(wawuUserId);
+    void this.recordIfMissing(wawuUserId, claims).catch(() => {
+      this.looked.delete(wawuUserId);
+    });
+  }
+
+  /** Records the token's country when the Hub holds none for the person. */
+  async recordIfMissing(
+    wawuUserId: string,
+    claims: IdentityGeoClaims,
+  ): Promise<boolean> {
+    if (this.derived(claims).countryCode === null) return false;
+    const place = await this.stored(wawuUserId);
+    if (place.countryCode !== null) return false;
+    await this.me(wawuUserId, claims);
+    return true;
+  }
+
+  /**
    * The signed-in person's place. Where they have not chosen a country, the
    * one WAWU ID holds (else their phone's) is recorded first, so the
    * dashboard counts everyone who opens the app and not only those who edit
