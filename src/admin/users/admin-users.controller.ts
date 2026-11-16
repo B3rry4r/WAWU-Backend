@@ -25,7 +25,7 @@ export class AdminUsersController {
 
   /**
    * The list, newest first. The envelope is the usual `{ statusCode, message,
-   * data: [...], pagination }` plus `contactUnavailable` beside it. Written here
+   * data: [...], pagination }` plus `contactUnavailable` and `truncated` beside it. Written here
    * (not returned) because the shared interceptor keeps only the four paging
    * fields and `src/common/**` is fenced.
    */
@@ -36,7 +36,14 @@ export class AdminUsersController {
     @Res() res: Response,
   ): Promise<void> {
     const page = await this.service.list(query);
-    const { items, currentPage, perPage, total, contactUnavailable } = page;
+    const {
+      items,
+      currentPage,
+      perPage,
+      total,
+      contactUnavailable,
+      truncated,
+    } = page;
     res.status(200).json({
       statusCode: 200,
       message: 'OK',
@@ -48,6 +55,7 @@ export class AdminUsersController {
         total,
       },
       contactUnavailable,
+      truncated,
     });
   }
 

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   GeoService,
@@ -138,7 +139,8 @@ export class ProfileLocationService {
   /**
    * GEO-FILL (R-143): the first time this process sees a signed-in person it
    * looks, once, at whether the Hub has a country for them, and if not
-   * records the one their token gives, exactly as `me()` does, so the
+   * records the one their token gives (same country and source `me()` would,
+   * written only where none is held), so the
    * dashboard counts people who never open the phone app.
    *
    * Never awaited by the caller and never throws: it adds nothing to the
@@ -165,8 +167,48 @@ export class ProfileLocationService {
     if (this.derived(claims).countryCode === null) return false;
     const place = await this.stored(wawuUserId);
     if (place.countryCode !== null) return false;
-    await this.me(wawuUserId, claims);
-    return true;
+    const { countryCode, source } = this.derived(claims);
+    if (countryCode === null || source === null) return false;
+    return this.writeWhereNone(wawuUserId, countryCode, source);
+  }
+
+  /**
+   * F1 (verifier, R-143): writes the country only while the row still has
+   * none, so a country the person chose a moment ago is never replaced. An
+   * `updateMany ... countryCode IS NULL` first (a region saved under no
+   * country goes with it, as `me()` does), else an insert that a primary-key
+   * clash turns into "someone got there first". True when this call wrote.
+   * `me()` keeps its own upsert and is not routed through here.
+   */
+  private async writeWhereNone(
+    wawuUserId: string,
+    countryCode: string,
+    source: 'wawu_id' | 'phone',
+  ): Promise<boolean> {
+    const updated = await this.prisma.profileDetails.updateMany({
+      where: { wawuUserId, countryCode: null },
+      data: {
+        countryCode,
+        countrySource: source,
+        regionCode: null,
+        regionName: null,
+      },
+    });
+    if (updated.count > 0) return true;
+    try {
+      await this.prisma.profileDetails.create({
+        data: { wawuUserId, countryCode, countrySource: source },
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   /**

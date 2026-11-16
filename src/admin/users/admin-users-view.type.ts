@@ -36,6 +36,8 @@ export interface AdminUserListPage {
   total: number;
   /** True when names and contacts could not be loaded from WAWU ID. */
   contactUnavailable: boolean;
+  /** True when a search's WAWU ID matches were cut at the 500 newest, so `total` is not the whole answer. */
+  truncated: boolean;
 }
 
 export interface AdminUserCountsView {

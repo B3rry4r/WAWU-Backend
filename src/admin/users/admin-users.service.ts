@@ -30,6 +30,10 @@ const DAY_MS = 86_400_000;
 /** A search walks WAWU ID's matches at most this many pages (of 100). A name search rarely needs one. */
 const SEARCH_PAGES = 5;
 
+/** F2: `%`, `_` and a backslash in a search are the characters themselves, not LIKE wildcards. */
+export const escapeLike = (q: string): string =>
+  q.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 /** Start of the Lagos day that `now` falls in. */
 export function lagosDayStart(now: Date): Date {
   const local = now.getTime() + LAGOS_OFFSET_MS;
@@ -87,6 +91,7 @@ export class AdminUsersService {
   async list(query: AdminUsersQueryDto): Promise<AdminUserListPage> {
     const q = query.q?.trim();
     let contactUnavailable = false;
+    let truncated = false;
     let where: object = {};
 
     if (q) {
@@ -101,10 +106,12 @@ export class AdminUsersService {
         for (const u of found.items) matchedIds.push(u.id);
         cursor = found.nextCursor;
         if (cursor === null) break;
+        // F3: pages ran out with more matches left in WAWU ID.
+        if (i === SEARCH_PAGES - 1) truncated = true;
       }
       where = {
         OR: [
-          { handle: { contains: q, mode: 'insensitive' as const } },
+          { handle: { contains: escapeLike(q), mode: 'insensitive' as const } },
           ...(matchedIds.length > 0
             ? [{ wawuUserId: { in: matchedIds } }]
             : []),
@@ -179,6 +186,7 @@ export class AdminUsersService {
       perPage: query.perPage,
       total,
       contactUnavailable,
+      truncated,
     };
   }
 

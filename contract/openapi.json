@@ -15024,7 +15024,7 @@
             "description": ""
           }
         },
-        "summary": "The list, newest first. The envelope is the usual `{ statusCode, message,\ndata: [...], pagination }` plus `contactUnavailable` beside it. Written here\n(not returned) because the shared interceptor keeps only the four paging\nfields and `src/common/**` is fenced.",
+        "summary": "The list, newest first. The envelope is the usual `{ statusCode, message,\ndata: [...], pagination }` plus `contactUnavailable` and `truncated` beside it. Written here\n(not returned) because the shared interceptor keeps only the four paging\nfields and `src/common/**` is fenced.",
         "tags": [
           "AdminUsers"
         ]
