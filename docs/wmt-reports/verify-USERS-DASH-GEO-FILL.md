@@ -1,4 +1,4 @@
-VERDICT: fix
+VERDICT: merge
 
 Final report, 16 Nov 2026. Branch `wmt/USERS-DASH` d2740153 (merge-base with `origin/main` is c3fd7971, checked). I changed no product code and no existing test. My attack specs and scripts are not committed. Nothing below touched a live service or provider: a local Postgres 16, the repo's mock WAWU ID, and a small fake WAWU ID of my own for `internal/users/list`.
 
@@ -104,3 +104,29 @@ The same person called 300 times (the steady state) is the same: main p50 3.76-3
 - `/users/me` timing against a remote database; mine is local, where the process and the database share one machine.
 - The full jest suite in three shards, and `test:netns`.
 - Behaviour with the 224 real accounts; I used 2,500 to 5,000 test accounts.
+
+## Re-check of fix round 1
+
+16 Nov 2026, `wmt/USERS-DASH` 9bfc5a58 (fix commit 6b533867). The diff against d2740153 is 7 files: `contract/openapi.json` (2 lines), `admin-users-view.type.ts`, `admin-users.controller.ts`, `admin-users.service.ts`, `profile-location.service.ts`, and two new specs. Nothing else moved. Verdict is now merge: F1, F2 and F3 are closed, and I found no new fault.
+
+**F1 closed.** `recordIfMissing` now writes with `updateMany ... countryCode IS NULL`, else an insert that a primary-key clash (P2002) turns into "someone got there first". It no longer calls `me()`; `me()` is untouched. Attacks (local, real database):
+- First-ever row: written `NG / wawu_id`.
+- Row with a null country and a saved region: written, region dropped (as the fill does).
+- Chosen country already there: no write, `KE` kept.
+- The gap, row exists: the read made to return a stale "none" while `KE / profile` (with region `NA`) already existed: no write, `KE / profile / NA` kept.
+- The gap, first-ever row: the choice created between the read and the write: the insert hit P2002, answered false, `KE / profile` kept.
+- 40 rounds of the recording and a real choice at the same moment on a new person: all 40 ended on the choice (`KE`); 40 more rounds with 3 recordings against one choice: none overwritten.
+- A failing write: no throw, no unhandled rejection.
+- `GET /users/me`: same 7 people as before, answers byte for byte the same as `origin/main` once the row-creation time and the token's issue/expiry times are set aside. New-person timing as in F5 (p50 4.0 ms, p95 6.9 ms against main 2.7 / 3.6-4.2), same-person calls unchanged (p50 3.7, p95 5.3). `GET /me/location` is the same code (`me()` unchanged); the builder's specs and the affected suites pass.
+
+**F2 closed.** Handles `zz8ab_cd`, `zz8abXcd`, `zz8a%b`, `zz8aXXb`, `zz8back\slash`, `zz8backXslash`: `b_c` finds only `zz8ab_cd`; `a%b` only `zz8a%b`; `k\s` only `zz8back\slash`; `%%`, `__` and two backslashes find nothing; a quote string finds nothing. Plain `zz8ab` and `ZZ8AB` (upper case) still find both `zz8ab...` handles. The other search behaviour is unchanged.
+
+**F3 closed.** `truncated` is in the list answer beside `contactUnavailable`, always present. WAWU ID matches of 0, 99, 100, 499 and 500: `truncated: false`; 501 and 600: `truncated: true`, `total` 500. WAWU ID down: `truncated: false`, `contactUnavailable: true`. A list with no `q`: `truncated: false`. `npm run contract:build` leaves no diff (the tree shows only my two symlinks).
+
+**Nothing else moved.**
+- `npx tsc --noEmit`: exit 0.
+- Gates: 0 fail, 144 warn, 88 accepted (same as before); `check_baseline.py` passed.
+- Affected suites (`src/admin/users`, `src/geo-fill`, `src/geo`, `src/user-profile`, `src/admin/creators`, `src/admin/geo`): 24 suites, 383 tests, all passed.
+- Protected routes (`scripts/protected-routes/run.sh origin/wmt/USERS-DASH`, lock from main): all 244 required tests passed.
+
+F4 (offset paging repeats), F5 (first call a few ms slower), and F6 (15 minute lock) are as before and low; none blocks the merge. Not re-run: the full suite and the netns test (CI runs them).
