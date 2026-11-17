@@ -101,3 +101,34 @@ Confirmation phrase: SWAP ADS: END 2 CAMPAIGNS 2beff277
 Dry run only. To swap: add --apply --confirm "<the phrase above>".
 ```
 `--weight 0` printed `CANNOT APPLY: --weight must be a whole number from 1 to 100.` The stack is down.
+
+## Fix round 2
+
+Branch `wmt/ADS-SWAP-2` from origin/main 2960831 (it holds `scripts/ops/ads-swap-1116.ts`). Head sha: the last commit on the branch (this section is part of it). Source diff against origin/main without the spec: `scripts/ops/ads-swap-1116.ts`, 45 insertions and 20 deletions. Changed only that file, its spec and this report; the workflow, pictures, ads code and fenced files are untouched. `contract/openapi.json` did not change after `npm run contract:build` (0 unmatched routes; nothing to commit).
+
+Changes in `scripts/ops/ads-swap-1116.ts`:
+1. Source (`sourceOf`, ~248): the first advert ON AIR (live or scheduled) in its window that shows in Explore or Today, WHATEVER its tap, in `AD_TIE_BREAK` order; only when none is on air, the first paused one that fits. The "PAUSED" line now reads "(no live or scheduled advert is on air)".
+2. Tap copied (`takeFrom`, ~274; new `tap` field on `Taken`, 149): `link` gives link + its address + "Register now"; `none` gives `none`; `event` is not copied: `CANNOT APPLY: the campaign to copy from opens an event ... Give --link.` (315), and `--apply` refuses. No source and no `--link` still refuses, now saying "no current campaign to copy from".
+3. Creation (~515-537): a `none` card is stored as `resolveCta` leaves it: `ctaLabel` null, `ctaUrl` null, `ctaDestinationId` null. A `link` card is as before.
+4. `--link` still overrides the tap whatever the source (`tap` becomes `link`); `--ends` and `--weight` as before.
+5. Dry run wording (~425): `The new campaigns will take: a tap does nothing (shown only); end ...; weight ...; start now (copied from campaign <id>, which is live and on air).` The read-back says `no button, a tap does nothing` (617).
+6. Phrase (181): the `new|` part is now `new|<none or link>|<link>|<end>|<weight>`, so a different tap or `--link` is refused; everything from round 1 is still read again inside the transaction.
+
+Spec (17 tests pass, 4 new): the live-server case (four `none` adverts, weights 40, 30, 20, 10, landscape and portrait, same window ending 2027-01-29T05:14:58Z: all four ended, three new `none` adverts weight 40 with that end; Explore serves 1, 2, 3, Today 1, TGIF none; cards carry no `ctaLabel` or `ctaUrl`; campaign, creative and audit rows equal a twin made by `AdminAdsService.create` with `ctaDestination none` then `schedule`, apart from ids, times and the picture key; a view is counted once and repeated taps count once a day, because `ads-events.service.ts` applies one rule to every card kind and does not refuse a tap on a `none` card); `--link` over a `none` source gives `link` + "Register now"; an `event` source is refused without `--link` and accepted with it in the dry run; the phrase binds the tap (a later `--link`, or the source's tap changing between the dry run and the transaction, is refused). The earlier "no link to copy" test now uses an event source and an empty scope.
+
+Checks: `npm run build` ok (dist holds the script); ads-swap spec 17/17; `admin-ads.contract` 208/208; `npx tsc --noEmit` clean; eslint clean on both files; gates 0 fail, baseline ok; `contract:build` no change.
+
+Dry run of the built command on the local stack seeded with the four-advert case (weights 40, 30, 20, 10, all `none`, landscape and portrait):
+```
+DRY RUN (nothing is written or uploaded)
+Current campaigns (scheduled, live or paused): 4
+1. b0000001-... | Old Brand 1 | Old headline 1 | live | explore_slider (shows in explore_slider, today_slot, tgif_card)
+   window ... to 2027-01-29T05:14:58.000Z; weight 40; a tap: nothing (shown only); pictures: landscape ..., portrait ...
+2. b0000002-... weight 30 ...   3. b0000003-... weight 20 ...   4. b0000004-... weight 10 ... (all live, none)
+The new campaigns will take: a tap does nothing (shown only); end 2027-01-29T05:14:58.000Z; weight 40; start now (copied from campaign b0000001-0000-4000-8000-000000000000, which is live and on air).
+   new 1. WAWU with SOUEAST | Drive. | ... new 2. WAWU | 5 DJI Osmo Pocket 3. | ... new 3. WAWU with VERGIO | 4 Gaming Systems. | ...
+Will end: 4
+Confirmation phrase: SWAP ADS: END 4 CAMPAIGNS 0fc216e2
+Dry run only. To swap: add --apply --confirm "<the phrase above>".
+```
+(Long lines shortened here; the full output printed no `CANNOT APPLY`.)
