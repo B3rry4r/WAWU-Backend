@@ -15,9 +15,10 @@
  * The three new campaigns have fixed ids (NEW_ADS below), so a second run finds them and does nothing.
  *
  * Link, end and weight of the new ones are COPIED from the campaign being replaced: the first current campaign, in
- * AD_TIE_BREAK order, that is inside its window, shows in the landscape places and opens a link. startsAt is now.
+ * AD_TIE_BREAK order, that is ON AIR (live or scheduled), inside its window, shows in the landscape places and opens a link; only when there is none, a paused one. startsAt is now.
  *   --link <https url>   use this link instead (the rule the admin API uses for ctaUrl: checkCtaUrl)
  *   --ends <UTC instant> use this end instead, like 2026-12-31T23:59:59Z (must be in the future)
+ *   --weight <n>         use this weight instead (a whole number, the range the admin API allows)
  * With no campaign to copy a link from and no --link, or an end that is not in the future and no --ends, the dry run says
  * so and --apply refuses, writing nothing.
  *
@@ -34,9 +35,13 @@
  * no AdDailyTotal.
  *
  * Inside the transaction the AdCampaign table is locked against writes (SHARE ROW EXCLUSIVE; reads and serving go on), the
- * campaigns to end are locked FOR UPDATE, and the phrase is recomputed: if an ad was booked, ended or changed since the dry
- * run, it refuses and writes nothing. Prints no email, phone or name of a person: ads hold none, and a picture's address is
+ * campaigns to end are locked FOR UPDATE, and the phrase is recomputed from a fresh read: it binds every current advert (id, status,
+ * weight, window, place, tap, link), the advert the values are copied from, and the link, end and weight the new ones will take after the
+ * flags. A booking, end, pause, resume or edit since the dry run, or other flags, refuses and writes nothing. Prints no email, phone or name of a person: ads hold none, and a picture's address is
  * printed as the last part of its object key only.
+ *
+ * On record: a later run ends an advert booked after the three, behind a new phrase; and pictures already uploaded stay in the
+ * bucket, harmless, when a race is lost or the transaction fails.
  *
  *   cd /srv/wawu/hub-api
  *   set -a; . /etc/wawu/hub-api.env; set +a
@@ -60,7 +65,7 @@ import {
   isHubArtworkShape,
   parseUtcInstant,
 } from '../../src/admin/ads/ad-text';
-import { AD_WEIGHT_MIN } from '../../src/ads/ads-limits';
+import { AD_WEIGHT_MAX, AD_WEIGHT_MIN } from '../../src/ads/ads-limits';
 import { showsIn } from '../../src/ads/ads-pictures';
 import {
   AD_TIE_BREAK,
@@ -132,13 +137,47 @@ export interface Options {
   confirm?: string;
   link?: string;
   ends?: string;
+  weight?: string;
 }
 
-export const phraseFor = (ids: string[]) =>
-  `SWAP ADS: END ${ids.length} CAMPAIGNS ${createHash('sha256')
-    .update([...ids].sort().join(','))
-    .digest('hex')
-    .slice(0, 8)}`;
+/** What the new adverts will take, and where it came from. */
+export interface Taken {
+  link: string | null;
+  endsAt: Date | null;
+  weight: number;
+  sourceId: string | null;
+  from: string;
+  problems: string[];
+}
+
+/**
+ * The phrase binds everything the lead read in the dry run: for every current advert, in id order, its id, status, weight,
+ * window, place, tap and link; the id the values are copied from; and the link, end and weight the new ones take after the
+ * flags. `taken` is null when the three already exist (nothing is created).
+ */
+export function phraseFor(rows: Row[], taken: Taken | null): string {
+  const text = [
+    ...[...rows]
+      .sort((x, y) => (x.id < y.id ? -1 : 1))
+      .map((r) =>
+        [
+          r.id,
+          r.status,
+          r.weight,
+          iso(r.startsAt),
+          iso(r.endsAt),
+          r.placement,
+          r.creative?.ctaDestination ?? 'none',
+          r.creative?.ctaUrl ?? '',
+        ].join('|'),
+      ),
+    `source|${taken?.sourceId ?? 'none'}`,
+    taken
+      ? `new|${taken.link ?? ''}|${taken.endsAt ? iso(taken.endsAt) : ''}|${taken.weight}`
+      : 'new|none',
+  ].join('\n');
+  return `SWAP ADS: END ${rows.length} CAMPAIGNS ${createHash('sha256').update(text).digest('hex').slice(0, 8)}`;
+}
 
 type Db = Pick<
   Prisma.TransactionClient,
@@ -197,33 +236,39 @@ function describe(r: Row, i: number): string[] {
   ];
 }
 
-/** The first current campaign, in AD_TIE_BREAK order, that is in its window, shows in the landscape places and opens a link. */
+/**
+ * The advert the values are copied from: the first one ON AIR (live or scheduled), in AD_TIE_BREAK order, that is in its window,
+ * shows in the landscape places and opens a link. Only when there is none, the first paused one that fits.
+ */
 function sourceOf(rows: Row[], now: Date): Row | null {
-  for (const r of rows) {
+  const fits = (r: Row) => {
     const c = r.creative;
-    if (!c || c.ctaDestination !== 'link' || !c.ctaUrl) continue;
-    if (r.startsAt > now || r.endsAt <= now) continue;
+    if (!c || c.ctaDestination !== 'link' || !c.ctaUrl) return false;
+    if (r.startsAt > now || r.endsAt <= now) return false;
     const places = showsIn({ placement: r.placement, creative: c });
-    if (places.includes('explore_slider') || places.includes('today_slot'))
-      return r;
-  }
-  return null;
+    return places.includes('explore_slider') || places.includes('today_slot');
+  };
+  return (
+    rows.find((r) => r.status !== 'paused' && fits(r)) ??
+    rows.find((r) => r.status === 'paused' && fits(r)) ??
+    null
+  );
 }
 
-interface Taken {
-  link: string | null;
-  endsAt: Date | null;
-  weight: number;
-  from: string;
-  problems: string[];
+/** The weight rule the admin API uses (a whole number from AD_WEIGHT_MIN to AD_WEIGHT_MAX), or null. */
+function parseWeight(raw: string): number | null {
+  if (!/^\d{1,3}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= AD_WEIGHT_MIN && n <= AD_WEIGHT_MAX ? n : null;
 }
 
+/** Works out the link, end and weight the new adverts take, from THIS read of the current adverts and the flags. */
 function takeFrom(rows: Row[], opts: Options, now: Date): Taken {
   const src = sourceOf(rows, now);
   const problems: string[] = [];
   let link = src?.creative?.ctaUrl ?? null;
   let endsAt = src ? src.endsAt : null;
-  const weight = src ? src.weight : AD_WEIGHT_MIN;
+  let weight = src ? src.weight : AD_WEIGHT_MIN;
   if (opts.link !== undefined) {
     const checked = checkCtaUrl(opts.link);
     if (checked.ok) link = checked.value;
@@ -240,6 +285,14 @@ function takeFrom(rows: Row[], opts: Options, now: Date): Taken {
       );
     else endsAt = parsed;
   }
+  if (opts.weight !== undefined) {
+    const w = parseWeight(opts.weight);
+    if (w === null)
+      problems.push(
+        `--weight must be a whole number from ${AD_WEIGHT_MIN} to ${AD_WEIGHT_MAX}.`,
+      );
+    else weight = w;
+  }
   if (link === null && opts.link === undefined)
     problems.push(
       'there is no current campaign to copy a link from (in its window, shown in Explore or Today, opening a link) and no --link was given.',
@@ -252,13 +305,17 @@ function takeFrom(rows: Row[], opts: Options, now: Date): Taken {
     problems.push(
       `the end to use (${iso(endsAt)}) is not in the future. Give --ends.`,
     );
+  const how = !src
+    ? 'no campaign to copy from; weight is the minimum unless --weight is given'
+    : src.status === 'paused'
+      ? `copied from campaign ${src.id}, which is PAUSED (no live or scheduled advert had a link to copy)`
+      : `copied from campaign ${src.id}, which is ${src.status === 'live' ? 'live' : 'scheduled'} and on air`;
   return {
     link,
     endsAt,
     weight,
-    from: src
-      ? `copied from campaign ${src.id}`
-      : 'no campaign to copy from; weight is the minimum',
+    sourceId: src?.id ?? null,
+    from: how,
     problems,
   };
 }
@@ -287,6 +344,15 @@ async function readPictures(root: string): Promise<Buffer[]> {
   return out;
 }
 
+/** The error's class name and its code if it has one: never its message, which can hold a file path and source text. */
+function errorWords(e: unknown): string {
+  const name = e instanceof Error ? e.constructor.name : typeof e;
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === 'string' || typeof code === 'number'
+    ? `${name} ${code}`
+    : name;
+}
+
 /** Thrown inside the transaction to stop it with a plain reason. */
 class Refused extends Error {}
 
@@ -312,8 +378,6 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
     where: { id: { in: NEW_ADS.map((n) => n.id) } },
     select: { id: true },
   });
-  const ids = rows.map((r) => r.id);
-  const phrase = phraseFor(ids);
 
   out(opts.apply ? 'APPLY' : 'DRY RUN (nothing is written or uploaded)');
   out(`Current campaigns (scheduled, live or paused): ${rows.length}`);
@@ -331,9 +395,9 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
     return 0;
   }
 
-  let taken: Taken | null = null;
-  if (creating) {
-    taken = takeFrom(rows, opts, now);
+  const taken: Taken | null = creating ? takeFrom(rows, opts, now) : null;
+  const phrase = phraseFor(rows, taken);
+  if (taken) {
     out(
       `The new campaigns will take: link ${taken.link ?? 'NONE'}; end ${taken.endsAt ? iso(taken.endsAt) : 'NONE'}; weight ${taken.weight}; start now (${taken.from}).`,
     );
@@ -381,7 +445,7 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
       }
     } catch (e) {
       out(
-        `FAILED uploading a picture: ${(e as Error).message.slice(0, 200)}. ${urls.length} picture(s) already uploaded are left in the bucket and are harmless. The database was not touched.`,
+        `FAILED: a picture could not be uploaded (${errorWords(e)}). ${urls.length} picture(s) already uploaded are left in the bucket and are harmless. The database was not touched.`,
       );
       return 2;
     }
@@ -393,17 +457,18 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
       async (tx) => {
         await tx.$executeRaw`LOCK TABLE "AdCampaign" IN SHARE ROW EXCLUSIVE MODE`;
         const nowTx = new Date();
+        const ids = rows.map((r) => r.id);
         if (ids.length > 0)
           await tx.$queryRaw`SELECT "id" FROM "AdCampaign" WHERE "id" IN (${Prisma.join(ids)}) FOR UPDATE`;
+        // Read again under the lock; the source and the values the new ones take are worked out from THIS read.
         const again = await currentCampaigns(tx, deps.onlyIds);
-        if (phraseFor(again.map((r) => r.id)) !== phrase)
+        const takenNow = creating ? takeFrom(again, opts, nowTx) : null;
+        if (phraseFor(again, takenNow) !== phrase)
           throw new Refused(
-            'the current campaigns changed since the dry run (an ad was booked, ended or changed). Run the dry run again.',
+            'what the dry run showed has changed (an advert was booked, ended, paused, resumed or edited). Run the dry run again.',
           );
-        if (creating && taken && taken.endsAt && taken.endsAt <= nowTx)
-          throw new Refused(
-            'the end to use is no longer in the future. Give --ends.',
-          );
+        if (takenNow && takenNow.problems.length > 0)
+          throw new Refused(takenNow.problems.join(' '));
         for (const r of again) {
           const claimed = await tx.adCampaign.updateMany({
             where: { id: r.id, status: r.status },
@@ -422,7 +487,8 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
             },
           });
         }
-        if (!creating || !taken || !taken.link || !taken.endsAt) return;
+        if (!creating || !takenNow || !takenNow.link || !takenNow.endsAt)
+          return;
         const base = nowTx.getTime();
         for (let i = 0; i < NEW_ADS.length; i++) {
           const n = NEW_ADS[i];
@@ -433,8 +499,8 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
               placement: derivedPlacement(urls[i]),
               status: 'draft',
               startsAt: nowTx,
-              endsAt: taken.endsAt,
-              weight: taken.weight,
+              endsAt: takenNow.endsAt,
+              weight: takenNow.weight,
               createdAt: new Date(base + i),
               creative: {
                 create: {
@@ -443,7 +509,7 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
                   ctaLabel: CTA_LABEL,
                   ctaDestination: 'link',
                   ctaDestinationId: null,
-                  ctaUrl: taken.link,
+                  ctaUrl: takenNow.link,
                   artworkUrl: null,
                   artworkLandscapeUrl: urls[i],
                   artworkPortraitUrl: null,
@@ -495,7 +561,7 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
       return 1;
     }
     out(
-      `FAILED: ${(e as Error).message.slice(0, 200)}. The transaction was rolled back; nothing was changed.${note}`,
+      `FAILED: the swap could not be written (${errorWords(e)}). The transaction was rolled back; nothing was changed.${note}`,
     );
     return 2;
   }
@@ -533,9 +599,12 @@ async function readBack(deps: Deps, created: boolean): Promise<void> {
   };
   const at = new Date();
   for (const place of PLACES) {
-    const served = await servableCampaigns(serving, NO_VIEWER, at, {
-      placement: place,
-    });
+    const mine = deps.onlyIds
+      ? new Set([...deps.onlyIds, ...NEW_ADS.map((n) => n.id)])
+      : null;
+    const served = (
+      await servableCampaigns(serving, NO_VIEWER, at, { placement: place })
+    ).filter((c) => !mine || mine.has(c.id));
     out(
       `Served now in ${place}: ${served.length}${served.length > 0 ? ` (first: ${served[0].creative.headline})` : ''}`,
     );
@@ -543,7 +612,7 @@ async function readBack(deps: Deps, created: boolean): Promise<void> {
 }
 
 export function parseArgs(argv: string[]): Options | string {
-  const withValue = ['--confirm', '--link', '--ends'];
+  const withValue = ['--confirm', '--link', '--ends', '--weight'];
   const known = ['--apply', ...withValue];
   const unknown = argv.filter(
     (a, i) =>
@@ -558,8 +627,8 @@ export function parseArgs(argv: string[]): Options | string {
     if (i < 0) continue;
     const v = argv[i + 1];
     if (v === undefined || v.startsWith('--'))
-      return 'usage: [--apply --confirm "<phrase>"] [--link <https url>] [--ends <UTC time>]';
-    opts[flag.slice(2) as 'confirm' | 'link' | 'ends'] = v;
+      return 'usage: [--apply --confirm "<phrase>"] [--link <https url>] [--ends <UTC time>] [--weight <n>]';
+    opts[flag.slice(2) as 'confirm' | 'link' | 'ends' | 'weight'] = v;
   }
   return opts;
 }
@@ -601,7 +670,9 @@ if (require.main === module) {
   main().then(
     (code) => process.exit(code),
     (e) => {
-      console.error(`FAILED: ${(e as Error).message}`);
+      console.error(
+        `FAILED: the command could not finish (${errorWords(e)}). Nothing was changed.`,
+      );
       process.exit(2);
     },
   );

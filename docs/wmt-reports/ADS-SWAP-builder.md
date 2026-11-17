@@ -73,3 +73,31 @@ Dry run only. To swap: add --apply --confirm "<the phrase above>".
 - The post-apply "served now" count uses a no-viewer, nobody-blocked stand-in for the block list (it is only read for old `event` cards, and none can be live after the swap).
 - I started Postgres and set its local test password in this sandbox to bring the stack up; no repo change. Once I ran bare `npx jest --runInBand --forceExit <path>` (the same flags as the script) to list test names.
 - The checker should confirm the deploy rsync carries `scripts/ops/ads-1116/*.png` (it excludes only `.git`, `node_modules`, `dist`, `dist-seed`, `generated`, `.env`).
+
+## Fix round 1
+
+Source diff without the spec: `scripts/ops/ads-swap-1116.ts` only, 122 insertions and 51 deletions. No other source file changed; no new `export` in the ads code (the weight rule is the DTO's own `AD_WEIGHT_MIN` and `AD_WEIGHT_MAX` from `src/ads/ads-limits.ts`, already exported). Head sha: the last commit on `wmt/ADS-SWAP` (this section is part of it).
+
+- **M1** `scripts/ops/ads-swap-1116.ts` `phraseFor` (line 158), used at the dry run and again in the transaction (~465). The phrase hashes, for every current advert in id order, `id|status|weight|startsAt|endsAt|placement|ctaDestination|ctaUrl`, then `source|<source id or none>`, then `new|<link>|<end>|<weight>` (the values the three take after the flags; `new|none` when the three already exist). Text shape: `SWAP ADS: END <n> CAMPAIGNS <8 hex>`. In the transaction, after the lock, the adverts are read again and the source and the taken values are worked out from that read (`takeFrom(again, opts, nowTx)`), never from the earlier one; any difference refuses with "what the dry run showed has changed (an advert was booked, ended, paused, resumed or edited)". Problems found in that re-read (a bad end, say) refuse too. Specs: paused between; weight, ctaUrl and endsAt edited between (each restored after); same phrase with a different `--weight`, `--link` or `--ends` (refused before any upload); a booking between (existing test).
+- **L1** `sourceOf` (243): first ON AIR (live or scheduled) advert in `AD_TIE_BREAK` order that is in its window, landscape and `link`; only if none, the first paused one that fits. The line reads `copied from campaign <id>, which is live and on air` (or `scheduled and on air`, or `which is PAUSED (no live or scheduled advert had a link to copy)`). `--weight <n>`: `parseWeight` (259), a whole number from `AD_WEIGHT_MIN` to `AD_WEIGHT_MAX`, as the admin DTO checks it; flag parsing at 615. Specs: a heavier paused advert (weight 9) no longer beats the live one (7); with only a paused one the line says PAUSED; `--weight` 0, 101, x, 2.5, -1 and empty are refused, 12 is shown.
+- **L4** `errorWords` (348): a failure prints one sentence, the error's class name and its code if it has one, and that the database was not touched or the transaction was rolled back. No message text, no path. The upload failure and the top-level handler use it too. Spec: a failing upload carrying a path and SQL text in its message prints only `(Error P2002)`. (That one test gives the command a storage whose call fails, to provoke the failure; every other test uses the real service.)
+- **L5** the read-back counts only the command's own scope when the test hook `onlyIds` is set (line ~607); the spec now seeds a live advert outside that scope before the apply and still sees `Served now in explore_slider: 3`.
+- **L2 and L3**: left as built; one line of the header comment (line 43) records both.
+
+Results: `npm run test:contract -- src/admin/ads/tests/ads-swap-1116` 13 passed (7 before, 6 new); `admin-ads.contract` 208 passed (it needs a database without extra live adverts; the first run failed 4 only because my seeded demo adverts were in it, and passed after I removed them); `npx tsc --noEmit` clean; eslint clean on both files; gates 0 fail, baseline ok.
+
+Fresh dry run (built `dist`, stack database; two current adverts: live weight 5 and a paused one of weight 9, both with links):
+```
+DRY RUN (nothing is written or uploaded)
+Current campaigns (scheduled, live or paused): 2
+1. a0000000-0000-4000-8000-000000000002 | Old Brand Two | Old headline two | paused | explore_slider (shows in explore_slider, today_slot)
+   window 2026-11-14T00:27:38.867Z to 2026-11-27T00:27:38.867Z; weight 9; a tap: link https://example.com/old-two; pictures: landscape 22222222-2222-4222-8222-222222222222.png
+2. a0000000-0000-4000-8000-000000000001 | Old Brand One | Old headline one | live | explore_slider (shows in explore_slider, today_slot)
+   window 2026-11-14T00:27:38.867Z to 2026-12-07T00:27:38.867Z; weight 5; a tap: link https://example.com/old-one; pictures: landscape 11111111-1111-4111-8111-111111111111.png
+The new campaigns will take: link https://example.com/old-one; end 2026-12-07T00:27:38.867Z; weight 5; start now (copied from campaign a0000000-0000-4000-8000-000000000001, which is live and on air).
+   new 1. ... new 3. (the three, as before)
+Will end: 2
+Confirmation phrase: SWAP ADS: END 2 CAMPAIGNS 2beff277
+Dry run only. To swap: add --apply --confirm "<the phrase above>".
+```
+`--weight 0` printed `CANNOT APPLY: --weight must be a whole number from 1 to 100.` The stack is down.

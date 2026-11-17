@@ -6,7 +6,6 @@ import { Test } from '@nestjs/testing';
 import {
   adsSwap,
   parseArgs,
-  phraseFor,
   AUDIT_ADMIN,
   CTA_LABEL,
   NEW_ADS,
@@ -242,9 +241,8 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
       await prisma.adCampaign.findUniqueOrThrow({ where: { id: ids.live } })
     ).endsAt.toISOString();
     expect(t).toContain(
-      `link ${LINK}/live; end ${liveEnd}; weight 7; start now (copied from campaign ${ids.live})`,
+      `link ${LINK}/live; end ${liveEnd}; weight 7; start now (copied from campaign ${ids.live}, which is live and on air)`,
     );
-    expect(phrase()).toBe(phraseFor([ids.live, ids.sched, ids.paused]));
     expect(phrase()).toMatch(/^SWAP ADS: END 3 CAMPAIGNS [0-9a-f]{8}$/);
     // no signed picture address, no person
     expect(t).not.toMatch(/X-Amz|@/);
@@ -329,7 +327,7 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
       },
     );
     expect(code).toBe(1);
-    expect(text()).toContain('the current campaigns changed since the dry run');
+    expect(text()).toContain('has changed');
     expect(text()).toContain('left in the bucket and are harmless');
     expect(await statuses(['live', 'sched', 'paused'])).toEqual({
       live: 'live',
@@ -351,7 +349,186 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
     onlyIds = onlyIds.filter((i) => i !== ids.late);
   });
 
+  /** An apply whose dry run is made first and whose world is changed by `mutate` just before the transaction. */
+  async function staleBetween(
+    mutate: () => Promise<void>,
+    restore: () => Promise<void>,
+  ) {
+    await run();
+    const p = phrase();
+    const before = await counts();
+    const code = await run(
+      { apply: true, confirm: p },
+      { beforeTransaction: mutate },
+    );
+    const refusal = text();
+    await restore();
+    expect(code).toBe(1);
+    expect(refusal).toContain('has changed');
+    expect(
+      await statuses(['live', 'sched', 'paused', 'draft', 'ended']),
+    ).toEqual({
+      live: 'live',
+      sched: 'scheduled',
+      paused: 'paused',
+      draft: 'draft',
+      ended: 'ended',
+    });
+    const after = await counts();
+    expect(after.campaigns).toBe(before.campaigns);
+    expect(after.audits).toBe(before.audits);
+    expect(
+      await prisma.adCampaign.count({
+        where: { id: { in: NEW_ADS.map((n) => n.id) } },
+      }),
+    ).toBe(0);
+  }
+
+  it('refuses when an advert is paused between the dry run and the apply (then resumed after)', async () => {
+    await staleBetween(
+      async () => {
+        await prisma.adCampaign.update({
+          where: { id: ids.live },
+          data: { status: 'paused' },
+        });
+      },
+      async () => {
+        await prisma.adCampaign.update({
+          where: { id: ids.live },
+          data: { status: 'live' },
+        });
+      },
+    );
+  });
+
+  it('refuses when weight, link or end of an advert is edited between the dry run and the apply', async () => {
+    const row = await prisma.adCampaign.findUniqueOrThrow({
+      where: { id: ids.live },
+    });
+    await staleBetween(
+      async () => {
+        await prisma.adCampaign.update({
+          where: { id: ids.live },
+          data: { weight: 8 },
+        });
+      },
+      async () => {
+        await prisma.adCampaign.update({
+          where: { id: ids.live },
+          data: { weight: 7 },
+        });
+      },
+    );
+    await staleBetween(
+      async () => {
+        await prisma.adCreative.update({
+          where: { campaignId: ids.live },
+          data: { ctaUrl: `${LINK}/CHANGED` },
+        });
+      },
+      async () => {
+        await prisma.adCreative.update({
+          where: { campaignId: ids.live },
+          data: { ctaUrl: `${LINK}/live` },
+        });
+      },
+    );
+    await staleBetween(
+      async () => {
+        await prisma.adCampaign.update({
+          where: { id: ids.live },
+          data: { endsAt: new Date(row.endsAt.getTime() + DAY) },
+        });
+      },
+      async () => {
+        await prisma.adCampaign.update({
+          where: { id: ids.live },
+          data: { endsAt: row.endsAt },
+        });
+      },
+    );
+  });
+
+  it('refuses the same phrase used with a different --link, --ends or --weight, before anything is uploaded', async () => {
+    const ends1 = '2098-01-01T00:00:00Z';
+    const cases: [Partial<Options>, Partial<Options>][] = [
+      [{ weight: '9' }, { weight: '10' }],
+      [
+        { link: 'https://example.com/one' },
+        { link: 'https://example.com/two' },
+      ],
+      [{ ends: ends1 }, { ends: '2098-01-02T00:00:00Z' }],
+      [{}, { weight: '9' }],
+    ];
+    for (const [dry, applied] of cases) {
+      await run(dry);
+      const p = phrase();
+      const before = await counts();
+      expect(await run({ apply: true, confirm: p, ...applied })).toBe(1);
+      expect(text()).toContain('not the one printed');
+      expect(await counts()).toEqual(before);
+    }
+  });
+
+  it('--weight is checked by the admin rule and shown in the dry run', async () => {
+    for (const bad of ['0', '101', 'x', '2.5', '-1', '']) {
+      expect(await run({ weight: bad })).toBe(0);
+      expect(text()).toContain('CANNOT APPLY: --weight must be a whole number');
+    }
+    expect(await run({ weight: '12' })).toBe(0);
+    expect(text()).toContain('weight 12; start now');
+    expect(text()).not.toContain('CANNOT APPLY');
+    expect(await run({ apply: true, confirm: phrase(), weight: '0' })).toBe(1);
+  });
+
+  it('a heavier paused advert no longer beats a live one as the source, and the line says the status', async () => {
+    const heavy = await seed('heavy', 'paused', { weight: 9 });
+    expect(await run()).toBe(0);
+    expect(text()).toContain(
+      `weight 7; start now (copied from campaign ${ids.live}, which is live and on air)`,
+    );
+    expect(text()).not.toContain(`copied from campaign ${heavy}`);
+    // With nothing else on air, the paused one is the source, and the line says so.
+    const saved = onlyIds;
+    onlyIds = [heavy];
+    expect(await run()).toBe(0);
+    expect(text()).toContain(
+      `weight 9; start now (copied from campaign ${heavy}, which is PAUSED`,
+    );
+    onlyIds = saved.filter((i) => i !== heavy);
+    await prisma.adCampaign.delete({ where: { id: heavy } });
+    seeded.splice(seeded.indexOf(heavy), 1);
+  });
+
+  it('a failure prints a plain sentence with the class name, no path and no cut source text', async () => {
+    const boom = Object.assign(
+      new Error(
+        'Invalid `x` invocation in /srv/secret/path.js:294:53 INSERT INTO',
+      ),
+      {
+        code: 'P2002',
+      },
+    );
+    await run();
+    const code = await run(
+      { apply: true, confirm: phrase() },
+      {
+        storage: {
+          putAdArtwork: () => Promise.reject(boom),
+        },
+      },
+    );
+    expect(code).toBe(2);
+    expect(text()).toContain('(Error P2002)');
+    expect(text()).toContain('The database was not touched');
+    expect(text()).not.toMatch(/\/srv|INSERT|invocation/);
+  });
+
   it('apply ends scheduled, live and paused, leaves draft and ended alone, and makes the three', async () => {
+    // A live advert outside the command's scope, as on a database that holds other adverts: it is left alone
+    // and not counted in the read-back.
+    await seed('outsider', 'live', { weight: 50 });
+    onlyIds = onlyIds.filter((i) => i !== ids.outsider);
     const live = await prisma.adCampaign.findUniqueOrThrow({
       where: { id: ids.live },
     });
@@ -484,6 +661,7 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
     // The report: a read-back and the counts by place, with no signed address.
     expect(t).toContain('Read back: 3 of the three new campaigns');
     expect(t).toContain('Served now in explore_slider: 3');
+    expect(await statuses(['outsider'])).toEqual({ outsider: 'live' });
     expect(t).toContain('Served now in tgif_card: 0');
     expect(t).not.toMatch(/X-Amz|@/);
   });
