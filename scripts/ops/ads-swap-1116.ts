@@ -14,12 +14,15 @@
  *
  * The three new campaigns have fixed ids (NEW_ADS below), so a second run finds them and does nothing.
  *
- * Link, end and weight of the new ones are COPIED from the campaign being replaced: the first current campaign, in
- * AD_TIE_BREAK order, that is ON AIR (live or scheduled), inside its window, shows in the landscape places and opens a link; only when there is none, a paused one. startsAt is now.
- *   --link <https url>   use this link instead (the rule the admin API uses for ctaUrl: checkCtaUrl)
+ * Tap, end and weight of the new ones are COPIED from the campaign being replaced: the first current campaign, in
+ * AD_TIE_BREAK order, that is ON AIR (live or scheduled), inside its window and shows in the landscape places, WHATEVER its tap
+ * is; only when none is on air, the first paused one that fits. startsAt is now. A `link` source gives three `link` adverts
+ * with its address and "Register now"; a `none` source gives three that do nothing, stored as the admin API stores such a card
+ * (no label, no address); an `event` source is not copied (adverts are not tied to events): give --link.
+ *   --link <https url>   use this link instead, whatever the source's tap (the rule the admin API uses: checkCtaUrl)
  *   --ends <UTC instant> use this end instead, like 2026-12-31T23:59:59Z (must be in the future)
  *   --weight <n>         use this weight instead (a whole number, the range the admin API allows)
- * With no campaign to copy a link from and no --link, or an end that is not in the future and no --ends, the dry run says
+ * With no campaign to copy from and no --link, or an end that is not in the future and no --ends, the dry run says
  * so and --apply refuses, writing nothing.
  *
  * What it writes, and where that was read (src/admin/ads/admin-ads.service.ts, ad-campaign-state.ts):
@@ -142,6 +145,8 @@ export interface Options {
 
 /** What the new adverts will take, and where it came from. */
 export interface Taken {
+  /** What a tap on the new adverts does: null while it cannot be decided (see `problems`). */
+  tap: 'link' | 'none' | null;
   link: string | null;
   endsAt: Date | null;
   weight: number;
@@ -173,7 +178,7 @@ export function phraseFor(rows: Row[], taken: Taken | null): string {
       ),
     `source|${taken?.sourceId ?? 'none'}`,
     taken
-      ? `new|${taken.link ?? ''}|${taken.endsAt ? iso(taken.endsAt) : ''}|${taken.weight}`
+      ? `new|${taken.tap ?? ''}|${taken.link ?? ''}|${taken.endsAt ? iso(taken.endsAt) : ''}|${taken.weight}`
       : 'new|none',
   ].join('\n');
   return `SWAP ADS: END ${rows.length} CAMPAIGNS ${createHash('sha256').update(text).digest('hex').slice(0, 8)}`;
@@ -238,12 +243,12 @@ function describe(r: Row, i: number): string[] {
 
 /**
  * The advert the values are copied from: the first one ON AIR (live or scheduled), in AD_TIE_BREAK order, that is in its window,
- * shows in the landscape places and opens a link. Only when there is none, the first paused one that fits.
+ * shows in the landscape places, whatever its tap. Only when none is on air, the first paused one that fits.
  */
 function sourceOf(rows: Row[], now: Date): Row | null {
   const fits = (r: Row) => {
     const c = r.creative;
-    if (!c || c.ctaDestination !== 'link' || !c.ctaUrl) return false;
+    if (!c) return false;
     if (r.startsAt > now || r.endsAt <= now) return false;
     const places = showsIn({ placement: r.placement, creative: c });
     return places.includes('explore_slider') || places.includes('today_slot');
@@ -266,13 +271,22 @@ function parseWeight(raw: string): number | null {
 function takeFrom(rows: Row[], opts: Options, now: Date): Taken {
   const src = sourceOf(rows, now);
   const problems: string[] = [];
-  let link = src?.creative?.ctaUrl ?? null;
+  let tap: Taken['tap'] = null;
+  let link: string | null = null;
+  const srcTap = src?.creative?.ctaDestination;
+  if (srcTap === 'link' && src?.creative?.ctaUrl) {
+    tap = 'link';
+    link = src.creative.ctaUrl;
+  } else if (srcTap === 'none') tap = 'none';
   let endsAt = src ? src.endsAt : null;
   let weight = src ? src.weight : AD_WEIGHT_MIN;
   if (opts.link !== undefined) {
     const checked = checkCtaUrl(opts.link);
-    if (checked.ok) link = checked.value;
-    else {
+    if (checked.ok) {
+      tap = 'link';
+      link = checked.value;
+    } else {
+      tap = null;
       link = null;
       problems.push(`--link is not usable: ${checked.message}`);
     }
@@ -293,9 +307,13 @@ function takeFrom(rows: Row[], opts: Options, now: Date): Taken {
       );
     else weight = w;
   }
-  if (link === null && opts.link === undefined)
+  if (tap === null && opts.link === undefined)
     problems.push(
-      'there is no current campaign to copy a link from (in its window, shown in Explore or Today, opening a link) and no --link was given.',
+      !src
+        ? 'there is no current campaign to copy from (in its window and shown in Explore or Today) and no --link was given.'
+        : srcTap === 'event'
+          ? 'the campaign to copy from opens an event, and adverts are not tied to events, so its tap is not copied. Give --link.'
+          : 'the campaign to copy from has a link tap with no address. Give --link.',
     );
   if (endsAt === null)
     problems.push(
@@ -308,9 +326,10 @@ function takeFrom(rows: Row[], opts: Options, now: Date): Taken {
   const how = !src
     ? 'no campaign to copy from; weight is the minimum unless --weight is given'
     : src.status === 'paused'
-      ? `copied from campaign ${src.id}, which is PAUSED (no live or scheduled advert had a link to copy)`
+      ? `copied from campaign ${src.id}, which is PAUSED (no live or scheduled advert is on air)`
       : `copied from campaign ${src.id}, which is ${src.status === 'live' ? 'live' : 'scheduled'} and on air`;
   return {
+    tap,
     link,
     endsAt,
     weight,
@@ -399,7 +418,13 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
   const phrase = phraseFor(rows, taken);
   if (taken) {
     out(
-      `The new campaigns will take: link ${taken.link ?? 'NONE'}; end ${taken.endsAt ? iso(taken.endsAt) : 'NONE'}; weight ${taken.weight}; start now (${taken.from}).`,
+      `The new campaigns will take: ${
+        taken.tap === 'link'
+          ? `link ${taken.link}`
+          : taken.tap === 'none'
+            ? 'a tap does nothing (shown only)'
+            : 'a tap NOT DECIDED'
+      }; end ${taken.endsAt ? iso(taken.endsAt) : 'NONE'}; weight ${taken.weight}; start now (${taken.from}).`,
     );
     NEW_ADS.forEach((n, i) =>
       out(
@@ -487,8 +512,7 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
             },
           });
         }
-        if (!creating || !takenNow || !takenNow.link || !takenNow.endsAt)
-          return;
+        if (!creating || !takenNow || !takenNow.tap || !takenNow.endsAt) return;
         const base = nowTx.getTime();
         for (let i = 0; i < NEW_ADS.length; i++) {
           const n = NEW_ADS[i];
@@ -506,10 +530,11 @@ export async function adsSwap(deps: Deps, opts: Options): Promise<number> {
                 create: {
                   headline: n.headline,
                   subline: n.subline,
-                  ctaLabel: CTA_LABEL,
-                  ctaDestination: 'link',
+                  // As resolveCta leaves them: a link card keeps its label and address; a card that does nothing has neither.
+                  ctaLabel: takenNow.tap === 'link' ? CTA_LABEL : null,
+                  ctaDestination: takenNow.tap,
                   ctaDestinationId: null,
-                  ctaUrl: takenNow.link,
+                  ctaUrl: takenNow.tap === 'link' ? takenNow.link : null,
                   artworkUrl: null,
                   artworkLandscapeUrl: urls[i],
                   artworkPortraitUrl: null,
@@ -589,7 +614,7 @@ async function readBack(deps: Deps, created: boolean): Promise<void> {
       `${i + 1}. ${r.id} | ${r.advertiser} | ${c?.headline} | ${c?.subline} | ${r.status} | ${r.placement} | ${iso(r.startsAt)} to ${iso(r.endsAt)} | weight ${r.weight} | createdAt ${iso(r.createdAt)}`,
     );
     out(
-      `   button "${c?.ctaLabel}" opens ${c?.ctaUrl}; landscape ${last(c?.artworkLandscapeUrl ?? null)}; portrait ${last(c?.artworkPortraitUrl ?? null)}; single ${last(c?.artworkUrl ?? null)}`,
+      `   ${c?.ctaDestination === 'none' ? 'no button, a tap does nothing' : `button "${c?.ctaLabel}" opens ${c?.ctaUrl}`}; landscape ${last(c?.artworkLandscapeUrl ?? null)}; portrait ${last(c?.artworkPortraitUrl ?? null)}; single ${last(c?.artworkUrl ?? null)}`,
     );
   });
   if (!created) return;

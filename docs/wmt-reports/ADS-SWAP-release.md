@@ -8,3 +8,12 @@
 - Held in round 1, measured by the checker: the rows are field for field what the admin routes write (258 tables checksummed, only the advert tables moved); the app is served the three in order in Explore, the first on Today, none on TGIF, with the picture bytes equal to the files here; the table lock was held for 59 ms; a failed insert, a killed connection and a failed upload all leave the old adverts on air; the command starts no scheduled job; the workflow's inputs reach the server as data.
 - Who runs it: the lead, by the manual workflow, after this is deployed: a dry run first, read in the job log, then the apply with that dry run's phrase.
 - After it has run and the owner has seen the banners, the command, its workflow and its pictures can be removed (a removal task of its own).
+
+## Fix round 2 (17 Nov 2026, after the dry run on the live server)
+
+The first dry run on the live server (workflow run 43994812764, nothing written) found four adverts on air, all live, each with a wide and a tall picture, the same window (to 29 Jan 2027), weights 40, 30, 20 and 10, and every one with a tap that does nothing. The command refused to apply: it had been built to copy a link, and there was none.
+
+- The owner's order is "replace", so the three new adverts behave as the ones they replace. `wmt/ADS-SWAP-2` `642547f3` (45 lines added, 20 removed in `scripts/ops/ads-swap-1116.ts`; the spec has 17 tests): the source is the first advert on air in the wide places whatever its tap; a link is copied as a link, a tap that does nothing as a tap that does nothing, an event is not copied; the phrase binds the tap as well.
+- Nothing else changes: not the workflow, the pictures, the ads code or the contract (`npm run contract:build` leaves it as it is).
+- The checker's re-check of this round is recorded on the pull request before it is merged (`docs/wmt-reports/verify-ADS-SWAP.md` on `wmt/ADS-SWAP-verify`).
+- Told to the owner in plain words: a tap on the new banners does nothing, as on the four before them, until a link is given; the tall TGIF adverts come off with the rest, so TGIF shows no advert until tall pictures are sent.

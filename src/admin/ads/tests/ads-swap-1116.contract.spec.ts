@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { ConfigModule } from '@nestjs/config';
@@ -15,6 +16,11 @@ import {
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { servableCampaigns } from '../../../ads/ads-serving';
+import { AdsCountsService } from '../../../ads/ads-counts.service';
+import { AdsEventsService } from '../../../ads/ads-events.service';
+import { AdsService } from '../../../ads/ads.service';
+import type { CreateAdCampaignDto } from '../dto/admin-ad.dto';
+import { AdminAdsService } from '../admin-ads.service';
 import { AD_ARTWORK_KEY } from '../../../storage/ad-artwork';
 import { StorageModule } from '../../../storage/storage.module';
 import {
@@ -92,9 +98,11 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
     status: 'draft' | 'scheduled' | 'live' | 'paused' | 'ended',
     o: {
       weight?: number;
-      kind?: 'link' | 'none';
+      kind?: 'link' | 'none' | 'event';
       endsInDays?: number;
+      endsAt?: Date;
       portrait?: boolean;
+      both?: boolean;
     } = {},
   ) {
     const id = randomUUID();
@@ -108,21 +116,24 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
         placement: o.portrait ? 'tgif_card' : 'explore_slider',
         status,
         startsAt: new Date(Date.now() - 2 * DAY),
-        endsAt: new Date(Date.now() + (o.endsInDays ?? 20) * DAY),
+        endsAt: o.endsAt ?? new Date(Date.now() + (o.endsInDays ?? 20) * DAY),
         weight: o.weight ?? 1,
         creative: {
           create: {
             headline: `asw ${key}`,
             subline: null,
-            ctaLabel: kind === 'link' ? 'Open' : null,
+            ctaLabel: kind === 'none' ? null : 'Open',
             ctaDestination: kind,
+            ctaDestinationId: kind === 'event' ? randomUUID() : null,
             ctaUrl: kind === 'link' ? `${LINK}/${key}` : null,
-            artworkLandscapeUrl: o.portrait
-              ? null
-              : `https://example.com/ads/artwork/${key}.png`,
-            artworkPortraitUrl: o.portrait
-              ? `https://example.com/ads/artwork/${key}-p.png`
-              : null,
+            artworkLandscapeUrl:
+              o.portrait && !o.both
+                ? null
+                : `https://example.com/ads/artwork/${key}.png`,
+            artworkPortraitUrl:
+              o.portrait || o.both
+                ? `https://example.com/ads/artwork/${key}-p.png`
+                : null,
           },
         },
       },
@@ -193,6 +204,10 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
 
   afterAll(async () => {
     const all = [...seeded, ...NEW_ADS.map((n) => n.id)];
+    await prisma.adEvent.deleteMany({ where: { campaignId: { in: all } } });
+    await prisma.adDailyTotal.deleteMany({
+      where: { campaignId: { in: all } },
+    });
     await prisma.adminAdAudit.deleteMany({
       where: { campaignId: { in: all } },
     });
@@ -262,13 +277,17 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
   it('refuses when there is no link to copy and none given, and when the end is in the past', async () => {
     const before = await counts();
     const saved = [...onlyIds];
-    // Only a card that opens nothing is current: there is no link to copy.
-    const none = await seed('nolink', 'live', { kind: 'none' });
-    onlyIds = [none];
+    // Nothing current at all: there is nothing to copy from.
+    onlyIds = [];
     expect(await run()).toBe(0);
     expect(text()).toContain(
-      'CANNOT APPLY: there is no current campaign to copy a link from',
+      'CANNOT APPLY: there is no current campaign to copy from',
     );
+    // Only a card that opens an event is current: its tap is not copied (adverts are not tied to events).
+    const none = await seed('nolink', 'live', { kind: 'event' });
+    onlyIds = [none];
+    expect(await run()).toBe(0);
+    expect(text()).toContain('opens an event');
     const p = phrase();
     expect(await run({ apply: true, confirm: p })).toBe(1);
     expect(text()).toContain('REFUSED');
@@ -673,5 +692,291 @@ describe('ads-swap-1116 (ADS-SWAP)', () => {
     expect(await run({ apply: true, confirm: 'anything' })).toBe(0);
     expect(text()).toContain('Nothing to do');
     expect(await counts()).toEqual(before);
+  });
+
+  // ── fix round 2: a source whose tap does nothing is copied ──────────────────────────────────────────
+  const END = new Date('2027-01-29T05:14:58.000Z');
+  const viewer = randomUUID();
+  const noBlocks = { hiddenFrom: () => Promise.resolve([]) } as never;
+
+  async function dropAll(extra: string[] = []) {
+    const all = [...extra, ...NEW_ADS.map((n) => n.id)];
+    await prisma.adEvent.deleteMany({ where: { campaignId: { in: all } } });
+    await prisma.adDailyTotal.deleteMany({
+      where: { campaignId: { in: all } },
+    });
+    await prisma.adminAdAudit.deleteMany({
+      where: { campaignId: { in: all } },
+    });
+    await prisma.adCampaign.deleteMany({ where: { id: { in: all } } });
+    for (const id of extra) {
+      if (seeded.includes(id)) seeded.splice(seeded.indexOf(id), 1);
+    }
+    onlyIds = onlyIds.filter((i) => !extra.includes(i));
+  }
+
+  it('the live server case: four adverts that do nothing are ended and replaced by three that do nothing', async () => {
+    await dropAll();
+    onlyIds = [];
+    const four: string[] = [];
+    for (const [i, w] of [40, 30, 20, 10].entries())
+      four.push(
+        await seed(`four${i}`, 'live', {
+          weight: w,
+          kind: 'none',
+          both: true,
+          endsAt: END,
+        }),
+      );
+    expect(await run()).toBe(0);
+    expect(text()).toContain(
+      `The new campaigns will take: a tap does nothing (shown only); end 2027-01-29T05:14:58.000Z; weight 40; start now (copied from campaign ${four[0]}, which is live and on air).`,
+    );
+    expect(text()).not.toContain('CANNOT APPLY');
+    expect(await run({ apply: true, confirm: phrase() })).toBe(0);
+    expect(text()).toContain('Ended 4 campaigns.');
+    expect(text()).toContain('no button, a tap does nothing');
+    expect(
+      Object.values(await statuses(['four0', 'four1', 'four2', 'four3'])),
+    ).toEqual(['ended', 'ended', 'ended', 'ended']);
+
+    const rows = await prisma.adCampaign.findMany({
+      where: { id: { in: NEW_ADS.map((n) => n.id) } },
+      include: { creative: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(rows.map((r) => r.id)).toEqual(NEW_ADS.map((n) => n.id));
+    for (const r of rows) {
+      expect(r).toMatchObject({ status: 'live', weight: 40 });
+      expect(r.endsAt.getTime()).toBe(END.getTime());
+      expect(r.creative).toMatchObject({
+        ctaDestination: 'none',
+        ctaLabel: null,
+        ctaUrl: null,
+        ctaDestinationId: null,
+        artworkUrl: null,
+        artworkPortraitUrl: null,
+      });
+    }
+
+    // What the app is served: Explore 1, 2, 3; Today 1; TGIF none of ours; no link, no label on the card.
+    const serving = { prisma, blocked: noBlocks };
+    const mine = (r: { id: string }) => NEW_ADS.some((n) => n.id === r.id);
+    const at = new Date();
+    const explore = (
+      await servableCampaigns(serving, viewer, at, {
+        placement: 'explore_slider',
+      })
+    ).filter(mine);
+    expect(explore.map((c) => c.id)).toEqual(NEW_ADS.map((n) => n.id));
+    expect(
+      (
+        await servableCampaigns(serving, viewer, at, {
+          placement: 'today_slot',
+        })
+      ).filter(mine)[0].id,
+    ).toBe(NEW_ADS[0].id);
+    expect(
+      (
+        await servableCampaigns(serving, viewer, at, {
+          placement: 'tgif_card',
+        })
+      ).filter(mine),
+    ).toEqual([]);
+    const cards = (
+      await new AdsService(prisma, noBlocks, storage, () => new Date()).slider(
+        viewer,
+      )
+    ).filter(mine);
+    expect(cards).toHaveLength(3);
+    for (const c of cards) {
+      expect(c.ctaDestination).toBe('none');
+      expect(c).not.toHaveProperty('ctaLabel');
+      expect(c).not.toHaveProperty('ctaUrl');
+    }
+
+    // Counting: the app's rule counts a view and a tap for a card that does nothing, once a day each (ads-events.service.ts).
+    const events = new AdsEventsService(prisma, noBlocks, () => new Date());
+    await events.record(viewer, NEW_ADS[0].id, 'view');
+    await events.record(viewer, NEW_ADS[0].id, 'tap');
+    await events.record(viewer, NEW_ADS[0].id, 'tap');
+    expect(
+      await prisma.adEvent.groupBy({
+        by: ['type'],
+        where: { campaignId: NEW_ADS[0].id },
+        _count: { _all: true },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'view', _count: { _all: 1 } }),
+        expect.objectContaining({ type: 'tap', _count: { _all: 1 } }),
+      ]),
+    );
+
+    // The rows are field for field what POST /admin/ads with ctaDestination none, then schedule, leaves.
+    const admin = {
+      id: randomUUID(),
+      email: 'twin@test.invalid',
+      name: 'twin',
+      role: 'superadmin',
+      status: 'active',
+      lastLoginAt: null,
+      createdAt: new Date(),
+    } as const;
+    const svc = new AdminAdsService(
+      prisma,
+      new AdsCountsService(prisma),
+      storage,
+    );
+    const pic = await storage.putAdArtwork(
+      await readFile(join(ROOT, 'scripts/ops/ads-1116/1-drive-car.png')),
+      'image/png',
+    );
+    const made = await svc.create(
+      {
+        advertiser: NEW_ADS[0].advertiser,
+        startsAt: new Date(Date.now() - 60_000).toISOString(),
+        endsAt: END.toISOString(),
+        weight: 40,
+        creative: {
+          headline: NEW_ADS[0].headline,
+          subline: NEW_ADS[0].subline,
+          ctaDestination: 'none',
+          landscapeUrl: pic.artworkUrl,
+        },
+      } as unknown as CreateAdCampaignDto,
+      admin,
+    );
+    const twinId = made.campaign.id;
+    seeded.push(twinId);
+    await svc.schedule(twinId, admin);
+    const load = (id: string) =>
+      prisma.adCampaign.findUniqueOrThrow({
+        where: { id },
+        include: { creative: true },
+      });
+    const strip = (r: Awaited<ReturnType<typeof load>>) => {
+      const { creative, ...c } = r;
+      const cr = { ...creative! };
+      return {
+        c: {
+          advertiser: c.advertiser,
+          placement: c.placement,
+          status: c.status,
+          weight: c.weight,
+          endsAt: c.endsAt,
+        },
+        cr: {
+          headline: cr.headline,
+          subline: cr.subline,
+          ctaLabel: cr.ctaLabel,
+          ctaDestination: cr.ctaDestination,
+          ctaDestinationId: cr.ctaDestinationId,
+          ctaUrl: cr.ctaUrl,
+          artworkUrl: cr.artworkUrl,
+          artworkPortraitUrl: cr.artworkPortraitUrl,
+          landscapeIsStored: AD_ARTWORK_KEY.test(
+            objectKeyFrom(cr.artworkLandscapeUrl!),
+          ),
+        },
+      };
+    };
+    expect(strip(await load(NEW_ADS[0].id))).toEqual(strip(await load(twinId)));
+    const trail = async (id: string) =>
+      (
+        await prisma.adminAdAudit.findMany({
+          where: { campaignId: id },
+          orderBy: { seq: 'asc' },
+        })
+      ).map((a) => {
+        const ch = { ...((a.changes ?? {}) as Record<string, unknown>) };
+        delete ch.startsAt; // the instant of the run
+        delete ch.landscapeUrl; // each holds its own stored picture
+        return [a.action, a.previousStatus, a.newStatus, ch];
+      });
+    expect(await trail(NEW_ADS[0].id)).toEqual(await trail(twinId));
+    await dropAll([...four, twinId]);
+  });
+
+  it('--link over a none source gives three link adverts with "Register now"', async () => {
+    await dropAll();
+    onlyIds = [];
+    const a = await seed('nl', 'live', {
+      weight: 6,
+      kind: 'none',
+      endsAt: END,
+    });
+    const link = 'https://example.com/chosen';
+    await run({ link });
+    expect(text()).toContain(
+      `The new campaigns will take: link ${link}; end 2027-01-29T05:14:58.000Z; weight 6`,
+    );
+    const p = phrase();
+    expect(await run({ apply: true, confirm: p, link })).toBe(0);
+    const rows = await prisma.adCreative.findMany({
+      where: { campaignId: { in: NEW_ADS.map((n) => n.id) } },
+    });
+    expect(rows).toHaveLength(3);
+    for (const r of rows)
+      expect(r).toMatchObject({
+        ctaDestination: 'link',
+        ctaLabel: 'Register now',
+        ctaUrl: link,
+        ctaDestinationId: null,
+      });
+    await dropAll([a]);
+  });
+
+  it('an event source is refused without --link and accepted with it', async () => {
+    await dropAll();
+    onlyIds = [];
+    const a = await seed('ev', 'live', { weight: 4, kind: 'event' });
+    expect(await run()).toBe(0);
+    expect(text()).toContain('opens an event');
+    expect(text()).toContain('CANNOT APPLY');
+    const before = await counts();
+    expect(await run({ apply: true, confirm: phrase() })).toBe(1);
+    expect(text()).toContain('REFUSED');
+    expect(await counts()).toEqual(before);
+    expect(await run({ link: 'https://example.com/ev' })).toBe(0);
+    expect(text()).not.toContain('CANNOT APPLY');
+    expect(text()).toContain('link https://example.com/ev');
+    await dropAll([a]);
+  });
+
+  it('the phrase binds the tap: a source that changes tap, or a --link added, is refused', async () => {
+    await dropAll();
+    onlyIds = [];
+    const a = await seed('tap', 'live', { weight: 5, kind: 'none' });
+    // A different --link than the dry run's.
+    await run();
+    const p = phrase();
+    const before = await counts();
+    expect(
+      await run({ apply: true, confirm: p, link: 'https://example.com/late' }),
+    ).toBe(1);
+    expect(text()).toContain('not the one printed');
+    expect(await counts()).toEqual(before);
+    // The source's tap changes between the dry run and the transaction.
+    expect(
+      await run(
+        { apply: true, confirm: p },
+        {
+          beforeTransaction: async () => {
+            await prisma.adCreative.update({
+              where: { campaignId: a },
+              data: {
+                ctaDestination: 'link',
+                ctaLabel: 'Open',
+                ctaUrl: 'https://example.com/now-a-link',
+              },
+            });
+          },
+        },
+      ),
+    ).toBe(1);
+    expect(text()).toContain('has changed');
+    expect(await statuses(['tap'])).toEqual({ tap: 'live' });
+    await dropAll([a]);
   });
 });
