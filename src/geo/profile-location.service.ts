@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   GeoService,
@@ -113,6 +114,101 @@ export class ProfileLocationService {
       if (byCode) return byCode.code;
     }
     return this.geo.countryFromText(claims.country);
+  }
+
+  /**
+   * The country the account's own data gives, and which it came from: the one
+   * WAWU ID holds first, else the phone's, else none. The same order `me()`
+   * applies.
+   */
+  derived(claims: IdentityGeoClaims): {
+    countryCode: string | null;
+    source: 'wawu_id' | 'phone' | null;
+  } {
+    const wawuId = this.wawuIdCountry(claims);
+    if (wawuId !== null) return { countryCode: wawuId, source: 'wawu_id' };
+    const phone = phoneCountryCode(claims.phone);
+    if (phone !== null) return { countryCode: phone, source: 'phone' };
+    return { countryCode: null, source: null };
+  }
+
+  /** People this process has already looked at once (see `noteSignedIn`). */
+  private readonly looked = new Set<string>();
+  private static readonly LOOKED_CAP = 50_000;
+
+  /**
+   * GEO-FILL (R-143): the first time this process sees a signed-in person it
+   * looks, once, at whether the Hub has a country for them, and if not
+   * records the one their token gives (same country and source `me()` would,
+   * written only where none is held), so the
+   * dashboard counts people who never open the phone app.
+   *
+   * Never awaited by the caller and never throws: it adds nothing to the
+   * request's time, and a failure leaves the person's request untouched (the
+   * daily fill covers them). A person whose token gives no country costs no
+   * read at all.
+   */
+  noteSignedIn(wawuUserId: string, claims: IdentityGeoClaims): void {
+    if (this.looked.has(wawuUserId)) return;
+    if (this.looked.size >= ProfileLocationService.LOOKED_CAP) {
+      this.looked.clear();
+    }
+    this.looked.add(wawuUserId);
+    void this.recordIfMissing(wawuUserId, claims).catch(() => {
+      this.looked.delete(wawuUserId);
+    });
+  }
+
+  /** Records the token's country when the Hub holds none for the person. */
+  async recordIfMissing(
+    wawuUserId: string,
+    claims: IdentityGeoClaims,
+  ): Promise<boolean> {
+    if (this.derived(claims).countryCode === null) return false;
+    const place = await this.stored(wawuUserId);
+    if (place.countryCode !== null) return false;
+    const { countryCode, source } = this.derived(claims);
+    if (countryCode === null || source === null) return false;
+    return this.writeWhereNone(wawuUserId, countryCode, source);
+  }
+
+  /**
+   * F1 (verifier, R-143): writes the country only while the row still has
+   * none, so a country the person chose a moment ago is never replaced. An
+   * `updateMany ... countryCode IS NULL` first (a region saved under no
+   * country goes with it, as `me()` does), else an insert that a primary-key
+   * clash turns into "someone got there first". True when this call wrote.
+   * `me()` keeps its own upsert and is not routed through here.
+   */
+  private async writeWhereNone(
+    wawuUserId: string,
+    countryCode: string,
+    source: 'wawu_id' | 'phone',
+  ): Promise<boolean> {
+    const updated = await this.prisma.profileDetails.updateMany({
+      where: { wawuUserId, countryCode: null },
+      data: {
+        countryCode,
+        countrySource: source,
+        regionCode: null,
+        regionName: null,
+      },
+    });
+    if (updated.count > 0) return true;
+    try {
+      await this.prisma.profileDetails.create({
+        data: { wawuUserId, countryCode, countrySource: source },
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   /**

@@ -9,6 +9,8 @@ import { AdminVerificationReviewModule } from './admin/verification-review/admin
 import { AdminProfessionalReviewModule } from './admin/professional-review/admin-professional-review.module';
 import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
+import { AdminUsersModule } from './admin/users/admin-users.module';
+import { GeoFillModule } from './geo-fill/geo-fill.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminIdentityHoldsModule } from './admin/identity-holds/admin-identity-holds.module';
 import { AdminSupportModule } from './admin/support/admin-support.module';
@@ -243,6 +245,9 @@ import { PushModule } from './push/push.module';
     // registered below and deduped.
     AdminPaymentsModule,
     AdminCreatorsModule,
+    // USERS-DASH (R-142) and GEO-FILL (R-143).
+    AdminUsersModule,
+    GeoFillModule,
     // The admin MONEY surface, read-only. `/admin/payments` answered only
     // "did this webhook land" and "did this DM refund fail"; nothing anywhere
     // answered what the platform has taken, what WAWU's share of it is, what

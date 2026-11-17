@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import {
@@ -32,6 +33,7 @@ import { cleanPhotoLink, keepPhotoPosition } from '../storage/photo-position';
 import { isAppRequest } from '../price-list/app-client';
 import { WalletService } from '../wallet/wallet.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { ProfileLocationService } from '../geo/profile-location.service';
 
 /**
  * registry.json "UserProfile". Owns GET/PATCH /users/me and the public
@@ -47,6 +49,9 @@ export class UserProfileService {
     private readonly wallet: WalletService,
     private readonly profileExperience: ProfileExperienceService,
     private readonly blockedAccounts: BlockedAccountService,
+    // GEO-FILL (R-143). Optional so a spec that builds this service by hand
+    // is unchanged; the module supplies it.
+    @Optional() private readonly places?: ProfileLocationService,
   ) {}
 
   /**
@@ -111,6 +116,9 @@ export class UserProfileService {
   }
 
   async getMe(user: WawuJwtClaims): Promise<UserProfileWithClaims> {
+    // GEO-FILL (R-143): the one route every signed-in client calls early. Not
+    // awaited and never throws, so the answer is the one it always was.
+    this.places?.noteSignedIn(user.sub, user);
     const profile = await this.prisma.userProfile.findUnique({
       where: { wawuUserId: user.sub },
     });
