@@ -128,3 +128,45 @@ Only one test does it (`a failure prints a plain sentence...`, spec lines ~503-5
 ## Still not proved
 
 Production boot with the real env file, real object storage, the dashboard's rendering of the audit marker, the hosted workflow run.
+
+---
+
+# Re-check of fix round 2 (`wmt/ADS-SWAP-2` at 642547f3, from main 2960831f)
+
+First line stays `VERDICT: merge`. Built 642547f3 and ran the built command against a rebuilt local stack (real Postgres, storage stand-in), adverts seeded and attacked through the admin routes.
+
+## 1. The live case: passed
+
+Seeded through `POST /admin/ads` + schedule: four live adverts, `ctaDestination none`, landscape and portrait pictures, weights 40, 30, 20, 10, same window (ends 2027-01-29T05:14:58Z). Dry run: source is the weight 40 advert, `a tap does nothing (shown only); end 2027-01-29T05:14:58.000Z; weight 40; ... which is live and on air`, `Will end: 4`, no CANNOT APPLY.
+Apply with its phrase: exit 0, `AdCampaign` +3 (4 -> 7 rows), `AdCreative` +3, `AdminAdAudit` +9... (4 `ended` + 6 new = 10 rows; table checksums: only those three tables moved).
+- The four ended: each has one `ended` audit row `{previousStatus live, newStatus ended, changes {status:{from live, to ended}}}`; a twin made by the routes and ended by `POST /admin/ads/:id/end` equals the weight 40 one on every campaign column (ex id and times), every creative column (ex picture keys), and the `ended` audit row.
+- The three new: twins made by `POST /admin/ads` with `ctaDestination: none` (landscape only) + schedule: campaign and creative columns equal (ex id, times, picture key); audit rows (`created`, `scheduled`) equal once the picture key and milliseconds are normalised; `ctaLabel`, `ctaUrl`, `ctaDestinationId` all null, `ctaDestination none`; inserts passed every CHECK.
+- Over HTTP, signed-in test account: Explore `["Drive.","5 DJI Osmo Pocket 3.","4 Gaming Systems."]`, Today `["Drive."]`, TGIF `[]`; each card's keys are `id, advertiser, headline, subline, ctaDestination, artworkUrl` (no label, no link); pictures 266230, 175401, 223600 bytes, sha256 equal to the files; `view` and `tap` both answered 200 `accepted:true` and were counted (the events route has no special rule for a `none` card: it counts the tap like any other). Read-back says `no button, a tap does nothing`; `Served now`: Explore 3, Today 3, TGIF 0.
+
+## 2. Sources: passed
+
+- `link` source on air: `link https://example.com/live2 ... live and on air` (as before; "Register now" proved in the `--link` run below).
+- `event` source (row set to `event` by SQL): dry run `a tap NOT DECIDED` + `CANNOT APPLY: the campaign to copy from opens an event, and adverts are not tied to events, so its tap is not copied. Give --link.`; `--apply` without `--link` REFUSED, exit 1, nothing changed.
+- `--link https://example.com/over` over a `none` source: three `link` adverts, `Register now`, that address (checked in the rows).
+- Only a paused advert: used, `which is PAUSED (no live or scheduled advert is on air)`.
+- Nothing current and no `--link`: REFUSED, exit 1, both reasons (no source, no end).
+
+## 3. The phrase binds the tap: passed
+
+- Dry run without `--link`, apply with `--link`: refused. Dry run with `--link`, apply without: refused.
+- Source changed none -> link by PATCH (pause, PATCH `ctaDestination link`, resume) between: refused.
+- Round-1 attacks once each: pause, PATCH weight, PATCH end date, new booking, end by route: each REFUSED, exit 1, the apply changed no table.
+- Worked out again inside the transaction: a second session held `LOCK TABLE "AdCampaign" IN ROW EXCLUSIVE MODE`, so the command passed its read and its 3 uploads and waited at its own lock; the second session then turned the `none` source into a `link` card and committed; the command got the lock, re-read, and REFUSED (`what the dry run showed has changed...`), 0 new adverts.
+- Still open as in round 1 (L6, low): pause then resume with nothing else in between returns every bound value to what it was, so the phrase still matches. Not re-tested; the code binds the same fields plus the tap. Unchanged by this round.
+
+## 4. Second run, two applies, failed insert: passed
+
+Second run: `Nothing to do`, exit 0, with and without `--apply`. Two applies at once: exit codes 0 and 1; one swap (4 ended, 3 created, 18 audit rows over the three new ids and none doubled); the other `REFUSED`. Third insert failed by a trigger: exit 2, `FAILED: the swap could not be written (PrismaClientKnownRequestError P2039)...`, no table changed, the old adverts still live.
+
+## 5. Nothing else moved: passed
+
+`git diff origin/main origin/wmt/ADS-SWAP-2 --stat`: `scripts/ops/ads-swap-1116.ts`, its spec, the builder report (3 files; no workflow, no `admin-ads.service.ts`). `npm run contract:build` left the tree clean (`contract/openapi.json` unchanged). `npx tsc --noEmit` clean. `ads-swap-1116.contract`: 17 of 17 with three other live adverts in the database. `admin-ads.contract`: 208 of 208 (on a database with no other current adverts, as before). Gates: 0 fail, 144 warn, 88 accepted, PASSED; `check_baseline.py` ok (125).
+
+## Still not proved
+
+The live server itself (real env file, real storage, the four live adverts there); only the local stand-in with a seeded copy of the shape you described.
