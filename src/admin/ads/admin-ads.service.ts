@@ -141,7 +141,7 @@ const NEEDS_ARTWORK_WHERE: Prisma.AdCampaignWhereInput = {
   },
 };
 
-function snapshotOf(
+export function snapshotOf(
   campaign: AdCampaignModel,
   creative: AdCreativeModel,
 ): Snapshot {
@@ -168,7 +168,7 @@ function snapshotOf(
 }
 
 /** `{ field: { from, to } }` for every field that differs. `null` on a side means "no row". */
-function diff(
+export function diff(
   before: Snapshot | null,
   after: Snapshot | null,
 ): Record<string, { from: unknown; to: unknown }> {

@@ -1,0 +1,83 @@
+name: Swap the ads (16 Nov 2026)
+
+# Manual only: a one-time ops command (scripts/ops/ads-swap-1116.ts, see its own
+# doc comment). Trigger it from the Actions tab: this workflow, Run workflow.
+# Leave "apply" off first: that is a dry run and writes nothing. Then run it again
+# with apply on and the confirmation phrase the dry run printed.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Tick to write. Left off, it is a dry run that changes nothing.'
+        type: boolean
+        default: false
+      confirm:
+        description: 'The confirmation phrase the dry run printed (needed with apply).'
+        type: string
+        default: ''
+      link:
+        description: 'Optional https link for the new ads. Left empty, it is copied from the ad being replaced.'
+        type: string
+        default: ''
+      ends:
+        description: 'Optional end, UTC, like 2026-12-31T23:59:59Z. Left empty, it is copied from the ad being replaced.'
+        type: string
+        default: ''
+
+concurrency:
+  # Its own group, never cancelled: two runs at once would both read the same
+  # current ads (the command's own lock and phrase check would stop the second,
+  # but there is no reason to start it).
+  group: ads-swap-1116
+  cancel-in-progress: false
+
+jobs:
+  swap:
+    name: Swap the ads on the droplet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Load SSH key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DROPLET_HOST_KEY }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # Runs IN PLACE against whatever is already deployed at
+      # /srv/wawu/hub-api (deploy.yml's own rsync target), which holds
+      # dist/scripts/ops/ads-swap-1116.js and the three pictures in
+      # scripts/ops/ads-1116/. DATABASE_URL and STORAGE_* come from
+      # /etc/wawu/hub-api.env; nothing here is a new secret.
+      #
+      # The four inputs are typed by a person, so they are DATA, never shell text.
+      # `${{ inputs.* }}` is NOT written inside any script below: each goes into
+      # `env:` (GitHub hands it to the step as an environment variable, with no
+      # shell parsing), and the script only ever expands it as "$VAR" in double
+      # quotes. Each value is then base64-encoded on the runner, so what is sent
+      # over ssh is only the characters A-Z a-z 0-9 + / =, inside single quotes.
+      # The droplet decodes each into one quoted argument ("$(... | base64 -d)"),
+      # and the result of an expansion is never parsed again. A phrase or link
+      # with spaces, quotes, $, ;, backticks or newlines stays one argument.
+      - name: Run the ads swap on the droplet
+        env:
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+          LINK: ${{ inputs.link }}
+          ENDS: ${{ inputs.ends }}
+        run: |
+          b64() { printf '%s' "$1" | base64 -w0; }
+          flags=""
+          if [ "$APPLY" = "true" ]; then flags="$flags --apply"; fi
+          if [ -n "$CONFIRM" ]; then flags="$flags --confirm \"\$(printf %s '$(b64 "$CONFIRM")' | base64 -d)\""; fi
+          if [ -n "$LINK" ]; then flags="$flags --link \"\$(printf %s '$(b64 "$LINK")' | base64 -d)\""; fi
+          if [ -n "$ENDS" ]; then flags="$flags --ends \"\$(printf %s '$(b64 "$ENDS")' | base64 -d)\""; fi
+          ssh -i ~/.ssh/id_ed25519 wawu@${{ secrets.DROPLET_HOST }} "
+            set -euo pipefail
+            cd /srv/wawu/hub-api
+            set -a
+            source /etc/wawu/hub-api.env
+            set +a
+            node dist/scripts/ops/ads-swap-1116.js$flags
+          "
