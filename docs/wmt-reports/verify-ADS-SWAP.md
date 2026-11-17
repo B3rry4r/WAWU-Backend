@@ -1,4 +1,4 @@
-VERDICT: fix
+VERDICT: merge
 
 # ADS-SWAP verification (checker report)
 
@@ -69,3 +69,62 @@ A forced failure on the third insert prints `Invalid \`tx.adCampaign.create()\` 
 ## Protected routes
 
 `scripts/protected-routes/run.sh --fresh origin/wmt/ADS-SWAP` on a fresh database: 236 of 244 required tests passed, 8 failed (`GET /professionals/:id`, `PATCH /professionals/applications/:id/listing`, `POST /admin/professionals/:id/approve`, `POST /admin/professionals/:id/unlist`, `POST /admin/verification/:id/approve`, `POST /admin/verification/ticks/:wawuUserId/grant`, `.../revoke`, `POST /verification/purchase/verify`). The same run against `origin/main` (c3fd797 lineage) fails the identical 8 with the identical 236/244, so they come from this sandbox (the mock WAWU ID or seed) and not from this branch; none is an ads route. No ads route is in the protected list's failures. I could not make those 8 pass here, so I cannot say they are green on a CI machine.
+
+---
+
+# Re-check of fix round 1 (`wmt/ADS-SWAP` at 9f7c19ff)
+
+First line is now `VERDICT: merge`; the first-round text above is kept as history (M1 and L1 to L5 below say where each stands). Built 9f7c19ff, ran the built `node dist/scripts/ops/ads-swap-1116.js` on a rebuilt local stack (real Postgres, storage stand-in), adverts seeded and attacked through the admin routes. `git diff e7bd4e01 9f7c19ff --stat` = the command, the spec and the builder report only; the workflow and the two `export` words are untouched.
+
+## M1: closed, with one exception (new L6)
+
+With a dry run's phrase in hand, then one change, then `--apply --confirm <that phrase>`: each REFUSED (exit 1), nothing written (table checksums taken after the change and after the apply identical):
+
+| In between | Result |
+| --- | --- |
+| pause | refused |
+| pause, PATCH weight 8 and link, resume (my first-round attack) | refused |
+| PATCH weight (paused advert) | refused |
+| PATCH link | refused |
+| PATCH end date | refused |
+| PATCH start date | refused |
+| a new booking (create + schedule) | refused, no upload (storage keys unchanged) |
+| end by route | refused |
+| same phrase, different `--link` / `--ends` / `--weight` than the dry run | refused (3 runs) |
+| **pause, then resume, nothing else** | **not refused: applied** (see L6) |
+
+Recomputed inside the transaction: read the code (`takeFrom(again, opts, nowTx)` and `phraseFor(again, takenNow)` after `LOCK TABLE` and `FOR UPDATE`) and proved it. A second session held `LOCK TABLE "AdCampaign" IN ROW EXCLUSIVE MODE`, so the command passed its first read and its 3 uploads and waited at its own lock; the second session then set the source advert's weight to 42 and committed. The command got the lock, re-read, and printed `REFUSED: what the dry run showed has changed...`, exit 1, only the holder's own UPDATE changed the table, no new advert.
+
+Nothing changed in between: the apply works. Exit 0, `AdCampaign` +3, `AdCreative` +3, `AdminAdAudit` +9, three adverts live weight 5, same end, `explore_slider`. Served order over HTTP as before: Explore Drive., 5 DJI Osmo Pocket 3., 4 Gaming Systems.; Today 1 (Drive.); TGIF `[]`; each picture sha256 equal to the file (266230, 175401, 223600 bytes); `view` and `tap` accepted on each. Read-back lines: `Served now in explore_slider: 3`, today 3, tgif 0. Second run: `Nothing to do`, exit 0, no change. Two applies at once: exactly one swap (`AdCampaign` +3, `AdminAdAudit` +9 once); the other printed `Nothing to do` (it read after the winner committed); the earlier simultaneous race (first round) refused the loser, which still holds by the in-transaction check above.
+
+### L6 (low, new): pause then resume is not refused
+
+The phrase hashes id, status, weight, window, place, tap and link. Pause followed by resume returns every one of those to what the dry run showed, so the phrase matches and the apply goes through. Result is exactly what the dry run promised (same source, link, end, weight), so nothing wrong is written; but you listed it as must-refuse and it is not. To refuse it the phrase would also have to bind something that a pause/resume moves (`updatedAt` or the count of audit rows of each current advert). I rate it low (no wrong data) and did not hold the verdict for it; your call.
+
+## L1: closed
+
+- Live (on air, w5, link) beats a heavier paused one (w9): `copied from campaign <live>, which is live and on air`, weight 5.
+- Only a paused advert with a link left: weight 9 taken and the line says `copied from campaign <id>, which is PAUSED (no live or scheduled advert had a link to copy)`.
+- `--weight`: `0`, `101`, `1.5`, `-3`, `abc`, empty, ` 5` give `CANNOT APPLY: --weight must be a whole number from 1 to 100.`; `1`, `100` and `007` (read as 7) are accepted. Range is `AD_WEIGHT_MIN`/`AD_WEIGHT_MAX` from `ads-limits`, as the admin DTO uses.
+- Note, not a finding: a `scheduled` advert whose start is still in the future is not "in its window", so it is not used as the source; with a live one absent a paused one then wins over it. The brief said "live or scheduled"; the code means on air now. Say so if you wanted future-start scheduled adverts to count.
+
+## L4: partly closed (low, still open at boot)
+
+The command's own failure lines are now plain and carry no path or source: third insert failed by a trigger: `FAILED: the swap could not be written (PrismaClientKnownRequestError P2039). The transaction was rolled back; nothing was changed.` exit 2; storage failing on upload 2: `FAILED: a picture could not be uploaded (S3ServiceException)...` exit 2; boot failure: `FAILED: the command could not finish (PrismaClientKnownRequestError P1001). Nothing was changed.` exit 2.
+Still open: with the database unreachable at boot, `PlanSettingsService` (a module the command pulls in) prints its own Nest `WARN ... Could not reload the plan settings` with the Prisma message, which includes `/home/user/.../dist/src/plan-settings/plan-settings.service.js:129:72` and a few lines of source. Not the command's code, no secret or password in it (host and port only); it shows only when the database cannot be reached. Low.
+
+## L5: closed
+
+`ads-swap-1116.contract` 13 of 13 passed with three other live/paused/scheduled adverts in the database (the case that failed in round one). The read-back count is now filtered to the spec's own ids when `onlyIds` is set; the command's own run (no `onlyIds`) still counts every served advert.
+
+## Storage that fails on purpose
+
+Only one test does it (`a failure prints a plain sentence...`, spec lines ~503-517, which passes `storage: { putAdArtwork: () => Promise.reject(boom) }` as a dependency). Every other test takes `moduleRef.get(StorageService)` (the real service on the stand-in). The command (`main()`) takes `app.get(StorageService, { strict: false })` from the real `StorageModule`; nothing in the command file stubs or fakes it. Passed.
+
+## Nothing else moved
+
+`npx tsc --noEmit` clean; `ads-swap-1116.contract` 13/13; `admin-ads.contract` 208/208 on a clean database (it showed 4 failures once while my own test adverts were still on air in the shared database; that spec is untouched by the branch, and it passes once they are ended); gates `0 fail, 144 warn, 88 accepted, PASSED`; `check_baseline.py` ok (125). Protected-routes suite not re-run (no route or fenced file changed, the diff is the command, its spec and a report).
+
+## Still not proved
+
+Production boot with the real env file, real object storage, the dashboard's rendering of the audit marker, the hosted workflow run.
